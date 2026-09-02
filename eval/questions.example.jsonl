@@ -1,0 +1,3 @@
+{"id": "fact-1", "question": "what does the release checklist live under", "expect_any": ["docs/release.md"], "type": "fact"}
+{"id": "stale-1", "question": "which port does the api listen on", "expect_any": ["8443"], "not_expect": ["8080"], "type": "stale"}
+{"id": "neg-1", "question": "zebra migration habitat", "expect_any": ["savanna"], "type": "negative"}

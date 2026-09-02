@@ -1,0 +1,21 @@
+name: Bug report
+description: Something behaves differently from what the docs say
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes: { label: memware version, placeholder: "memware --version" }
+    validations: { required: true }
+  - type: input
+    id: env
+    attributes: { label: Python and OS, placeholder: "3.12, macOS 15" }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Commands or a short script using synthetic data. Never paste real transcripts.
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected vs actual }
+    validations: { required: true }

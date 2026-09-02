@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose a change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: The problem this solves }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposal }
+  - type: dropdown
+    id: readpath
+    attributes:
+      label: Does this add a model call to capture or recall?
+      options: ["No", "Yes, as an optional extra", "Yes, in the default path"]
+    validations: { required: true }
