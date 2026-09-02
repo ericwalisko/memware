@@ -102,4 +102,4 @@ Alpha. The schema may change before 1.0; the ledger semantics will not.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+MIT. See [LICENSE](LICENSE).

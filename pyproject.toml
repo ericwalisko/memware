@@ -7,15 +7,15 @@ name = "memware"
 version = "0.1.0"
 description = "Memory for AI agents that only remembers the latest truth: a bi-temporal belief ledger plus a transcript index, in one SQLite file."
 readme = "README.md"
-license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [{ name = "ericwalisko" }]
 keywords = ["agent-memory", "llm", "sqlite", "fts5", "bitemporal", "claude-code", "hermes", "mcp"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: Apache Software License",
+  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
