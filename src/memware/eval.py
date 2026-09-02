@@ -8,8 +8,12 @@ A question set is JSONL, one object per line::
 ``type`` is ``fact`` (answer exists), ``stale`` (answer changed over time; the
 old value must not appear) or ``negative`` (nothing relevant should be found).
 Scores are containment against the retrieved context, so no model is needed
-and results are reproducible. End-to-end runs with a model are described in
-docs/eval.md.
+and results are reproducible. Two contexts are scored for every question:
+``beliefs`` (currently valid beliefs only — what a prompt-time hook injects)
+and ``beliefs+turns`` (beliefs plus transcript evidence). Transcripts are
+evidence and legitimately contain old values, so a stale value appearing in
+``beliefs+turns`` is expected; appearing in ``beliefs`` is a defect. End-to-end
+runs with a model are described in docs/eval.md.
 """
 
 from __future__ import annotations
@@ -24,11 +28,21 @@ from memware.index import search_beliefs, search_turns
 from memware.store import DEFAULT_DB, Store
 
 
-def retrieve(store: Store, question: str, k: int) -> str:
-    hits = search_beliefs(store, question, k=k, record_use=False) + search_turns(
-        store, question, k=k, record_use=False
-    )
-    return "\n".join(h.text for h in hits)
+def retrieve(store: Store, question: str, k: int) -> tuple[str, str]:
+    """Return (beliefs_context, beliefs_plus_turns_context)."""
+    beliefs = search_beliefs(store, question, k=k, record_use=False)
+    turns = search_turns(store, question, k=k, record_use=False)
+    b = "\n".join(h.text for h in beliefs)
+    return b, "\n".join([b, *(h.text for h in turns)]).strip()
+
+
+def _score(q: dict[str, object], ctx: str) -> dict[str, object]:
+    ctx = ctx.lower()
+    found = any(str(e).lower() in ctx for e in q.get("expect_any", []))  # type: ignore[union-attr]
+    stale = any(str(n).lower() in ctx for n in q.get("not_expect", []))  # type: ignore[union-attr]
+    qtype = str(q.get("type", "fact"))
+    ok = (not found) if qtype == "negative" else (found and not stale)
+    return {"found": found, "stale": stale, "ok": ok, "context_chars": len(ctx)}
 
 
 def run(db: str, questions: Path, *, k: int = 8) -> dict[str, object]:
@@ -42,31 +56,34 @@ def run(db: str, questions: Path, *, k: int = 8) -> dict[str, object]:
     with Store(db) as s:
         for q in rows:
             t0 = time.perf_counter()
-            ctx = retrieve(s, q["question"], k).lower()
+            b_ctx, bt_ctx = retrieve(s, q["question"], k)
             latencies.append((time.perf_counter() - t0) * 1000)
-            found = any(e.lower() in ctx for e in q.get("expect_any", []))
-            stale = any(n.lower() in ctx for n in q.get("not_expect", []))
-            qtype = q.get("type", "fact")
-            ok = (not ctx) if qtype == "negative" else (found and not stale)
             results.append(
                 {
                     "id": q["id"],
-                    "type": qtype,
-                    "found": found,
-                    "stale": stale,
-                    "ok": ok,
-                    "context_chars": len(ctx),
+                    "type": q.get("type", "fact"),
+                    "beliefs": _score(q, b_ctx),
+                    "beliefs+turns": _score(q, bt_ctx),
                 }
             )
-    by_type: dict[str, list[bool]] = {}
-    for r in results:
-        by_type.setdefault(str(r["type"]), []).append(bool(r["ok"]))
-    n = max(1, len(results))
+
+    def summarize(ctx_key: str) -> dict[str, object]:
+        by_type: dict[str, list[bool]] = {}
+        for r in results:
+            sc = r[ctx_key]
+            assert isinstance(sc, dict)
+            by_type.setdefault(str(r["type"]), []).append(bool(sc["ok"]))
+        n = max(1, len(results))
+        return {
+            "accuracy": sum(bool(r[ctx_key]["ok"]) for r in results) / n,  # type: ignore[index]
+            "stale_rate": sum(bool(r[ctx_key]["stale"]) for r in results) / n,  # type: ignore[index]
+            "by_type": {t: sum(v) / len(v) for t, v in by_type.items()},
+        }
+
     return {
         "n": len(results),
-        "accuracy": sum(bool(r["ok"]) for r in results) / n,
-        "stale_rate": sum(bool(r["stale"]) for r in results) / n,
-        "by_type": {t: sum(v) / len(v) for t, v in by_type.items()},
+        "beliefs": summarize("beliefs"),
+        "beliefs+turns": summarize("beliefs+turns"),
         "latency_ms_median": statistics.median(latencies) if latencies else 0.0,
         "results": results,
     }
@@ -83,10 +100,14 @@ def main(argv: list[str] | None = None) -> int:
     if a.json:
         print(json.dumps(rep, indent=2))
     else:
-        print(
-            f"n={rep['n']} accuracy={rep['accuracy']:.3f} stale_rate={rep['stale_rate']:.3f} "
-            f"median_latency={rep['latency_ms_median']:.1f}ms by_type={rep['by_type']}"
-        )
+        for key in ("beliefs", "beliefs+turns"):
+            sm = rep[key]
+            assert isinstance(sm, dict)
+            print(
+                f"[{key}] n={rep['n']} accuracy={sm['accuracy']:.3f} "
+                f"stale_rate={sm['stale_rate']:.3f} by_type={sm['by_type']}"
+            )
+        print(f"median_latency={rep['latency_ms_median']:.1f}ms")
     return 0
 
 
