@@ -23,6 +23,7 @@ import json
 import statistics
 import time
 from pathlib import Path
+from typing import Any
 
 from memware.index import search_beliefs, search_turns
 from memware.store import DEFAULT_DB, Store
@@ -36,22 +37,22 @@ def retrieve(store: Store, question: str, k: int) -> tuple[str, str]:
     return b, "\n".join([b, *(h.text for h in turns)]).strip()
 
 
-def _score(q: dict[str, object], ctx: str) -> dict[str, object]:
+def _score(q: dict[str, Any], ctx: str) -> dict[str, Any]:
     ctx = ctx.lower()
-    found = any(str(e).lower() in ctx for e in q.get("expect_any", []))  # type: ignore[union-attr]
-    stale = any(str(n).lower() in ctx for n in q.get("not_expect", []))  # type: ignore[union-attr]
+    found = any(str(e).lower() in ctx for e in q.get("expect_any", []))
+    stale = any(str(n).lower() in ctx for n in q.get("not_expect", []))
     qtype = str(q.get("type", "fact"))
     ok = (not found) if qtype == "negative" else (found and not stale)
     return {"found": found, "stale": stale, "ok": ok, "context_chars": len(ctx)}
 
 
-def run(db: str, questions: Path, *, k: int = 8) -> dict[str, object]:
+def run(db: str, questions: Path, *, k: int = 8) -> dict[str, Any]:
     rows = [
         json.loads(line)
         for line in questions.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    results: list[dict[str, object]] = []
+    results: list[dict[str, Any]] = []
     latencies: list[float] = []
     with Store(db) as s:
         for q in rows:
@@ -67,16 +68,14 @@ def run(db: str, questions: Path, *, k: int = 8) -> dict[str, object]:
                 }
             )
 
-    def summarize(ctx_key: str) -> dict[str, object]:
+    def summarize(ctx_key: str) -> dict[str, Any]:
         by_type: dict[str, list[bool]] = {}
         for r in results:
-            sc = r[ctx_key]
-            assert isinstance(sc, dict)
-            by_type.setdefault(str(r["type"]), []).append(bool(sc["ok"]))
+            by_type.setdefault(str(r["type"]), []).append(bool(r[ctx_key]["ok"]))
         n = max(1, len(results))
         return {
-            "accuracy": sum(bool(r[ctx_key]["ok"]) for r in results) / n,  # type: ignore[index]
-            "stale_rate": sum(bool(r[ctx_key]["stale"]) for r in results) / n,  # type: ignore[index]
+            "accuracy": sum(bool(r[ctx_key]["ok"]) for r in results) / n,
+            "stale_rate": sum(bool(r[ctx_key]["stale"]) for r in results) / n,
             "by_type": {t: sum(v) / len(v) for t, v in by_type.items()},
         }
 
@@ -102,7 +101,6 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for key in ("beliefs", "beliefs+turns"):
             sm = rep[key]
-            assert isinstance(sm, dict)
             print(
                 f"[{key}] n={rep['n']} accuracy={sm['accuracy']:.3f} "
                 f"stale_rate={sm['stale_rate']:.3f} by_type={sm['by_type']}"
