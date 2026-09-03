@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Stale scoring is positional: an answer is stale only when the old value appears before the current one.
+- `memware-eval` mirrors the hook's subject gate for the beliefs context and reports the belief injection rate (overall and on negatives).
 - `memware-eval` now scores two contexts per question: `beliefs` (what a prompt-time hook injects) and `beliefs+turns`; negatives pass when the expected value is absent rather than when the context is empty.
 - The package version is read from `memware.__version__` by the build backend, so
   `memware --version` and the published distribution cannot disagree.

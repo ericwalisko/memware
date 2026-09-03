@@ -30,8 +30,13 @@ from memware.store import DEFAULT_DB, Store
 
 
 def retrieve(store: Store, question: str, k: int) -> tuple[str, str]:
-    """Return (beliefs_context, beliefs_plus_turns_context)."""
-    beliefs = search_beliefs(store, question, k=k, record_use=False)
+    """Return (beliefs_context, beliefs_plus_turns_context).
+
+    The beliefs context mirrors what the prompt-time hook injects, so it uses the
+    same subject gate (``require_subject=True``); the turns context mirrors an
+    explicit, broad recall.
+    """
+    beliefs = search_beliefs(store, question, k=k, record_use=False, require_subject=True)
     turns = search_turns(store, question, k=k, record_use=False)
     b = "\n".join(h.text for h in beliefs)
     return b, "\n".join([b, *(h.text for h in turns)]).strip()
@@ -73,6 +78,7 @@ def run(db: str, questions: Path, *, k: int = 8) -> dict[str, Any]:
                 {
                     "id": q["id"],
                     "type": q.get("type", "fact"),
+                    "beliefs_injected": bool(b_ctx),
                     "beliefs": _score(q, b_ctx),
                     "beliefs+turns": _score(q, bt_ctx),
                 }
@@ -89,8 +95,14 @@ def run(db: str, questions: Path, *, k: int = 8) -> dict[str, Any]:
             "by_type": {t: sum(v) / len(v) for t, v in by_type.items()},
         }
 
+    n_all = max(1, len(results))
     return {
         "n": len(results),
+        "beliefs_injection_rate": sum(bool(r["beliefs_injected"]) for r in results) / n_all,
+        "beliefs_injection_rate_negatives": (
+            sum(bool(r["beliefs_injected"]) for r in results if r["type"] == "negative")
+            / max(1, sum(1 for r in results if r["type"] == "negative"))
+        ),
         "beliefs": summarize("beliefs"),
         "beliefs+turns": summarize("beliefs+turns"),
         "latency_ms_median": statistics.median(latencies) if latencies else 0.0,
@@ -115,7 +127,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"[{key}] n={rep['n']} accuracy={sm['accuracy']:.3f} "
                 f"stale_rate={sm['stale_rate']:.3f} by_type={sm['by_type']}"
             )
-        print(f"median_latency={rep['latency_ms_median']:.1f}ms")
+        print(
+            f"beliefs injected on {rep['beliefs_injection_rate']:.0%} of questions "
+            f"({rep['beliefs_injection_rate_negatives']:.0%} of negatives); "
+            f"median_latency={rep['latency_ms_median']:.1f}ms"
+        )
     return 0
 
 
