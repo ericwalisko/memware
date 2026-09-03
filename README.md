@@ -133,6 +133,8 @@ expects), the same way it would issue a few grep or web-search queries:
 recall(queries=["which port does the api listen on", "api port", "8443", "gateway listen port"])
 ```
 
+Byte-identical hits collapse to a single slot, so a prompt captured on many days — a scheduled job's own preamble, say — never crowds out distinct evidence; the turns stay in the store and a session still reads back whole.
+
 Prompt-time injection (the hooks) stays deterministic and only injects beliefs whose
 *subject* the prompt names.
 

@@ -131,10 +131,12 @@ def test_a_turn_is_captured_and_recallable(provider, tmp_path):
 
 def test_a_session_switch_keeps_each_session_separate(provider, tmp_path):
     """Turns must land in the session that was live when they happened."""
-    provider.sync_turn("how is the scheduler wired", "the scheduler polls a work queue")
+    provider.sync_turn(
+        "how is the scheduler wired", "the scheduler polls a work queue every second"
+    )
     provider.shutdown()
     provider.on_session_switch("sess-2")
-    provider.sync_turn("how is the scheduler wired", "the scheduler polls a work queue")
+    provider.sync_turn("how is the scheduler wired", "the scheduler drains a work queue in batches")
     provider.shutdown()
 
     hits = json.loads(

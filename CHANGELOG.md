@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-03
+
+### Fixed
+- Recall now collapses turns whose quoted text is **byte-identical** to a higher-ranked hit, so a
+  scheduled-automation prompt captured on many days takes one result slot instead of several. The
+  static skip-prefix list (a schema-v2 sweep) only catches harness-injected boilerplate; a user's
+  own repeated cron/system prompts are real turns it can never match. Collapse is a recall-time
+  view — every turn stays in the store, a session still reads back whole, and distinct findings
+  inside those sessions still surface. Deterministic, model-free; opt out with
+  `collapse_duplicates=False`.
+
+
 ## [0.2.3] - 2026-09-03
 
 ### Fixed

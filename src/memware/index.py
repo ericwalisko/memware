@@ -14,6 +14,11 @@ BM25 runs over *passages* (see :mod:`memware.passage`), not whole turns, while
 activation stays the turn's — recency and use belong to the conversation. Hits
 collapse to one per turn and quote only the matching passages, so recall costs
 roughly a third fewer tokens; reading a session back still returns whole turns.
+
+Results also collapse across turns whose quoted text is byte-identical — the same
+scheduled-automation prompt captured on many days would otherwise take several slots
+with copies of one string. The highest-ranked copy is kept; the turns themselves stay
+in the store, so a session still reads back whole and distinct findings still surface.
 """
 
 from __future__ import annotations
@@ -174,6 +179,7 @@ def search_turns(
     record_use: bool = True,
     snippet_tokens: int = 96,
     passages_per_turn: int = 3,
+    collapse_duplicates: bool = True,
 ) -> list[Hit]:
     """Top-k turns by BM25 x activation, each ranked on its best passage.
 
@@ -208,16 +214,25 @@ def search_turns(
         score = r["rel"] * activation(r["ts"], r["use_count"], decay=decay, use_weight=use_weight)
         scored.setdefault(r["turn_id"], []).append((score, r))
     hits: list[Hit] = []
-    for turn_id in sorted(scored, key=lambda t: -max(s for s, _ in scored[t]))[:k]:
+    seen_text: set[str] = set()
+    for turn_id in sorted(scored, key=lambda t: -max(s for s, _ in scored[t])):
+        if len(hits) >= k:
+            break
         by_score = sorted(scored[turn_id], key=lambda sr: -sr[0])
         keep = sorted(by_score[: max(1, passages_per_turn)], key=lambda sr: sr[1]["ord"])
+        text = _join_passages([r for _, r in keep])
+        if collapse_duplicates:
+            sig = text.strip()
+            if sig in seen_text:
+                continue  # byte-identical to a higher-ranked hit (e.g. a repeated cron prompt)
+            seen_text.add(sig)
         best = by_score[0][1]
         hits.append(
             Hit(
                 id=turn_id,
                 kind="turn",
                 score=by_score[0][0],
-                text=_join_passages([r for _, r in keep]),
+                text=text,
                 session=best["session"],
                 ts=best["ts"],
                 role=best["role"],
@@ -313,6 +328,25 @@ def _rrf(ranked_lists: list[list[Hit]], k: int, c: int = 60) -> list[Hit]:
     return [best[kk] for kk in order]
 
 
+def _collapse_identical(hits: list[Hit], k: int) -> list[Hit]:
+    """Drop turn hits whose quoted text is byte-identical to a higher-ranked one, then take the
+    first ``k``. Non-turn hits pass through. This is the cross-phrasing counterpart to the
+    per-query collapse in :func:`search_turns`: reciprocal-rank fusion keys on ``(kind, id)``,
+    so two different turns holding the same repeated text would otherwise both survive."""
+    seen: set[str] = set()
+    out: list[Hit] = []
+    for h in hits:
+        if h.kind == "turn":
+            sig = h.text.strip()
+            if sig in seen:
+                continue
+            seen.add(sig)
+        out.append(h)
+        if len(out) >= k:
+            break
+    return out
+
+
 def search_turns_multi(
     store: Store,
     queries: list[str],
@@ -334,8 +368,10 @@ def search_turns_multi(
         return []
     if len(seen) == 1:
         return search_turns(store, seen[0], k=k, record_use=record_use, **kw)  # type: ignore[arg-type]
+    collapse = bool(kw.get("collapse_duplicates", True))
     lists = [search_turns(store, q, k=max(k, 20), record_use=False, **kw) for q in seen]  # type: ignore[arg-type]
-    fused = _rrf(lists, k)
+    fused = _rrf(lists, max(k * 3, 30) if collapse else k)
+    fused = _collapse_identical(fused, k) if collapse else fused[:k]
     if record_use and fused:
         ts = now_iso()
         store.conn.executemany(
