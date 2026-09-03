@@ -28,10 +28,9 @@ from typing import Any
 try:  # inside Hermes
     from agent.memory_provider import MemoryProvider
 except ImportError:  # tests / standalone import
-    from abc import ABC
 
-    class MemoryProvider(ABC):  # type: ignore[no-redef]
-        pass
+    class MemoryProvider:  # type: ignore[no-redef]
+        """Stand-in for Hermes's ABC when Hermes is not importable."""
 
 
 logger = logging.getLogger("memware.hermes")
