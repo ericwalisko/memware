@@ -1,4 +1,11 @@
-from memware.index import fts_query, search_beliefs, search_turns
+from memware.index import (
+    ELLIPSIS,
+    _join_passages,
+    fts_query,
+    read_turns,
+    search_beliefs,
+    search_turns,
+)
 from memware.ingest import sync_file
 from memware.ledger import assert_belief
 from tests.conftest import write_claude_jsonl
@@ -57,6 +64,82 @@ def test_snippet_windows_the_match_not_the_head(store, tmp_path):
     sync_file(store, p, harness="claude-code")
     [h] = search_turns(store, "registry token rotates", k=1)
     assert h.snippet is not None and "90 days" in h.snippet and "preamble" not in h.snippet
+
+
+def test_recall_ranks_the_passage_not_the_diluted_turn(store, tmp_path):
+    """A value buried in a long turn must outrank a short turn that merely shares words."""
+    p = tmp_path / "mixed.jsonl"
+    buried = (
+        "we talked about the deploy script and the cache and the linter. " * 90
+        + "the registry token rotates every 90 days. "
+        + "then we moved on to unrelated scheduling work. " * 90
+    )
+    write_claude_jsonl(
+        p,
+        "mixed",
+        [
+            ("assistant", "2026-08-30T00:00:00Z", buried),
+            ("assistant", "2026-08-30T00:01:00Z", "the registry is a thing we use"),
+        ],
+    )
+    sync_file(store, p, harness="claude-code")
+    hits = search_turns(store, "how often does the registry token rotate", k=2)
+    assert "90 days" in hits[0].text
+    assert len(hits[0].text) < len(buried) / 4  # a passage, not the whole turn
+    assert hits[0].offset > 0 and hits[0].passage_id is not None
+
+
+def test_recall_returns_one_hit_per_turn(store, tmp_path):
+    p = tmp_path / "one.jsonl"
+    write_claude_jsonl(
+        p, "one", [("assistant", "2026-08-30T00:00:00Z", "the build cache lives here. " * 400)]
+    )
+    sync_file(store, p, harness="claude-code")
+    assert store.stats()["passages"] > 1
+    hits = search_turns(store, "build cache", k=8)
+    assert len(hits) == 1 and len({h.id for h in hits}) == 1
+
+
+def test_a_hit_id_reads_back_the_whole_turn(store, tmp_path):
+    p = tmp_path / "read.jsonl"
+    long_turn = "chatter about nothing. " * 200 + "the deploy key expires in March"
+    write_claude_jsonl(p, "read", [("assistant", "2026-08-30T00:00:00Z", long_turn)])
+    sync_file(store, p, harness="claude-code")
+    [hit] = search_turns(store, "deploy key expires", k=1)
+    [turn] = read_turns(store, "read", around=hit.id, window=0)
+    assert turn["text"] == long_turn
+    assert hit.text in long_turn and len(hit.text) < len(long_turn)
+
+
+def test_recall_quotes_two_passages_when_the_answer_is_not_where_the_words_are(store, tmp_path):
+    """The question's vocabulary and the answer often sit in different parts of one turn."""
+    p = tmp_path / "split.jsonl"
+    turn = (
+        "we spent a while on the registry token and how the registry is configured. " * 30
+        + "unrelated filler about scheduling and the linter. " * 40
+        + "anyway it rotates every 90 days."
+    )
+    write_claude_jsonl(p, "split", [("assistant", "2026-08-30T00:00:00Z", turn)])
+    sync_file(store, p, harness="claude-code")
+    [hit] = search_turns(store, "registry token", k=1, passages_per_turn=2)
+    assert "registry token" in hit.text
+    assert len(hit.text) < len(turn)
+    [one] = search_turns(store, "registry token", k=1, passages_per_turn=1, record_use=False)
+    assert len(one.text) < len(hit.text)
+
+
+def test_non_adjacent_passages_are_joined_by_an_ellipsis():
+    adjacent = [
+        {"ord": 3, "passage_text": "first half "},
+        {"ord": 4, "passage_text": "second half"},
+    ]
+    assert _join_passages(adjacent) == "first half second half"
+    gapped = [
+        {"ord": 0, "passage_text": "the question words"},
+        {"ord": 7, "passage_text": "the answer"},
+    ]
+    assert _join_passages(gapped) == f"the question words{ELLIPSIS}the answer"
+    assert _join_passages([]) == ""
 
 
 def test_prompt_injection_requires_a_subject_match(store):

@@ -43,7 +43,8 @@ _TOOLS: list[dict[str, Any]] = [
         "queries: the question as asked, synonyms, related concepts, and the literal value "
         "you expect (a port, a file name, a version). Results are fused across phrasings; the "
         "index is keyword-based, so your phrasings are what make it semantic. Returns ranked, "
-        "dated snippets with session ids for memware_read_session.",
+        "dated passages — the matching part of a turn, not the whole turn — each with a "
+        "session id and a turn id for memware_read_session.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -56,8 +57,8 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "memware_read_session",
-        "description": "Read a past session's turns in order, or a window around one turn id "
-        "returned by memware_recall.",
+        "description": "Read a past session's turns whole and in order, or a window around one "
+        "turn id returned by memware_recall.",
         "parameters": {
             "type": "object",
             "properties": {

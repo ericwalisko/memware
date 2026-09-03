@@ -29,12 +29,40 @@ memware-eval eval/questions.example.jsonl --db ./demo.db
 ```
 
 Reported: accuracy, stale rate (a superseded value appearing in context),
-per-type accuracy, median latency.
+per-type accuracy, median latency, and the size of the retrieved context.
+Recall quotes matching passages rather than whole turns, so that context is
+what a prompt would actually receive.
 
 Building a question set from your own transcripts: pick facts that an agent
 stated at time T, and for stale questions pick facts whose value changed
 between T1 and T2 — the question must expect the T2 value and forbid the T1
 value. Keep the set private; only commit synthetic examples.
+
+### Freeze the corpus before you compare
+
+If the index keeps syncing while you work, the eval measures your working
+session. Running one question set against a live store during development of
+the passage index moved the *unchanged* whole-turn baseline between 17/24 and
+24/24 on fact questions, in both directions, within three hours. 847 turns
+written that day were doing both halves of it: they answered questions the set
+had been built to ask, and — being the most recent thing in the index, which
+recency weighting rewards — they crowded the real evidence out of the top 8.
+
+The marker guardrail above does not catch this: a development session carries
+no `[memware-eval]` marker and is not an eval run — it is ordinary work that
+happens to be about the thing being measured. So build one scratch store and
+point every arm of the comparison at it:
+
+```bash
+memware-eval questions.jsonl --corpus ~/.claude/projects \
+  --db /tmp/eval.db --beliefs-from ~/.memware/memware.db
+sqlite3 /tmp/eval.db "DELETE FROM turn WHERE ts >= '<date the set was frozen>'"
+```
+
+`--corpus` rebuilds the store from scratch and skips marked transcripts; the
+delete drops whatever was written after the questions were written (passages
+cascade). Then run both arms against that file and never re-sync it. A
+before/after measured on two different corpora is not a measurement.
 
 ## End-to-end protocol (agent + memware vs agent alone)
 
@@ -75,7 +103,7 @@ value. Keep the set private; only commit synthetic examples.
 8. **Mark invalid answers, don't score them.** Quota and rate-limit text
    ("you've hit your session limit"), empty answers and timeouts are not
    answers; exclude them from the summary and report the count.
-5. Treat a change to production memory as a user-facing, data-affecting change:
+9. Treat a change to production memory as a user-facing, data-affecting change:
    have a human review the numbers before cutting over.
 
 Public long-horizon benchmarks (LongMemEval, LoCoMo) can be adapted by loading

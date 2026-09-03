@@ -76,6 +76,14 @@ without its source.
 matters, verify against the pointer — or against the code. Do not store what
 can be derived.
 
+The same split runs one level down inside evidence. A turn is the verbatim
+record and stays whole; the unit that gets *ranked and quoted* is a ~400-token
+passage carrying its turn id and character offset. Recall returns passages,
+`read_session` returns turns, and the pointer between them is exact. On a
+24-question fact set this matched whole-turn recall (24/24) on half the
+retrieved context — the win is token cost, not accuracy: an answer BM25 could
+already find is now delivered without the 4,000 characters around it.
+
 ## 6. Candidate vs committed
 
 **Agents.** *MemTX* (arXiv:2607.23929): actions should gate on validated

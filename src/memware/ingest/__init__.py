@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from memware.passage import index_turn
 from memware.store import Store, now_iso
 
 
@@ -45,9 +46,10 @@ IGNORE_MARKERS_ENV = "MEMWARE_IGNORE_MARKERS"
 one is never indexed by any sync — the durable defence against contamination from runs that
 predate a marker or the no-capture flag. Unioned with the file below and any per-call marker."""
 
-IGNORE_MARKERS_FILE = (
-    Path(os.environ.get("MEMWARE_HOME", "~/.memware")).expanduser() / "ignore-markers.txt"
-)
+
+def ignore_markers_file() -> Path:
+    """Resolved per call, so ``MEMWARE_HOME`` set after import is still honoured."""
+    return Path(os.environ.get("MEMWARE_HOME", "~/.memware")).expanduser() / "ignore-markers.txt"
 
 
 def default_skip_markers() -> list[str]:
@@ -58,7 +60,7 @@ def default_skip_markers() -> list[str]:
         if part.strip():
             out.append(part.strip())
     try:
-        for line in IGNORE_MARKERS_FILE.read_text(encoding="utf-8").splitlines():
+        for line in ignore_markers_file().read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 out.append(line)
@@ -101,11 +103,17 @@ def sync_file(
 
     ``skip_if_contains`` skips (and un-indexes, if previously indexed) any file whose
     head contains the marker — the way to keep an evaluation's own sessions out of the
-    evidence it is evaluated against.
+    evidence it is evaluated against. The persistent markers from
+    :func:`default_skip_markers` always apply on top of it.
     """
     p = Path(path)
     source = str(p.resolve())
-    if skip_if_contains and file_contains(p, skip_if_contains):
+    markers = default_skip_markers()
+    if skip_if_contains:
+        markers += (
+            [skip_if_contains] if isinstance(skip_if_contains, str) else list(skip_if_contains)
+        )
+    if markers and file_contains(p, markers):
         prune_source(store, source)
         return 0
     parse = parser_for(harness)
@@ -120,12 +128,14 @@ def sync_file(
         added = 0
         for offset_after, turn in parse(p, offset):
             seq += 1
-            conn.execute(
+            cur = conn.execute(
                 "INSERT OR IGNORE INTO turn(session,seq,ts,role,text,source,harness) "
                 "VALUES (?,?,?,?,?,?,?)",
                 (turn.session, seq, turn.ts, turn.role, turn.text, source, harness),
             )
-            added += 1
+            if cur.rowcount:  # ignored rows are a re-read of the same (source, seq)
+                index_turn(conn, int(cur.lastrowid or 0), turn.text)
+                added += 1
             offset = offset_after
         conn.execute(
             "INSERT INTO cursor(source,offset,seq,updated_at) VALUES (?,?,?,?) "
@@ -200,7 +210,9 @@ __all__ = [
     "Parser",
     "Turn",
     "capture_disabled",
+    "default_skip_markers",
     "file_contains",
+    "ignore_markers_file",
     "parser_for",
     "prune_source",
     "prune_sources",

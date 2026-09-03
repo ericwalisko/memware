@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Passage-level index.** Turns are split into ~300-500-token passages at ingest
+  (`memware.passage`), anchored by turn id and character offset, and FTS5 now indexes
+  passages instead of whole turns. Recall ranks passages, collapses to one hit per turn
+  and quotes only that turn's best matching passages (`passages_per_turn`, default 3);
+  `read_session` still returns whole turns. On a 24-question fact set this held accuracy
+  exactly (fact 24/24, stale 8/8, stale_rate 0) while halving the retrieved context,
+  30,403 -> 15,410 characters. The database is ~1.8x larger, since a passage stores its
+  own text.
+- Existing stores migrate on first open (`PRAGMA user_version` 0 -> 1): `turn_fts` is
+  dropped and every turn on disk is chunked, ~5 s for an 18k-turn corpus.
+- `memware-eval` reports the median retrieved context size per question.
+
 ## [0.1.1] - 2026-09-03
 
 ### Added
