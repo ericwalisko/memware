@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows
 - Multi-query recall: `memware recall Q1 Q2 …`, MCP `recall(queries=[…])`, Hermes `memware_recall(queries)` — phrasings fused by reciprocal rank so the calling agent supplies synonyms and expected values at call time.
 - Evaluation guardrails: `MEMWARE_NO_CAPTURE=1` (hooks/provider/`sync --from-hook` no-op), `sync --skip-if-contains TEXT` / `--exclude GLOB`, `memware prune`, `memware-eval --corpus/--beliefs-from` clean-store builds, `memware.eval.MARKER`.
 - Hermes memory-provider plugin implementing the `MemoryProvider` ABC (prefetch, non-blocking sync_turn, session flush, built-in memory mirroring, four recall/remember tools); the repo is a Claude Code plugin marketplace (`claude plugin marketplace add ericwalisko/memware`).
+- `integrations/hermes/upstream/`: the Hermes provider packaged as hermes-agent's own `plugins/memory/<name>/` tree — lazy-installed dependency, profile-scoped store, `backup_paths()`, declarative desktop config schema — with tests in their layout, a docs entry draft, and a draft PR description in `docs/upstream-hermes-pr.md`. Prepared, not submitted.
 - Turn hits carry `snippet`: the FTS5 window around the matched terms (the head of a long turn often lacks the answer). Default window 96 tokens; `memware recall --snippet-tokens N`.
 - Release workflow that publishes to PyPI from a `v*` tag via trusted publishing
   (OIDC, no stored token). It installs the built wheel into a clean venv and refuses

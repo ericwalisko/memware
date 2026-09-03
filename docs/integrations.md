@@ -39,6 +39,12 @@ copying it to `$HERMES_HOME/plugins/memware/` and running `hermes memory setup`.
 Both plugins share one store by default, so Claude Code and Hermes remember the
 same things.
 
+`integrations/hermes/upstream/` stages the same provider packaged as
+hermes-agent's own `plugins/memory/<name>/` tree, for contributing it in-tree so
+`hermes memory setup` lists memware on a clean install with no manual copy. It
+is prepared, not submitted — see that directory's README for what is still open
+and `docs/upstream-hermes-pr.md` for the draft PR text.
+
 ## Any other harness
 
 Export sessions as message JSONL (`role`, `content`, `timestamp`, optional
