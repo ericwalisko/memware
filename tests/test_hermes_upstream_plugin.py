@@ -19,6 +19,26 @@ from pathlib import Path
 
 import pytest
 
+
+def _load_plugin_yaml(text):
+    """Minimal reader for plugin.yaml (scalars + one list) — avoids a PyYAML dependency."""
+    if hasattr(text, "read"):
+        text = text.read()
+    data, key = {}, None
+    for raw in str(text).splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("  - ") and key:
+            data.setdefault(key, []).append(line[4:].strip().strip('"'))
+        elif ":" in line and not line.startswith(" "):
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip().strip('"')
+            data[key] = val if val else []
+    return data
+
+
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM = ROOT / "integrations" / "hermes" / "upstream" / "plugins" / "memory" / "memware"
 IN_TREE = ROOT / "integrations" / "hermes" / "memware" / "__init__.py"
@@ -162,9 +182,8 @@ def test_the_two_copies_expose_the_same_surface(provider, hermes_stubs, tmp_path
 
 
 def test_declared_hooks_are_implemented():
-    import yaml
 
-    declared = yaml.safe_load((UPSTREAM / "plugin.yaml").read_text())
+    declared = _load_plugin_yaml((UPSTREAM / "plugin.yaml").read_text())
     source = (UPSTREAM / "__init__.py").read_text()
 
     assert declared["name"] == "memware"
