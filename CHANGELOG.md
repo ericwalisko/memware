@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `memware backfill [ROOT]` — one-time index of existing transcripts (default `~/.claude/projects`), for recall over prior sessions on a fresh install.
+
 ### Docs
 - README/integrations lead with `uv tool`/`pipx` install so the plugin's hooks find the `memware` CLI on PATH (a plain venv `pip install` does not).
 

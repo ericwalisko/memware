@@ -84,6 +84,17 @@ claude plugin install memware@memware
 claude mcp add memware -- memware-mcp     # optional: recall / read_session / remember tools
 ```
 
+**Backfill your existing sessions** (optional, once). The plugin only captures new
+sessions; index the transcripts already on disk so recall works over past work from day one:
+
+```bash
+memware backfill                 # indexes ~/.claude/projects (idempotent; ~5 s for a month)
+```
+
+The *belief ledger* starts empty and is not backfilled — beliefs are derived, not stored in
+transcripts. It fills as you work (via the `remember` tool, or a derive job you schedule).
+Transcript recall is what backfill gives you immediately, and it is where most of the value is.
+
 Requires the `memware` CLI on your `PATH` (see [Install](#install)). Hooks:
 `SessionEnd`/`PreCompact` sync the transcript into the index; an optional `UserPromptSubmit`
 hook injects the handful of currently valid beliefs whose subject the prompt names (beliefs

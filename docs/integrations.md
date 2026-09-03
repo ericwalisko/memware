@@ -32,6 +32,9 @@ search is on demand through the MCP server:
 claude mcp add memware -- memware-mcp
 ```
 
+On a new machine, index existing transcripts once with `memware backfill` (defaults to
+`~/.claude/projects`, idempotent); the plugin only captures sessions from then on.
+
 Tools: `recall` (takes a list of phrasings — have the agent pass 3–5, including synonyms and the literal value it expects), `read_session`, `beliefs`, `remember`, `pending_reviews`.
 
 Subagents: the plugin does not inject into subagents. They can call the MCP

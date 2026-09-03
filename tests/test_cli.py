@@ -32,3 +32,30 @@ def test_context_from_hook_emits_hook_json(tmp_path, capsys, monkeypatch):
     main(["--db", db, "context", "--from-hook"])
     out = json.loads(capsys.readouterr().out)
     assert "8443" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_backfill_indexes_existing_transcripts(tmp_path, capsys):
+    import json
+
+    from tests.conftest import write_claude_jsonl
+
+    root = tmp_path / "projects" / "proj"
+    root.mkdir(parents=True)
+    write_claude_jsonl(
+        root / "s.jsonl",
+        "s",
+        [
+            (
+                "assistant",
+                "2026-08-20T00:00:00Z",
+                "the deploy script runs blue-green rollouts nightly",
+            )
+        ],
+    )
+    db = str(tmp_path / "b.db")
+    assert main(["--db", db, "backfill", str(tmp_path / "projects"), "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["turns_added"] == 1 and out["sessions"] == 1
+    # idempotent
+    assert main(["--db", db, "backfill", str(tmp_path / "projects"), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["turns_added"] == 0

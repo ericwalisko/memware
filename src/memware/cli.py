@@ -78,6 +78,33 @@ def cmd_sync(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backfill(a: argparse.Namespace) -> int:
+    """One-time index of existing transcripts on a fresh machine.
+
+    The plugin only captures new sessions; this reads what is already on disk.
+    Idempotent — safe to re-run — and it honours the ignore-markers list.
+    """
+    root = Path(a.root).expanduser()
+    if not root.exists():
+        print(f"nothing to backfill: {root} does not exist", file=sys.stderr)
+        return 0
+    with Store(a.db) as s:
+        report = sync_tree(s, root, harness=a.harness, exclude=a.exclude)
+        added = sum(report.values())
+        stats = s.stats()
+    _out(
+        {
+            "root": str(root),
+            "files": len(report),
+            "turns_added": added,
+            "turns_total": stats["turns"],
+            "sessions": stats["sessions"],
+        },
+        a.json,
+    )
+    return 0
+
+
 def cmd_recall(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         hits = []
@@ -239,6 +266,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="path glob to skip when syncing a directory (repeatable)",
     )
     s.set_defaults(fn=cmd_sync)
+
+    s = add("backfill", "one-time index of existing transcripts (run once on a new machine)")
+    s.add_argument(
+        "root",
+        nargs="?",
+        default="~/.claude/projects",
+        help="transcript root (default: ~/.claude/projects)",
+    )
+    s.add_argument("--harness", default="claude-code")
+    s.add_argument("--exclude", action="append", default=[], metavar="GLOB")
+    s.set_defaults(fn=cmd_backfill)
 
     s = add("recall", "search turns and beliefs; pass several phrasings to fuse them")
     s.add_argument(
