@@ -154,3 +154,31 @@ def test_hook_sync_is_a_noop_under_no_capture(tmp_path, monkeypatch, capsys):
 
     with Store(db) as s:
         assert s.stats()["turns"] == 0
+
+
+def test_persistent_ignore_markers(store, tmp_path, monkeypatch):
+    from memware.ingest import sync_file
+
+    monkeypatch.setenv("MEMWARE_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "ignore-markers.txt").write_text(
+        "# eval runs\n[memware-eval]\nAnswer briefly using only\n"
+    )
+    good = tmp_path / "good.jsonl"
+    write_claude_jsonl(
+        good,
+        "g",
+        [("assistant", "2026-08-01T00:00:00Z", "the real work of this session lives here")],
+    )
+    old_eval = tmp_path / "old.jsonl"
+    write_claude_jsonl(
+        old_eval,
+        "o",
+        [("user", "2026-08-01T00:00:00Z", "Answer briefly using only what you know: which port")],
+    )
+    assert sync_file(store, good, harness="claude-code") == 1
+    assert sync_file(store, old_eval, harness="claude-code") == 0  # matched a persistent marker
+    # env var adds markers too
+    monkeypatch.setenv("MEMWARE_IGNORE_MARKERS", "real work of this session")
+    assert sync_file(store, good, harness="claude-code") == 0  # now excluded; prior turns pruned
+    assert store.stats()["turns"] == 0

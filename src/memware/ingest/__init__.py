@@ -41,6 +41,37 @@ def parser_for(harness: str) -> Parser:
         raise KeyError(f"unknown harness {harness!r}; known: {sorted(_REGISTRY)}") from e
 
 
+IGNORE_MARKERS_ENV = "MEMWARE_IGNORE_MARKERS"
+"""Newline- or ``os.pathsep``-separated content markers. Any transcript whose head contains
+one is never indexed by any sync — the durable defence against contamination from runs that
+predate a marker or the no-capture flag. Unioned with the file below and any per-call marker."""
+
+IGNORE_MARKERS_FILE = (
+    Path(os.environ.get("MEMWARE_HOME", "~/.memware")).expanduser() / "ignore-markers.txt"
+)
+
+
+def default_skip_markers() -> list[str]:
+    """Persistent skip markers from the env var and the ignore-markers file (deduped)."""
+    out: list[str] = []
+    raw = os.environ.get(IGNORE_MARKERS_ENV, "")
+    for part in raw.replace(os.pathsep, "\n").splitlines():
+        if part.strip():
+            out.append(part.strip())
+    try:
+        for line in IGNORE_MARKERS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.append(line)
+    except OSError:
+        pass
+    seen: list[str] = []
+    for m in out:
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
 NO_CAPTURE_ENV = "MEMWARE_NO_CAPTURE"
 """Set to 1 in the environment of an agent run you do not want indexed (evaluations,
 benchmarks, throwaway experiments). Hooks and providers honour it; so does ``sync``."""
