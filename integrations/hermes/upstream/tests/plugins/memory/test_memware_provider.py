@@ -83,10 +83,12 @@ def backend(monkeypatch):
     ledger_mod.assert_belief = _assert_belief
     ledger_mod.current = lambda store, subject=None: [{"subject": subject or "all"}]
 
+    def _sync_file(store, path, *, harness):
+        calls["synced"].append((str(path), harness))
+        return 0
+
     ingest_mod = types.ModuleType("memware.ingest")
-    ingest_mod.sync_file = (
-        lambda store, path, *, harness: calls["synced"].append((str(path), harness)) or 0
-    )
+    ingest_mod.sync_file = _sync_file
 
     root = types.ModuleType("memware")
     for name, mod in {
