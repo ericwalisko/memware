@@ -50,7 +50,14 @@ value. Keep the set private; only commit synthetic examples.
    session store — and check that a "profile" or "workspace" actually gets its
    own database rather than sharing the default one — or restrict it to its
    durable memory files only.
-7. **Mark invalid answers, don't score them.** Quota and rate-limit text
+7. **Keep the eval out of its own evidence.** Headless runs (`claude -p`, one-shot
+   agents) write transcripts into the same directories you index, and each one
+   contains the question and an answer. Exclude them when you build the store
+   for a retrieval check (a marker string in the eval prompt makes this
+   deterministic), and author negative questions from words you have never
+   typed in any indexed session — the moment you write "zebra habitat" into a
+   chat that gets indexed, it stops being a negative.
+8. **Mark invalid answers, don't score them.** Quota and rate-limit text
    ("you've hit your session limit"), empty answers and timeouts are not
    answers; exclude them from the summary and report the count.
 5. Treat a change to production memory as a user-facing, data-affecting change:
