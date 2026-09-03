@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-03
+
 ### Added
 - Backups: `memware backup` writes a consistent snapshot (VACUUM INTO) to a storage-agnostic
   folder (Dropbox/iCloud/Drive/external disk) with tiered retention (newest + 1/3/7/14-day),
