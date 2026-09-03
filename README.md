@@ -98,6 +98,8 @@ Prompt-time injection (the hooks) stays deterministic and only injects beliefs w
 
 ## Keeping evaluations out of the evidence
 
+Full guide: [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
+
 Headless runs write transcripts too. Set `MEMWARE_NO_CAPTURE=1` in any run you do not want
 indexed (hooks, the Hermes provider and `memware sync --from-hook` all honour it), put
 `[memware-eval]` in evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
