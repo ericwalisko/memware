@@ -1,0 +1,12 @@
+name: memware
+version: 0.1.0
+description: "memware — transcript recall plus a belief ledger that only remembers the latest truth. Shares one store with Claude Code."
+author: "ericwalisko"
+homepage: "https://github.com/ericwalisko/memware"
+hooks:
+  - system_prompt_block
+  - prefetch
+  - sync_turn
+  - on_session_end
+  - on_pre_compress
+  - on_memory_write

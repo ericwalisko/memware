@@ -53,15 +53,17 @@ pip install "memware[mcp]"     # + MCP server
 
 ## Use it from Claude Code
 
-`integrations/claude-code/` ships a hook bundle: `SessionEnd`/`PreCompact` sync the
+`integrations/claude-code/` is a Claude Code plugin (`claude plugin marketplace add
+ericwalisko/memware`, then `claude plugin install memware@memware`). Hooks: `SessionEnd`/`PreCompact` sync the
 transcript into the index; an optional `UserPromptSubmit` hook injects the handful of
 currently valid beliefs relevant to the prompt (beliefs only — transcript search is
 on demand through the MCP tools). See [docs/integrations.md](docs/integrations.md).
 
 ## Use it from Hermes Agent
 
-`integrations/hermes/` is a memory-provider plugin skeleton that calls the same CLI:
-prefetch → `memware context`, session end → `memware sync`. Experimental.
+`integrations/hermes/memware/` is a memory-provider plugin built on Hermes's
+`MemoryProvider` ABC — prompt-time belief prefetch, non-blocking turn capture, and
+`memware_recall` / `memware_remember` tools — sharing one store with Claude Code.
 
 ## The supersession rule
 

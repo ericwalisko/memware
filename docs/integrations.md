@@ -2,12 +2,12 @@
 
 ## Claude Code
 
-`integrations/claude-code/` is a Claude Code plugin. Install from a local
-checkout while it is unpublished:
+`integrations/claude-code/` is a Claude Code plugin and the repository is its
+marketplace:
 
 ```bash
-claude plugin marketplace add ./integrations/claude-code   # or your fork's path
-claude plugin install memware
+claude plugin marketplace add ericwalisko/memware
+claude plugin install memware@memware
 ```
 
 Hooks (`hooks/hooks.json`):
@@ -31,11 +31,13 @@ tools. Their transcripts are synced with the parent session's.
 
 ## Hermes Agent
 
-`integrations/hermes/` is a memory-provider plugin skeleton for
-[Hermes Agent](https://github.com/NousResearch/hermes-agent). It shells out to
-the `memware` CLI: `prefetch` → `memware context`, `on_session_end` →
-`memware sync --harness generic` on an exported session. It is experimental
-and tracks Hermes's provider interface loosely; read its README.
+`integrations/hermes/memware/` is a memory-provider plugin implementing
+[Hermes Agent](https://github.com/NousResearch/hermes-agent)'s `MemoryProvider`
+ABC: prompt-time belief `prefetch`, non-blocking `sync_turn` capture, session
+flush, built-in-memory mirroring, and four tools for iterative recall. Install by
+copying it to `$HERMES_HOME/plugins/memware/` and running `hermes memory setup`.
+Both plugins share one store by default, so Claude Code and Hermes remember the
+same things.
 
 ## Any other harness
 

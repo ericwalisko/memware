@@ -1,7 +1,0 @@
-name: memware
-version: 0.1.0
-description: "memware memory provider (experimental): transcript recall + a belief ledger that only remembers the latest truth"
-hooks:
-  - prefetch
-  - on_session_end
-  - system_prompt_block
