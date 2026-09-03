@@ -184,6 +184,10 @@ def search_turns(
     return hits
 
 
+def _subject_terms(subject: str) -> set[str]:
+    return {t.lower().strip(".-/") for t in _TOKEN.findall(subject)} - STOPWORDS
+
+
 def search_beliefs(
     store: Store,
     query: str,
@@ -192,18 +196,28 @@ def search_beliefs(
     decay: float = 0.1,
     use_weight: float = 0.5,
     record_use: bool = True,
+    require_subject: bool = False,
 ) -> list[Hit]:
-    """Top-k *currently valid, committed* beliefs. Superseded values never surface."""
+    """Top-k *currently valid, committed* beliefs. Superseded values never surface.
+
+    ``require_subject=True`` keeps only beliefs whose *subject* shares a term with the
+    query. Use it for unsolicited prompt-time injection: relation and value words
+    ("decision", "recovery", "model") match almost any prompt, and a belief about
+    the wrong subject is noise, not memory.
+    """
     q = fts_query(query)
     if not q:
         return []
     rows = store.conn.execute(
-        "SELECT b.*, -bm25(belief_fts) AS rel FROM belief_fts "
+        "SELECT b.*, -bm25(belief_fts, 3.0, 1.0, 1.0) AS rel FROM belief_fts "
         "JOIN belief b ON b.id = belief_fts.rowid "
         "WHERE belief_fts MATCH ? AND b.valid_to IS NULL AND b.status='committed' "
         "ORDER BY rel DESC LIMIT 100",
         (q,),
     ).fetchall()
+    if require_subject:
+        qterms = {t.strip('"') for t in q.split(" OR ")}
+        rows = [r for r in rows if _subject_terms(r["subject"]) & qterms]
     hits = [
         Hit(
             id=r["id"],

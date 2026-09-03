@@ -96,7 +96,7 @@ def cmd_context(a: argparse.Namespace) -> int:
     if not prompt.strip():
         return 0
     with Store(a.db) as s:
-        hits = search_beliefs(s, prompt, k=a.k)
+        hits = search_beliefs(s, prompt, k=a.k, require_subject=True)
     if not hits:
         return 0
     lines = []

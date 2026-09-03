@@ -57,3 +57,22 @@ def test_snippet_windows_the_match_not_the_head(store, tmp_path):
     sync_file(store, p, harness="claude-code")
     [h] = search_turns(store, "registry token rotates", k=1)
     assert h.snippet is not None and "90 days" in h.snippet and "preamble" not in h.snippet
+
+
+def test_prompt_injection_requires_a_subject_match(store):
+    assert_belief(
+        store, "agentmemory", "decision", "replace with memware", valid_from="2026-09-02T00:00:00Z"
+    )
+    # a prompt that merely contains the relation word must not pull the belief in
+    assert (
+        search_beliefs(
+            store, "draft a follow-up decision card for the keyboard", require_subject=True
+        )
+        == []
+    )
+    assert [
+        h.subject
+        for h in search_beliefs(store, "what did we decide about agentmemory", require_subject=True)
+    ] == ["agentmemory"]
+    # explicit recall stays broad
+    assert search_beliefs(store, "decision card")
