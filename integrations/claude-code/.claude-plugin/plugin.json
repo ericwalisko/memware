@@ -1,7 +1,8 @@
 {
   "name": "memware",
   "description": "Session transcripts indexed for recall; a belief ledger that only remembers the latest truth.",
-  "version": "0.1.0",
-  "author": { "name": "ericwalisko" },
-  "hooks": "./hooks/hooks.json"
+  "version": "0.1.1",
+  "author": {
+    "name": "ericwalisko"
+  }
 }

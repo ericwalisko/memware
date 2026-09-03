@@ -1,14 +1,19 @@
 {
   "name": "memware",
-  "owner": { "name": "ericwalisko", "url": "https://github.com/ericwalisko" },
+  "owner": {
+    "name": "ericwalisko",
+    "url": "https://github.com/ericwalisko"
+  },
   "description": "Memory for AI agents that only remembers the latest truth.",
   "plugins": [
     {
       "name": "memware",
       "source": "./integrations/claude-code",
       "description": "Session transcripts indexed for recall; a belief ledger that only remembers the latest truth. Hooks: SessionEnd/PreCompact sync, prompt-time belief context.",
-      "version": "0.1.0",
-      "author": { "name": "ericwalisko" }
+      "version": "0.1.1",
+      "author": {
+        "name": "ericwalisko"
+      }
     }
   ]
 }
