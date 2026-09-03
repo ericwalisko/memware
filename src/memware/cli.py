@@ -286,12 +286,24 @@ def cmd_backup(a: argparse.Namespace) -> int:
     cfg = load_config()
     dest = a.dest or get_dotted(cfg, "backup.dest")
     if not dest:
+        if a.if_stale is not None:
+            return 0  # hook-driven: no destination configured yet, stay silent
         print(
             "no backup destination — pass --dest DIR or run `memware setup` "
             "(point it at a Dropbox/iCloud/Drive folder or an external disk)",
             file=sys.stderr,
         )
         return 2
+    if a.if_stale is not None:
+        # throttle: skip if a snapshot already exists within the window (so this is safe to
+        # call from every session-end hook — the backup rides usage, not a clock).
+        if not get_dotted(cfg, "backup.auto") and not a.dest:
+            return 0
+        age = bk.newest_age_hours(dest)
+        if age is not None and age < a.if_stale:
+            if not a.quiet:
+                _out({"skipped": "recent", "age_hours": round(age, 1)}, a.json)
+            return 0
     keep = a.keep or get_dotted(cfg, "backup.keep_days") or [1, 3, 7, 14]
     out = bk.snapshot(a.db, dest)
     deleted = bk.apply_retention(dest, keep)
@@ -306,7 +318,8 @@ def cmd_backup(a: argparse.Namespace) -> int:
     if include:
         src = a.transcript_src or get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
         result["transcripts_mirrored"] = bk.mirror_transcripts(src, dest)
-    _out(result, a.json)
+    if not a.quiet:
+        _out(result, a.json)
     return 0
 
 
@@ -563,6 +576,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--no-transcripts", dest="transcripts", action="store_false")
     s.add_argument("--transcript-src", metavar="DIR")
+    s.add_argument(
+        "--if-stale",
+        type=float,
+        metavar="HOURS",
+        help="only back up if the newest snapshot is older than HOURS "
+        "(safe to call from every session-end hook; no-op when no dest is set)",
+    )
+    s.add_argument("--quiet", action="store_true", help="print nothing on success")
     s.set_defaults(fn=cmd_backup)
 
     s = add("restore", "replace the store with a snapshot (the current store is saved aside first)")

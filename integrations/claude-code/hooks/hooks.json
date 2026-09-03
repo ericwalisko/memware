@@ -1,13 +1,42 @@
 {
   "hooks": {
     "SessionEnd": [
-      { "hooks": [ { "type": "command", "command": "memware sync --harness claude-code --from-hook", "timeout": 30 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "memware sync --harness claude-code --from-hook",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "memware backup --if-stale 20 --quiet",
+            "timeout": 120
+          }
+        ]
+      }
     ],
     "PreCompact": [
-      { "hooks": [ { "type": "command", "command": "memware sync --harness claude-code --from-hook", "timeout": 30 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "memware sync --harness claude-code --from-hook",
+            "timeout": 30
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "memware context --from-hook -k 6", "timeout": 10 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "memware context --from-hook -k 6",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

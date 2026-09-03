@@ -100,3 +100,21 @@ def test_backfill_warns_when_backup_is_larger(tmp_path, capsys, monkeypatch):
     main(["--db", str(db), "backfill", str(proj)])
     err = capsys.readouterr().err
     assert "restore" in err and "400" in err
+
+
+def test_if_stale_throttles_and_no_dest_is_silent_noop(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("MEMWARE_HOME", str(tmp_path / "home"))
+    db = _seed(tmp_path / "m.db", 2)
+    # no dest configured yet: --if-stale is a silent no-op (safe from a hook)
+    assert main(["--db", str(db), "backup", "--if-stale", "20", "--quiet"]) == 0
+    assert capsys.readouterr().out == ""
+    dest = tmp_path / "bk"
+    main(["--db", str(db), "config", "backup.dest", str(dest)])
+    capsys.readouterr()
+    # first stale-check has no snapshot yet -> it backs up
+    assert main(["--db", str(db), "backup", "--if-stale", "20", "--no-transcripts", "--json"]) == 0
+    n1 = len(bk.list_snapshots(dest))
+    assert n1 == 1
+    # immediate second call is within the window -> skipped, no new snapshot
+    assert main(["--db", str(db), "backup", "--if-stale", "20", "--no-transcripts", "--json"]) == 0
+    assert len(bk.list_snapshots(dest)) == n1

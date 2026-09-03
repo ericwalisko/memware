@@ -54,6 +54,14 @@ def _stamp(p: Path) -> datetime:
     return datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
 
 
+def newest_age_hours(dest_dir: str | os.PathLike[str]) -> float | None:
+    """Hours since the newest snapshot in ``dest_dir``, or None if there are none."""
+    snaps = list_snapshots(dest_dir)
+    if not snaps:
+        return None
+    return (_now().timestamp() - _stamp(snaps[0]).timestamp()) / 3600.0
+
+
 def apply_retention(dest_dir: str | os.PathLike[str], keep_days: list[int]) -> list[Path]:
     """Tiered retention. Always keep the newest snapshot; then for each age bucket in
     ``keep_days`` (e.g. [1,3,7,14]) keep the newest snapshot at least that old. Delete the

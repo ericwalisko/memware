@@ -266,6 +266,31 @@ class MemwareProvider(MemoryProvider):
         self._sync_thread = threading.Thread(target=_run, daemon=True)
         self._sync_thread.start()
 
+    def _auto_backup(self) -> None:
+        """Ride usage: after a session, snapshot at most once per configured interval when a
+        backup dest is set. No cron needed — the machine only needs to be on while in use."""
+        try:
+            from memware import backup as bk
+            from memware.config import get_dotted, load_config
+
+            cfg = load_config()
+            dest = get_dotted(cfg, "backup.dest")
+            if not dest or not get_dotted(cfg, "backup.auto"):
+                return
+            interval = float(get_dotted(cfg, "backup.auto_interval_hours") or 20)
+            age = bk.newest_age_hours(dest)
+            if age is not None and age < interval:
+                return
+            keep = get_dotted(cfg, "backup.keep_days") or [1, 3, 7, 14]
+            bk.snapshot(self._db, dest)
+            bk.apply_retention(dest, keep)
+            if get_dotted(cfg, "backup.include_transcripts"):
+                bk.mirror_transcripts(
+                    get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects", dest
+                )
+        except Exception as e:
+            logger.warning("memware auto-backup failed: %s", e)
+
     def on_session_end(self, messages: list[dict[str, Any]], **kwargs: Any) -> None:
         self.shutdown()
         # turns were captured incrementally; re-sync the file once for anything missed
@@ -279,6 +304,7 @@ class MemwareProvider(MemoryProvider):
                     sync_file(s, path, harness="generic")
         except Exception as e:
             logger.warning("memware on_session_end failed: %s", e)
+        self._auto_backup()
 
     def on_pre_compress(self, messages: list[dict[str, Any]], **kwargs: Any) -> None:
         self.on_session_end(messages, **kwargs)

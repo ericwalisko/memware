@@ -141,7 +141,8 @@ Prompt-time injection (the hooks) stays deterministic and only injects beliefs w
 Transcripts are deleted by the OS after ~30 days, so an aged session lives only in the store —
 **back it up, and never wipe-and-re-backfill** (backfill only re-indexes transcripts still on
 disk). memware guards this: migrations snapshot first, and `backfill` warns if a backup is
-larger than the store.
+larger than the store. Once a destination is set, backups happen **automatically at session
+end (~once a day)** — no cron, and immune to a laptop sleeping through a scheduled time.
 
 ```bash
 memware setup                              # pick a folder: Dropbox / iCloud / Drive / external disk

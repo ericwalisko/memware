@@ -28,6 +28,8 @@ DEFAULTS: dict[str, Any] = {
         "keep_days": [1, 3, 7, 14],  # tiered retention: newest snapshot per age bucket
         "include_transcripts": True,  # also mirror the transcript source into <dest>/transcripts
         "transcript_src": "~/.claude/projects",  # what to mirror / where backfill also reads
+        "auto": True,  # when a dest is set, the session-end hook backs up ~once/day (no cron needed)
+        "auto_interval_hours": 20,  # minimum gap between automatic backups
     },
 }
 

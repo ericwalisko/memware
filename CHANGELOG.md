@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows
 ## [0.2.0] - 2026-09-03
 
 ### Added
+- Automatic backups with no scheduler: the Claude Code plugin and Hermes provider run a throttled `memware backup --if-stale` at session end (config `backup.auto`, `backup.auto_interval_hours`), so backups ride usage and survive a sleeping laptop. `--if-stale HOURS`/`--quiet` make `backup` safe to call from any hook or cron.
 - Backups: `memware backup` writes a consistent snapshot (VACUUM INTO) to a storage-agnostic
   folder (Dropbox/iCloud/Drive/external disk) with tiered retention (newest + 1/3/7/14-day),
   and mirrors transcripts into `<dest>/transcripts` so they outlive the OS's 30-day cleanup.
