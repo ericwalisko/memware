@@ -98,6 +98,7 @@ class Hit:
     subject: str | None = None
     relation: str | None = None
     source: str | None = None
+    snippet: str | None = None
 
 
 def fts_query(text: str, max_terms: int = 24) -> str:
@@ -140,16 +141,22 @@ def search_turns(
     use_weight: float = 0.5,
     candidates: int = 100,
     record_use: bool = True,
+    snippet_tokens: int = 48,
 ) -> list[Hit]:
-    """Top-k turns by BM25 x activation. Empty query -> no hits."""
+    """Top-k turns by BM25 x activation. Empty query -> no hits.
+
+    Each hit carries ``snippet``: the FTS5 window around the matched terms, which is what
+    a prompt should quote — the head of a long turn often does not contain the answer.
+    """
     q = fts_query(query)
     if not q:
         return []
     rows = store.conn.execute(
         "SELECT t.id, t.session, t.ts, t.role, t.text, t.source, t.use_count, "
-        "-bm25(turn_fts) AS rel FROM turn_fts JOIN turn t ON t.id = turn_fts.rowid "
+        "-bm25(turn_fts) AS rel, snippet(turn_fts, 0, '', '', ' … ', ?) AS snip "
+        "FROM turn_fts JOIN turn t ON t.id = turn_fts.rowid "
         "WHERE turn_fts MATCH ? ORDER BY rel DESC LIMIT ?",
-        (q, candidates),
+        (snippet_tokens, q, candidates),
     ).fetchall()
     hits = [
         Hit(
@@ -162,6 +169,7 @@ def search_turns(
             ts=r["ts"],
             role=r["role"],
             source=r["source"],
+            snippet=r["snip"],
         )
         for r in rows
     ]

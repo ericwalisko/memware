@@ -37,10 +37,20 @@ def retrieve(store: Store, question: str, k: int) -> tuple[str, str]:
     return b, "\n".join([b, *(h.text for h in turns)]).strip()
 
 
+def _first(ctx: str, needles: list[Any]) -> int:
+    pos = [ctx.find(str(n).lower()) for n in needles]
+    pos = [p for p in pos if p >= 0]
+    return min(pos) if pos else -1
+
+
 def _score(q: dict[str, Any], ctx: str) -> dict[str, Any]:
+    """``stale`` means the old value leads: it appears and the expected value does not
+    appear before it. Mentioning the old value as history after the current one is fine."""
     ctx = ctx.lower()
     found = any(str(e).lower() in ctx for e in q.get("expect_any", []))
-    stale = any(str(n).lower() in ctx for n in q.get("not_expect", []))
+    old_at = _first(ctx, q.get("not_expect", []))
+    new_at = _first(ctx, q.get("expect_any", []))
+    stale = old_at >= 0 and (new_at < 0 or old_at < new_at)
     qtype = str(q.get("type", "fact"))
     ok = (not found) if qtype == "negative" else (found and not stale)
     return {"found": found, "stale": stale, "ok": ok, "context_chars": len(ctx)}

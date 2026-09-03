@@ -79,6 +79,7 @@ def cmd_recall(a: argparse.Namespace) -> int:
                 "subject": h.subject,
                 "relation": h.relation,
                 "source": h.source,
+                "snippet": h.snippet,
                 "text": h.text if a.full else h.text[:300],
             }
             for h in hits

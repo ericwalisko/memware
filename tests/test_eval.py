@@ -25,3 +25,12 @@ def test_eval_scores_beliefs_and_evidence_separately(tmp_path):
     # transcripts are evidence: the old value is allowed to appear there
     assert rep["beliefs+turns"]["stale_rate"] == 0.5
     assert rep["beliefs"]["by_type"] == {"stale": 1.0, "negative": 1.0}
+
+
+def test_stale_only_when_old_value_leads(tmp_path):
+    from memware.eval import _score
+
+    q = {"expect_any": ["8443"], "not_expect": ["8080"], "type": "stale"}
+    assert _score(q, "The port is 8443 (it was 8080 until March).")["ok"]
+    assert not _score(q, "The port is 8080; some notes say 8443.")["ok"]
+    assert not _score(q, "The port is 8080.")["ok"]

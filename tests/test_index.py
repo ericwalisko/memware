@@ -38,3 +38,22 @@ def test_belief_recall_never_returns_superseded_values(store):
 
 def test_empty_query_returns_nothing(store):
     assert search_turns(store, "") == [] and search_beliefs(store, "of the") == []
+
+
+def test_snippet_windows_the_match_not_the_head(store, tmp_path):
+    p = tmp_path / "long.jsonl"
+    filler = "unrelated preamble sentence. " * 40
+    write_claude_jsonl(
+        p,
+        "long",
+        [
+            (
+                "assistant",
+                "2026-08-30T00:00:00Z",
+                filler + "the registry token rotates every 90 days",
+            )
+        ],
+    )
+    sync_file(store, p, harness="claude-code")
+    [h] = search_turns(store, "registry token rotates", k=1)
+    assert h.snippet is not None and "90 days" in h.snippet and "preamble" not in h.snippet

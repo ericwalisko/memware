@@ -6,7 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Turn hits carry `snippet`: the FTS5 window around the matched terms (the head of a long turn often lacks the answer).
+
 ### Changed
+- Stale scoring is positional: an answer is stale only when the old value appears before the current one.
 - `memware-eval` now scores two contexts per question: `beliefs` (what a prompt-time hook injects) and `beliefs+turns`; negatives pass when the expected value is absent rather than when the context is empty.
 
 ## [0.1.0] - 2026-09-02
