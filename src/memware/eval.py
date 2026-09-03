@@ -43,14 +43,22 @@ def build_clean_store(
     harness: str = "claude-code",
     beliefs_from: str | None = None,
     exclude: list[str] | None = None,
+    also_skip: list[str] | None = None,
 ) -> dict[str, int]:
-    """Index ``corpus`` into a fresh store at ``db``, skipping files that contain MARKER,
+    """Index ``corpus`` into a fresh store at ``db``, skipping files that contain MARKER
+    (or any of ``also_skip`` — e.g. the prompt text of an older evaluation harness),
     and copy the belief ledger from ``beliefs_from`` so retrieval is judged against the
     same beliefs the live system has."""
     for suffix in ("", "-wal", "-shm"):
         Path(db + suffix).unlink(missing_ok=True)
     with Store(db) as s:
-        rep = sync_tree(s, corpus, harness=harness, skip_if_contains=MARKER, exclude=exclude)
+        rep = sync_tree(
+            s,
+            corpus,
+            harness=harness,
+            skip_if_contains=[MARKER, *(also_skip or [])],
+            exclude=exclude,
+        )
         copied = 0
         if beliefs_from:
             s.conn.execute("ATTACH ? AS live", (str(Path(beliefs_from).expanduser()),))
@@ -158,6 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--harness", default="claude-code")
     p.add_argument("--exclude", action="append", default=[], metavar="GLOB")
+    p.add_argument(
+        "--also-skip",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help="additional content markers that identify evaluation transcripts (repeatable)",
+    )
     a = p.parse_args(argv)
     if a.corpus:
         if str(Path(a.db).expanduser()) == str(DEFAULT_DB):

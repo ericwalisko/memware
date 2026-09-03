@@ -49,10 +49,14 @@ def capture_disabled() -> bool:
     return os.environ.get(NO_CAPTURE_ENV, "").strip().lower() in ("1", "true", "yes")
 
 
-def file_contains(path: Path, marker: str, *, head_bytes: int = 200_000) -> bool:
-    """True if ``marker`` appears in the first ``head_bytes`` of the file (cheap pre-filter)."""
+def file_contains(path: Path, marker: str | list[str], *, head_bytes: int = 200_000) -> bool:
+    """True if any ``marker`` appears in the first ``head_bytes`` of the file (cheap pre-filter)."""
+    markers = [marker] if isinstance(marker, str) else [m for m in marker if m]
+    if not markers:
+        return False
     with path.open("rb") as fh:
-        return marker.encode("utf-8") in fh.read(head_bytes)
+        head = fh.read(head_bytes)
+    return any(m.encode("utf-8") in head for m in markers)
 
 
 def sync_file(
@@ -60,7 +64,7 @@ def sync_file(
     path: str | os.PathLike[str],
     *,
     harness: str,
-    skip_if_contains: str | None = None,
+    skip_if_contains: str | list[str] | None = None,
 ) -> int:
     """Index new turns from one transcript file. Returns the number added.
 
@@ -113,7 +117,7 @@ def sync_tree(
     *,
     harness: str,
     glob: str = "**/*.jsonl",
-    skip_if_contains: str | None = None,
+    skip_if_contains: str | list[str] | None = None,
     exclude: list[str] | None = None,
 ) -> dict[str, int]:
     """Sync every matching file under ``root``. Returns {path: added}.

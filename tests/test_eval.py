@@ -72,3 +72,31 @@ def test_corpus_flag_builds_a_clean_store(tmp_path):
     )
     rep = run(str(tmp_path / "scratch.db"), q)
     assert rep["beliefs"]["accuracy"] == 1.0
+
+
+def test_also_skip_markers(tmp_path):
+    from memware.eval import build_clean_store
+    from tests.conftest import write_claude_jsonl
+
+    corpus = tmp_path / "c"
+    corpus.mkdir()
+    write_claude_jsonl(
+        corpus / "old-eval.jsonl",
+        "o",
+        [
+            (
+                "user",
+                "2026-08-01T00:00:00Z",
+                "Answer briefly using only what you know: which api port",
+            )
+        ],
+    )
+    write_claude_jsonl(
+        corpus / "real.jsonl",
+        "r",
+        [("assistant", "2026-08-02T00:00:00Z", "the api port is 8443 after the migration")],
+    )
+    built = build_clean_store(
+        str(tmp_path / "s.db"), corpus, also_skip=["Answer briefly using only what you know"]
+    )
+    assert built["turns"] == 1
