@@ -26,10 +26,13 @@ Hooks (`hooks/hooks.json`):
 | `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few currently valid beliefs relevant to the prompt as `additionalContext` |
 
 The prompt-time hook injects **beliefs only**, capped by `-k`. Transcript
-search is on demand through the MCP server:
+search is on demand through the MCP server. Add it at **user** scope so every
+project sees it — the default (`local`) scopes the server to the one directory
+you run the command in, and sessions in other projects won't find the tools:
 
 ```bash
-claude mcp add memware -- memware-mcp
+claude mcp add -s user memware -- memware-mcp
+claude mcp list        # confirm it's registered; tools load at the next session start
 ```
 
 On a new machine, index existing transcripts once with `memware backfill` (defaults to

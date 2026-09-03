@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Docs
+- MCP add uses `-s user` so the server is visible in every project; the default `local` scope binds it to one directory and other sessions don't see the tools.
+
 ## [0.1.2] - 2026-09-03
 
 ### Added

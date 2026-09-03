@@ -81,7 +81,7 @@ not want the MCP tools.
 ```bash
 claude plugin marketplace add ericwalisko/memware
 claude plugin install memware@memware
-claude mcp add memware -- memware-mcp     # optional: recall / read_session / remember tools
+claude mcp add -s user memware -- memware-mcp   # optional tools; -s user = every project, not just this dir
 ```
 
 **Backfill your existing sessions** (optional, once). The plugin only captures new
