@@ -5,6 +5,9 @@ decide whether memware earns its place in your own setup.
 
 ## Guardrails, built in
 
+- `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`): content markers every
+  sync skips by signature — the durable defence, and the only one that covers transcripts
+  written before a marker or `MEMWARE_NO_CAPTURE` existed. Seed it with your eval marker.
 - `MEMWARE_NO_CAPTURE=1` in the environment of an evaluation run: hooks and providers
   skip capture, so the run never enters the live store.
 - `[memware-eval]` (``memware.eval.MARKER``) in every evaluation prompt: `memware-eval

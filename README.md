@@ -99,7 +99,7 @@ Headless runs write transcripts too. Set `MEMWARE_NO_CAPTURE=1` in any run you d
 indexed (hooks, the Hermes provider and `memware sync --from-hook` all honour it), put
 `[memware-eval]` in evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
 --beliefs-from ~/.memware/memware.db` to judge retrieval against a store that excludes them.
-`memware prune --containing TEXT` un-indexes runs that already slipped in.
+`memware prune --containing TEXT` un-indexes runs that already slipped in. For a durable filter that every sync honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed.
 
 ## Reviewing contested supersessions
 
