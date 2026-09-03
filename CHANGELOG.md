@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The Claude Code plugin manifest version was stuck at 0.1.1 across every release, so
+  `claude plugin update` compared 0.1.1 to 0.1.1 and never reinstalled — no plugin or hook
+  change (e.g. the 0.2.x automatic session-end backup hook) could reach an installed
+  machine. Both manifests now track the package version, enforced by
+  `tests/test_plugin_manifest.py` so it cannot silently drift again.
+
 ## [0.2.4] - 2026-09-03
 
 ### Fixed
