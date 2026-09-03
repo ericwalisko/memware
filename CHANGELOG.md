@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-03
+
 ### Added
 - `memware backfill [ROOT]` — one-time index of existing transcripts (default `~/.claude/projects`), for recall over prior sessions on a fresh install.
 
