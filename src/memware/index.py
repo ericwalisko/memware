@@ -141,7 +141,7 @@ def search_turns(
     use_weight: float = 0.5,
     candidates: int = 100,
     record_use: bool = True,
-    snippet_tokens: int = 48,
+    snippet_tokens: int = 96,
 ) -> list[Hit]:
     """Top-k turns by BM25 x activation. Empty query -> no hits.
 

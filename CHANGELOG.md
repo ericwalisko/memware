@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- Turn hits carry `snippet`: the FTS5 window around the matched terms (the head of a long turn often lacks the answer).
+- Turn hits carry `snippet`: the FTS5 window around the matched terms (the head of a long turn often lacks the answer). Default window 96 tokens; `memware recall --snippet-tokens N`.
 
 ### Changed
 - Stale scoring is positional: an answer is stale only when the old value appears before the current one.

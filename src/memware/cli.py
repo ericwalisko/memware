@@ -67,7 +67,9 @@ def cmd_recall(a: argparse.Namespace) -> int:
         if a.what in ("all", "beliefs"):
             hits += search_beliefs(s, a.query, k=a.k, record_use=not a.no_touch)
         if a.what in ("all", "turns"):
-            hits += search_turns(s, a.query, k=a.k, record_use=not a.no_touch)
+            hits += search_turns(
+                s, a.query, k=a.k, record_use=not a.no_touch, snippet_tokens=a.snippet_tokens
+            )
         rows = [
             {
                 "kind": h.kind,
@@ -207,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--what", choices=["all", "turns", "beliefs"], default="all")
     s.add_argument("--full", action="store_true")
     s.add_argument("--no-touch", action="store_true")
+    s.add_argument("--snippet-tokens", type=int, default=96, help="FTS5 snippet window (tokens)")
     s.set_defaults(fn=cmd_recall)
 
     s = add("context", "print valid beliefs relevant to a prompt (hook-friendly)")
