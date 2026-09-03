@@ -36,6 +36,16 @@ value. Keep the set private; only commit synthetic examples.
    and wall-clock latency added by the hooks.
 4. Report per type. A memory system that raises `fact` accuracy but also
    raises the stale rate has not helped.
+5. **Restrict the "alone" arm to its memory surface.** A tool-using agent
+   left with file search, a terminal or the web will answer from the corpus
+   on disk or from the internet, not from memory — in one run an agent
+   answered 92% of fact questions by grepping transcripts (93 file-search
+   calls for 36 questions). Enable only the agent's own memory and
+   session-recall tools for the comparison, and record the toolset in every
+   result row.
+6. **Mark invalid answers, don't score them.** Quota and rate-limit text
+   ("you've hit your session limit"), empty answers and timeouts are not
+   answers; exclude them from the summary and report the count.
 5. Treat a change to production memory as a user-facing, data-affecting change:
    have a human review the numbers before cutting over.
 
