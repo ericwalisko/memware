@@ -13,6 +13,7 @@ import re
 import shutil
 import sqlite3
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 SNAPSHOT_GLOB = "memware-*.db"
@@ -84,7 +85,7 @@ def apply_retention(dest_dir: str | os.PathLike[str], keep_days: list[int]) -> l
     days = sorted(set(int(d) for d in keep_days))
     keep: set[Path] = {snaps[0]}  # always the freshest
     edges = [0.0, *[float(d) for d in days]]
-    for lo, hi in zip(edges, edges[1:], strict=False):
+    for lo, hi in pairwise(edges):
         band = [p for p in snaps if lo < _age_days(p, now) <= hi]
         if band:
             keep.add(band[-1])  # oldest in the band (snaps are newest-first) -> promotes forward

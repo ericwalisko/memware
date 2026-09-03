@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.2.2] - 2026-09-03
+## [0.2.3] - 2026-09-03
 
 ### Fixed
 - Backup retention now **promotes**: a snapshot ages forward through the 1/3/7/14-day tiers
