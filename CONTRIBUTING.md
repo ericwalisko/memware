@@ -24,6 +24,12 @@ CI runs the same commands on Python 3.11, 3.12 and 3.13.
   should be framed as optional, off-by-default extras.
 - Keep the core dependency-free. New runtime dependencies go behind an extra.
 
+## Releasing
+
+Maintainers only: [RELEASING.md](RELEASING.md) covers the one-time PyPI trusted-publisher
+setup and the per-release steps. Releases are cut from a `v*` tag; nothing is published
+by hand.
+
 ## Sign-off (DCO)
 
 This project uses the [Developer Certificate of Origin](https://developercertificate.org/).
