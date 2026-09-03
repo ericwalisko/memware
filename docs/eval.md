@@ -43,7 +43,14 @@ value. Keep the set private; only commit synthetic examples.
    calls for 36 questions). Enable only the agent's own memory and
    session-recall tools for the comparison, and record the toolset in every
    result row.
-6. **Mark invalid answers, don't score them.** Quota and rate-limit text
+6. **The agent's own session memory learns from the eval.** Every eval
+   question becomes a session; an agent with session recall will answer the
+   second run from the first run's answers (in one case 179 of 251 recalled
+   sessions were earlier eval sessions). Point the "alone" arm at an empty
+   session store — and check that a "profile" or "workspace" actually gets its
+   own database rather than sharing the default one — or restrict it to its
+   durable memory files only.
+7. **Mark invalid answers, don't score them.** Quota and rate-limit text
    ("you've hit your session limit"), empty answers and timeouts are not
    answers; exclude them from the summary and report the count.
 5. Treat a change to production memory as a user-facing, data-affecting change:
