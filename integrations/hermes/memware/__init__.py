@@ -197,7 +197,7 @@ class MemwareProvider(MemoryProvider):
 
         try:
             with Store(self._db) as s:
-                hits = search_beliefs(s, query, k=self._prefetch_k)
+                hits = search_beliefs(s, query, k=self._prefetch_k, require_subject=True)
         except Exception as e:  # never break a turn over memory
             logger.warning("memware prefetch failed: %s", e)
             return ""
