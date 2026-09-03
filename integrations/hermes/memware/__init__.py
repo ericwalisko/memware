@@ -39,18 +39,20 @@ _DEFAULT_DB = "~/.memware/memware.db"
 _TOOLS: list[dict[str, Any]] = [
     {
         "name": "memware_recall",
-        "description": "Search past sessions and currently valid beliefs. Returns ranked, dated "
-        "passages — the matching part of a turn, not the whole turn. Call it before "
-        "answering anything about prior work; call again with different words if the "
-        "first hits are not it, and memware_read_session on a hit's id for full context.",
+        "description": "Search past sessions and currently valid beliefs. Pass 3-5 phrasings in "
+        "queries: the question as asked, synonyms, related concepts, and the literal value "
+        "you expect (a port, a file name, a version). Results are fused across phrasings; the "
+        "index is keyword-based, so your phrasings are what make it semantic. Returns ranked, "
+        "dated passages — the matching part of a turn, not the whole turn — each with a "
+        "session id and a turn id for memware_read_session.",
         "parameters": {
             "type": "object",
             "properties": {
-                "query": {"type": "string"},
+                "queries": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                 "k": {"type": "integer", "default": 8},
                 "what": {"type": "string", "enum": ["all", "turns", "beliefs"], "default": "all"},
             },
-            "required": ["query"],
+            "required": ["queries"],
         },
     },
     {
@@ -198,7 +200,7 @@ class MemwareProvider(MemoryProvider):
 
         try:
             with Store(self._db) as s:
-                hits = search_beliefs(s, query, k=self._prefetch_k)
+                hits = search_beliefs(s, query, k=self._prefetch_k, require_subject=True)
         except Exception as e:  # never break a turn over memory
             logger.warning("memware prefetch failed: %s", e)
             return ""
@@ -306,7 +308,7 @@ class MemwareProvider(MemoryProvider):
         return _TOOLS
 
     def handle_tool_call(self, name: str, args: dict[str, Any], **kwargs: Any) -> str:
-        from memware.index import read_turns, search_beliefs, search_turns
+        from memware.index import read_turns, search_beliefs_multi, search_turns_multi
         from memware.ledger import Policy, assert_belief, current
         from memware.store import Store
 
@@ -315,11 +317,12 @@ class MemwareProvider(MemoryProvider):
                 if name == "memware_recall":
                     k = int(args.get("k", 8))
                     what = args.get("what", "all")
+                    queries = args.get("queries") or ([args["query"]] if args.get("query") else [])
                     hits = []
                     if what in ("all", "beliefs"):
-                        hits += search_beliefs(s, args["query"], k=k)
+                        hits += search_beliefs_multi(s, queries, k=k)
                     if what in ("all", "turns"):
-                        hits += search_turns(s, args["query"], k=k)
+                        hits += search_turns_multi(s, queries, k=k)
                     return json.dumps(
                         [
                             {

@@ -9,8 +9,13 @@ import sys
 from pathlib import Path
 
 from memware import __version__
-from memware.index import read_turns, search_beliefs, search_turns
-from memware.ingest import sync_file, sync_tree
+from memware.index import (
+    read_turns,
+    search_beliefs,
+    search_beliefs_multi,
+    search_turns_multi,
+)
+from memware.ingest import capture_disabled, prune_sources, sync_file, sync_tree
 from memware.ledger import Policy, approve, assert_belief, current, history, reject
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.store import DEFAULT_DB, Store
@@ -41,6 +46,8 @@ def cmd_init(a: argparse.Namespace) -> int:
 
 
 def cmd_sync(a: argparse.Namespace) -> int:
+    if a.from_hook and capture_disabled():
+        return 0  # MEMWARE_NO_CAPTURE=1: this run must not enter the store
     paths = list(a.paths)
     if a.from_hook:
         tp = _hook_payload().get("transcript_path")
@@ -54,9 +61,19 @@ def cmd_sync(a: argparse.Namespace) -> int:
         for p in paths:
             path = Path(p).expanduser()
             if path.is_dir():
-                report.update(sync_tree(s, path, harness=a.harness))
+                report.update(
+                    sync_tree(
+                        s,
+                        path,
+                        harness=a.harness,
+                        skip_if_contains=a.skip_if_contains,
+                        exclude=a.exclude,
+                    )
+                )
             elif path.exists():
-                report[str(path)] = sync_file(s, path, harness=a.harness)
+                report[str(path)] = sync_file(
+                    s, path, harness=a.harness, skip_if_contains=a.skip_if_contains
+                )
         _out({"added": sum(report.values()), "files": len(report)}, a.json or a.from_hook)
     return 0
 
@@ -65,10 +82,10 @@ def cmd_recall(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         hits = []
         if a.what in ("all", "beliefs"):
-            hits += search_beliefs(s, a.query, k=a.k, record_use=not a.no_touch)
+            hits += search_beliefs_multi(s, a.queries, k=a.k, record_use=not a.no_touch)
         if a.what in ("all", "turns"):
-            hits += search_turns(
-                s, a.query, k=a.k, record_use=not a.no_touch, snippet_tokens=a.snippet_tokens
+            hits += search_turns_multi(
+                s, a.queries, k=a.k, record_use=not a.no_touch, snippet_tokens=a.snippet_tokens
             )
         rows = [
             {
@@ -97,7 +114,7 @@ def cmd_context(a: argparse.Namespace) -> int:
     if not prompt.strip():
         return 0
     with Store(a.db) as s:
-        hits = search_beliefs(s, prompt, k=a.k)
+        hits = search_beliefs(s, prompt, k=a.k, require_subject=True)
     if not hits:
         return 0
     lines = []
@@ -177,6 +194,13 @@ def cmd_review(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prune(a: argparse.Namespace) -> int:
+    with Store(a.db) as s:
+        rep = prune_sources(s, glob=a.glob, containing=a.containing)
+        _out({"sources_pruned": len(rep), "turns_removed": sum(rep.values())}, a.json)
+    return 0
+
+
 def cmd_stats(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         _out({"db": str(s.path), **s.stats()}, a.json)
@@ -202,10 +226,27 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("paths", nargs="*")
     s.add_argument("--harness", default="claude-code")
     s.add_argument("--from-hook", action="store_true")
+    s.add_argument(
+        "--skip-if-contains",
+        metavar="TEXT",
+        help="skip (and un-index) files whose head contains TEXT, e.g. an eval marker",
+    )
+    s.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="path glob to skip when syncing a directory (repeatable)",
+    )
     s.set_defaults(fn=cmd_sync)
 
-    s = add("recall", "search turns and beliefs")
-    s.add_argument("query")
+    s = add("recall", "search turns and beliefs; pass several phrasings to fuse them")
+    s.add_argument(
+        "queries",
+        nargs="+",
+        metavar="QUERY",
+        help="one or more phrasings: synonyms, related terms, the literal value you expect",
+    )
     s.add_argument("-k", type=int, default=8)
     s.add_argument("--what", choices=["all", "turns", "beliefs"], default="all")
     s.add_argument("--full", action="store_true")
@@ -250,6 +291,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--url")
     s.add_argument("--token")
     s.set_defaults(fn=cmd_review)
+
+    s = add("prune", "un-index sources by path glob and/or content marker")
+    s.add_argument("--glob", metavar="GLOB")
+    s.add_argument("--containing", metavar="TEXT")
+    s.set_defaults(fn=cmd_prune)
 
     s = add("stats", "counts")
     s.set_defaults(fn=cmd_stats)

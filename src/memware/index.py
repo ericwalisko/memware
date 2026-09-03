@@ -236,6 +236,10 @@ def search_turns(
     return hits
 
 
+def _subject_terms(subject: str) -> set[str]:
+    return {t.lower().strip(".-/") for t in _TOKEN.findall(subject)} - STOPWORDS
+
+
 def search_beliefs(
     store: Store,
     query: str,
@@ -244,18 +248,28 @@ def search_beliefs(
     decay: float = 0.1,
     use_weight: float = 0.5,
     record_use: bool = True,
+    require_subject: bool = False,
 ) -> list[Hit]:
-    """Top-k *currently valid, committed* beliefs. Superseded values never surface."""
+    """Top-k *currently valid, committed* beliefs. Superseded values never surface.
+
+    ``require_subject=True`` keeps only beliefs whose *subject* shares a term with the
+    query. Use it for unsolicited prompt-time injection: relation and value words
+    ("decision", "recovery", "model") match almost any prompt, and a belief about
+    the wrong subject is noise, not memory.
+    """
     q = fts_query(query)
     if not q:
         return []
     rows = store.conn.execute(
-        "SELECT b.*, -bm25(belief_fts) AS rel FROM belief_fts "
+        "SELECT b.*, -bm25(belief_fts, 3.0, 1.0, 1.0) AS rel FROM belief_fts "
         "JOIN belief b ON b.id = belief_fts.rowid "
         "WHERE belief_fts MATCH ? AND b.valid_to IS NULL AND b.status='committed' "
         "ORDER BY rel DESC LIMIT 100",
         (q,),
     ).fetchall()
+    if require_subject:
+        qterms = {t.strip('"') for t in q.split(" OR ")}
+        rows = [r for r in rows if _subject_terms(r["subject"]) & qterms]
     hits = [
         Hit(
             id=r["id"],
@@ -283,6 +297,68 @@ def search_beliefs(
 
         touch(store, [h.id for h in hits])
     return hits
+
+
+def _rrf(ranked_lists: list[list[Hit]], k: int, c: int = 60) -> list[Hit]:
+    """Reciprocal-rank fusion across several ranked lists; keeps the best Hit object per id."""
+    score: dict[tuple[str, int], float] = {}
+    best: dict[tuple[str, int], Hit] = {}
+    for hits in ranked_lists:
+        for rank, h in enumerate(hits):
+            key = (h.kind, h.id)
+            score[key] = score.get(key, 0.0) + 1.0 / (c + rank + 1)
+            if key not in best or h.score > best[key].score:
+                best[key] = h
+    order = sorted(score, key=lambda kk: score[kk], reverse=True)[:k]
+    return [best[kk] for kk in order]
+
+
+def search_turns_multi(
+    store: Store,
+    queries: list[str],
+    *,
+    k: int = 10,
+    record_use: bool = True,
+    **kw: object,
+) -> list[Hit]:
+    """Recall over several phrasings at once (synonyms, related concepts, literal values
+    the caller expects to see) fused by reciprocal rank. This is how a tool-calling agent
+    puts its own reasoning into retrieval: it supplies the variants, the index stays
+    model-free. Empty or duplicate phrasings are ignored."""
+    seen: list[str] = []
+    for q in queries:
+        q = (q or "").strip()
+        if q and q.lower() not in {x.lower() for x in seen}:
+            seen.append(q)
+    if not seen:
+        return []
+    if len(seen) == 1:
+        return search_turns(store, seen[0], k=k, record_use=record_use, **kw)  # type: ignore[arg-type]
+    lists = [search_turns(store, q, k=max(k, 20), record_use=False, **kw) for q in seen]  # type: ignore[arg-type]
+    fused = _rrf(lists, k)
+    if record_use and fused:
+        ts = now_iso()
+        store.conn.executemany(
+            "UPDATE turn SET use_count=use_count+1, last_used=? WHERE id=?",
+            [(ts, h.id) for h in fused],
+        )
+    return fused
+
+
+def search_beliefs_multi(
+    store: Store, queries: list[str], *, k: int = 10, record_use: bool = True, **kw: object
+) -> list[Hit]:
+    """Belief recall over several phrasings, fused by reciprocal rank."""
+    seen = [q.strip() for q in queries if q and q.strip()]
+    if not seen:
+        return []
+    lists = [search_beliefs(store, q, k=max(k, 20), record_use=False, **kw) for q in seen]  # type: ignore[arg-type]
+    fused = _rrf(lists, k)
+    if record_use and fused:
+        from memware.ledger import touch
+
+        touch(store, [h.id for h in fused])
+    return fused
 
 
 def read_turns(

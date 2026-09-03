@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from memware.index import read_turns, search_beliefs, search_turns
+from memware.index import read_turns, search_beliefs_multi, search_turns_multi
 from memware.ledger import Policy, assert_belief, current
 from memware.review import open_reviews
 from memware.store import Store
@@ -24,18 +24,22 @@ def build() -> Any:
     app = _Server("memware")
 
     @app.tool()
-    def recall(query: str, k: int = 8, what: str = "all") -> list[dict[str, Any]]:
-        """Search past turns and currently valid beliefs. what: all|turns|beliefs.
+    def recall(queries: list[str], k: int = 8, what: str = "all") -> list[dict[str, Any]]:
+        """Search past sessions and currently valid beliefs.
 
-        A turn hit returns the matching passage, not the whole turn; pass its ``id``
-        to read_session's ``around`` for the full turn and its neighbours.
+        Pass 3-5 phrasings, not one: the question as asked, a synonym or two, related
+        concepts, and the literal value you expect to see (a port number, a file name,
+        a version). Results are fused across phrasings. The index is keyword-based; your
+        phrasings are what make it semantic. what: all|turns|beliefs. A turn hit carries
+        the matching passage rather than the whole turn, plus a session id and an ``id``
+        you can pass to read_session's ``around`` for the full turn and its neighbours.
         """
         with Store(db) as s:
             hits = []
             if what in ("all", "beliefs"):
-                hits += search_beliefs(s, query, k=k)
+                hits += search_beliefs_multi(s, queries, k=k)
             if what in ("all", "turns"):
-                hits += search_turns(s, query, k=k)
+                hits += search_turns_multi(s, queries, k=k)
             return [h.__dict__ for h in hits]
 
     @app.tool()

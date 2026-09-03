@@ -3,6 +3,18 @@
 Two levels. The first needs no model and runs in CI; the second is how you
 decide whether memware earns its place in your own setup.
 
+## Guardrails, built in
+
+- `MEMWARE_NO_CAPTURE=1` in the environment of an evaluation run: hooks and providers
+  skip capture, so the run never enters the live store.
+- `[memware-eval]` (``memware.eval.MARKER``) in every evaluation prompt: `memware-eval
+  --corpus ROOT --db scratch.db --beliefs-from LIVE.db` rebuilds a clean store that
+  skips any transcript carrying it, and `memware prune --containing '[memware-eval]'`
+  removes stragglers from a live store.
+- Negative questions: generate them from words you have never typed in an indexed
+  session (a dictionary and a random seed), and do not print them into a session
+  that gets indexed.
+
 ## Retrieval-level (`memware-eval`)
 
 A question set is JSONL with `expect_any`, `not_expect` and `type`
@@ -33,11 +45,21 @@ written that day were doing both halves of it: they answered questions the set
 had been built to ask, and — being the most recent thing in the index, which
 recency weighting rewards — they crowded the real evidence out of the top 8.
 
-So snapshot the database and point every arm of the comparison at the same
-file: copy the store, stop syncing it, and drop turns newer than the question
-set (`DELETE FROM turn WHERE ts >= '<date the set was frozen>'` — passages
-cascade). A before/after measured on two different corpora is not a
-measurement. This is the retrieval-level cousin of point 6 below.
+The marker guardrail above does not catch this: a development session carries
+no `[memware-eval]` marker and is not an eval run — it is ordinary work that
+happens to be about the thing being measured. So build one scratch store and
+point every arm of the comparison at it:
+
+```bash
+memware-eval questions.jsonl --corpus ~/.claude/projects \
+  --db /tmp/eval.db --beliefs-from ~/.memware/memware.db
+sqlite3 /tmp/eval.db "DELETE FROM turn WHERE ts >= '<date the set was frozen>'"
+```
+
+`--corpus` rebuilds the store from scratch and skips marked transcripts; the
+delete drops whatever was written after the questions were written (passages
+cascade). Then run both arms against that file and never re-sync it. A
+before/after measured on two different corpora is not a measurement.
 
 ## End-to-end protocol (agent + memware vs agent alone)
 
@@ -68,10 +90,17 @@ measurement. This is the retrieval-level cousin of point 6 below.
    session store — and check that a "profile" or "workspace" actually gets its
    own database rather than sharing the default one — or restrict it to its
    durable memory files only.
-7. **Mark invalid answers, don't score them.** Quota and rate-limit text
+7. **Keep the eval out of its own evidence.** Headless runs (`claude -p`, one-shot
+   agents) write transcripts into the same directories you index, and each one
+   contains the question and an answer. Exclude them when you build the store
+   for a retrieval check (a marker string in the eval prompt makes this
+   deterministic), and author negative questions from words you have never
+   typed in any indexed session — the moment you write "zebra habitat" into a
+   chat that gets indexed, it stops being a negative.
+8. **Mark invalid answers, don't score them.** Quota and rate-limit text
    ("you've hit your session limit"), empty answers and timeouts are not
    answers; exclude them from the summary and report the count.
-8. Treat a change to production memory as a user-facing, data-affecting change:
+9. Treat a change to production memory as a user-facing, data-affecting change:
    have a human review the numbers before cutting over.
 
 Public long-horizon benchmarks (LongMemEval, LoCoMo) can be adapted by loading

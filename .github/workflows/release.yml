@@ -1,0 +1,74 @@
+name: Release
+
+# Publishing is authorized by a PyPI *trusted publisher* (OIDC): no API token is
+# stored anywhere. The binding on pypi.org names this repository, this workflow
+# file, and the `pypi` environment below — change any of the three and the
+# upload stops working. See RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          twine check --strict dist/*
+
+      - name: Install the wheel into a clean venv
+        # Core memware has no runtime dependencies, so this must resolve with the
+        # index switched off — anything else means a dependency leaked in.
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --no-index --find-links dist memware
+
+      - name: The console script reports the built version
+        run: |
+          version="$(/tmp/verify/bin/memware --version)"
+          echo "built version: ${version}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package version ${version}"
+            exit 1
+          fi
+
+      - name: The test suite passes against the installed wheel
+        # Imports resolve to site-packages, not src/ — this is what catches a
+        # subpackage or data file that never made it into the distribution.
+        run: |
+          /tmp/verify/bin/pip install pytest
+          /tmp/verify/bin/python -m pytest tests -q
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    # A manual run on a branch builds and verifies but never publishes.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/memware
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -24,7 +24,7 @@ search is on demand through the MCP server:
 claude mcp add memware -- memware-mcp
 ```
 
-Tools: `recall`, `read_session`, `beliefs`, `remember`, `pending_reviews`.
+Tools: `recall` (takes a list of phrasings — have the agent pass 3–5, including synonyms and the literal value it expects), `read_session`, `beliefs`, `remember`, `pending_reviews`.
 
 Subagents: the plugin does not inject into subagents. They can call the MCP
 tools. Their transcripts are synced with the parent session's.
@@ -38,6 +38,12 @@ flush, built-in-memory mirroring, and four tools for iterative recall. Install b
 copying it to `$HERMES_HOME/plugins/memware/` and running `hermes memory setup`.
 Both plugins share one store by default, so Claude Code and Hermes remember the
 same things.
+
+`integrations/hermes/upstream/` stages the same provider packaged as
+hermes-agent's own `plugins/memory/<name>/` tree, for contributing it in-tree so
+`hermes memory setup` lists memware on a clean install with no manual copy. It
+is prepared, not submitted — see that directory's README for what is still open
+and `docs/upstream-hermes-pr.md` for the draft PR text.
 
 ## Any other harness
 

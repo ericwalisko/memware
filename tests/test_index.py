@@ -140,3 +140,54 @@ def test_non_adjacent_passages_are_joined_by_an_ellipsis():
     ]
     assert _join_passages(gapped) == f"the question words{ELLIPSIS}the answer"
     assert _join_passages([]) == ""
+
+
+def test_prompt_injection_requires_a_subject_match(store):
+    assert_belief(
+        store, "agentmemory", "decision", "replace with memware", valid_from="2026-09-02T00:00:00Z"
+    )
+    # a prompt that merely contains the relation word must not pull the belief in
+    assert (
+        search_beliefs(
+            store, "draft a follow-up decision card for the keyboard", require_subject=True
+        )
+        == []
+    )
+    assert [
+        h.subject
+        for h in search_beliefs(store, "what did we decide about agentmemory", require_subject=True)
+    ] == ["agentmemory"]
+    # explicit recall stays broad
+    assert search_beliefs(store, "decision card")
+
+
+def test_multi_query_fusion_finds_what_single_phrasings_rank_low(store, tmp_path):
+    from memware.index import search_turns_multi
+
+    p = tmp_path / "m.jsonl"
+    turns = [
+        (
+            "assistant",
+            "2026-08-20T00:00:00Z",
+            "the gateway health probe listens on port 8443 behind the proxy",
+        )
+    ]
+    turns += [
+        (
+            "assistant",
+            "2026-08-21T00:00:00Z",
+            f"notes about the proxy configuration round {i} and its health",
+        )
+        for i in range(12)
+    ]
+    turns += [
+        ("assistant", "2026-08-22T00:00:00Z", f"port allocation table revision {i} for the cluster")
+        for i in range(12)
+    ]
+    write_claude_jsonl(p, "m", turns)
+    sync_file(store, p, harness="claude-code")
+    fused = search_turns_multi(
+        store, ["proxy health", "port 8443", "which port does the gateway listen on"], k=3
+    )
+    assert "8443" in fused[0].text
+    assert search_turns_multi(store, ["", "  "], k=3) == []
