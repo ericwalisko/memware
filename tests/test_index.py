@@ -76,3 +76,35 @@ def test_prompt_injection_requires_a_subject_match(store):
     ] == ["agentmemory"]
     # explicit recall stays broad
     assert search_beliefs(store, "decision card")
+
+
+def test_multi_query_fusion_finds_what_single_phrasings_rank_low(store, tmp_path):
+    from memware.index import search_turns_multi
+
+    p = tmp_path / "m.jsonl"
+    turns = [
+        (
+            "assistant",
+            "2026-08-20T00:00:00Z",
+            "the gateway health probe listens on port 8443 behind the proxy",
+        )
+    ]
+    turns += [
+        (
+            "assistant",
+            "2026-08-21T00:00:00Z",
+            f"notes about the proxy configuration round {i} and its health",
+        )
+        for i in range(12)
+    ]
+    turns += [
+        ("assistant", "2026-08-22T00:00:00Z", f"port allocation table revision {i} for the cluster")
+        for i in range(12)
+    ]
+    write_claude_jsonl(p, "m", turns)
+    sync_file(store, p, harness="claude-code")
+    fused = search_turns_multi(
+        store, ["proxy health", "port 8443", "which port does the gateway listen on"], k=3
+    )
+    assert "8443" in fused[0].text
+    assert search_turns_multi(store, ["", "  "], k=3) == []

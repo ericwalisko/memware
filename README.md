@@ -79,6 +79,28 @@ insertion order — so a backfill converges to the same state in any order, twic
 batches. Three policies: `auto` (last writer by event time), `gate_conflicts`
 (default: a less reliable challenger goes to review), `await_confirmation`.
 
+## Recall is keyword search; the agent supplies the meaning
+
+The index is FTS5/BM25 — fast, model-free, and literal. The `recall` tool therefore takes
+**several phrasings** and fuses them by reciprocal rank, so a tool-calling agent puts its
+own reasoning into retrieval at call time (synonyms, related concepts, the literal value it
+expects), the same way it would issue a few grep or web-search queries:
+
+```text
+recall(queries=["which port does the api listen on", "api port", "8443", "gateway listen port"])
+```
+
+Prompt-time injection (the hooks) stays deterministic and only injects beliefs whose
+*subject* the prompt names.
+
+## Keeping evaluations out of the evidence
+
+Headless runs write transcripts too. Set `MEMWARE_NO_CAPTURE=1` in any run you do not want
+indexed (hooks, the Hermes provider and `memware sync --from-hook` all honour it), put
+`[memware-eval]` in evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
+--beliefs-from ~/.memware/memware.db` to judge retrieval against a store that excludes them.
+`memware prune --containing TEXT` un-indexes runs that already slipped in.
+
 ## Reviewing contested supersessions
 
 memware does not ship a UI. It ships a contract — `ReviewBackend` with `publish()` and

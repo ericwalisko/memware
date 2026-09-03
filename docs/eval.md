@@ -3,6 +3,18 @@
 Two levels. The first needs no model and runs in CI; the second is how you
 decide whether memware earns its place in your own setup.
 
+## Guardrails, built in
+
+- `MEMWARE_NO_CAPTURE=1` in the environment of an evaluation run: hooks and providers
+  skip capture, so the run never enters the live store.
+- `[memware-eval]` (``memware.eval.MARKER``) in every evaluation prompt: `memware-eval
+  --corpus ROOT --db scratch.db --beliefs-from LIVE.db` rebuilds a clean store that
+  skips any transcript carrying it, and `memware prune --containing '[memware-eval]'`
+  removes stragglers from a live store.
+- Negative questions: generate them from words you have never typed in an indexed
+  session (a dictionary and a random seed), and do not print them into a session
+  that gets indexed.
+
 ## Retrieval-level (`memware-eval`)
 
 A question set is JSONL with `expect_any`, `not_expect` and `type`

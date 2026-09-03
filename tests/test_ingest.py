@@ -67,3 +67,63 @@ def test_generic_parser_and_tree_sync(store, tmp_path):
         encoding="utf-8",
     )
     assert sum(sync_tree(store, tmp_path, harness="generic").values()) == 2
+
+
+def test_skip_if_contains_and_prune(store, tmp_path, monkeypatch):
+    from memware.ingest import prune_sources, sync_tree
+
+    good, evalrun = tmp_path / "good.jsonl", tmp_path / "evalrun.jsonl"
+    write_claude_jsonl(
+        good,
+        "g",
+        [("assistant", "2026-08-10T00:00:00Z", "the real work happened here in the good session")],
+    )
+    write_claude_jsonl(
+        evalrun,
+        "e",
+        [
+            (
+                "user",
+                "2026-08-11T00:00:00Z",
+                "[memware-eval] Answer briefly: which port does the api use",
+            ),
+            ("assistant", "2026-08-11T00:00:01Z", "the api uses port 8443 according to my notes"),
+        ],
+    )
+    assert sum(sync_tree(store, tmp_path, harness="claude-code").values()) == 3
+    # retroactive: un-index everything carrying the marker
+    rep = prune_sources(store, containing="[memware-eval]")
+    assert sum(rep.values()) == 2 and store.stats()["turns"] == 1
+    # preventive: a resync with the marker filter never brings it back
+    assert (
+        sum(
+            sync_tree(
+                store, tmp_path, harness="claude-code", skip_if_contains="[memware-eval]"
+            ).values()
+        )
+        == 0
+    )
+    assert sum(sync_tree(store, tmp_path, harness="claude-code", exclude=["*good*"]).values()) == 2
+
+
+def test_hook_sync_is_a_noop_under_no_capture(tmp_path, monkeypatch, capsys):
+    import io
+    import json
+    import sys
+
+    from memware.cli import main
+
+    p = tmp_path / "s.jsonl"
+    write_claude_jsonl(
+        p,
+        "s",
+        [("assistant", "2026-08-20T00:00:00Z", "this eval run must not be indexed anywhere")],
+    )
+    monkeypatch.setenv("MEMWARE_NO_CAPTURE", "1")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"transcript_path": str(p)})))
+    db = str(tmp_path / "n.db")
+    assert main(["--db", db, "sync", "--from-hook"]) == 0
+    from memware.store import Store
+
+    with Store(db) as s:
+        assert s.stats()["turns"] == 0
