@@ -22,9 +22,11 @@ def test_eval_scores_beliefs_and_evidence_separately(tmp_path):
     )
     rep = run(str(db), q)
     assert rep["beliefs"]["accuracy"] == 1.0 and rep["beliefs"]["stale_rate"] == 0.0
-    # transcripts are evidence: the old value is allowed to appear there
-    assert rep["beliefs+turns"]["stale_rate"] == 0.5
+    # transcripts are evidence: the old value may appear there, but the current belief
+    # leads the context, so positional scoring does not count it as stale
+    assert rep["beliefs+turns"]["stale_rate"] == 0.0
     assert rep["beliefs"]["by_type"] == {"stale": 1.0, "negative": 1.0}
+    assert rep["results"][0]["beliefs+turns"]["found"]
 
 
 def test_stale_only_when_old_value_leads(tmp_path):
