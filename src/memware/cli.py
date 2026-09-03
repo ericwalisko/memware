@@ -78,6 +78,39 @@ def cmd_sync(a: argparse.Namespace) -> int:
     return 0
 
 
+def _warn_if_backup_is_larger(s: Store, a: argparse.Namespace) -> None:
+    """If a backup holds materially more than this store, the user may have wiped it while
+    transcripts past the OS's 30-day cleanup are already gone. Backfill can only re-index
+    what is on disk, so steer them to restore instead. Warning only — backfill never deletes."""
+    try:
+        from memware import backup as bk
+        from memware.config import get_dotted, load_config
+
+        dest = get_dotted(load_config(), "backup.dest")
+        snaps = bk.list_snapshots(dest) if dest else []
+        if not snaps:
+            return
+        here = s.stats()["turns"]
+        import sqlite3
+
+        con = sqlite3.connect(f"file:{snaps[0]}?mode=ro", uri=True)
+        try:
+            there = int(con.execute("SELECT count(*) FROM turn").fetchone()[0])
+        finally:
+            con.close()
+        if there > here + 100:
+            print(
+                f"WARNING: backup {snaps[0].name} holds {there:,} turns; this store has {here:,}. "
+                f"If you wiped the store and transcripts older than your OS's retention are gone, "
+                f"backfill cannot bring them back — restore instead:\n"
+                f"    memware restore --latest\n"
+                f"Continuing will index only the transcripts currently on disk.",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
+
 def cmd_backfill(a: argparse.Namespace) -> int:
     """One-time index of existing transcripts on a fresh machine.
 
@@ -89,6 +122,7 @@ def cmd_backfill(a: argparse.Namespace) -> int:
         print(f"nothing to backfill: {root} does not exist", file=sys.stderr)
         return 0
     with Store(a.db) as s:
+        _warn_if_backup_is_larger(s, a)
         report = sync_tree(s, root, harness=a.harness, exclude=a.exclude)
         added = sum(report.values())
         stats = s.stats()
@@ -238,6 +272,165 @@ def cmd_stats(a: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_backup_dest(a: argparse.Namespace) -> str | None:
+    from memware.config import get_dotted, load_config
+
+    dest: str | None = a.dest or get_dotted(load_config(), "backup.dest")
+    return dest
+
+
+def cmd_backup(a: argparse.Namespace) -> int:
+    from memware import backup as bk
+    from memware.config import get_dotted, load_config
+
+    cfg = load_config()
+    dest = a.dest or get_dotted(cfg, "backup.dest")
+    if not dest:
+        print(
+            "no backup destination — pass --dest DIR or run `memware setup` "
+            "(point it at a Dropbox/iCloud/Drive folder or an external disk)",
+            file=sys.stderr,
+        )
+        return 2
+    keep = a.keep or get_dotted(cfg, "backup.keep_days") or [1, 3, 7, 14]
+    out = bk.snapshot(a.db, dest)
+    deleted = bk.apply_retention(dest, keep)
+    result: dict[str, object] = {
+        "snapshot": str(out),
+        "kept": [p.name for p in bk.list_snapshots(dest)],
+        "pruned": [p.name for p in deleted],
+    }
+    include = a.transcripts or (
+        a.transcripts is None and bool(get_dotted(cfg, "backup.include_transcripts"))
+    )
+    if include:
+        src = a.transcript_src or get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
+        result["transcripts_mirrored"] = bk.mirror_transcripts(src, dest)
+    _out(result, a.json)
+    return 0
+
+
+def cmd_restore(a: argparse.Namespace) -> int:
+    from memware import backup as bk
+
+    dest = _resolve_backup_dest(a)
+    snap = a.from_file
+    if not snap:
+        if not dest:
+            print("no backup destination configured; pass --from FILE", file=sys.stderr)
+            return 2
+        snaps = bk.list_snapshots(dest)
+        if not snaps:
+            print(f"no snapshots in {dest}", file=sys.stderr)
+            return 2
+        snap = str(snaps[0])
+    prev = bk.restore(snap, a.db)
+    with Store(a.db) as s:
+        stats = s.stats()
+    _out({"restored_from": snap, "previous_store_saved_to": str(prev), **stats}, a.json)
+    return 0
+
+
+def cmd_setup(a: argparse.Namespace) -> int:
+    """Interactive first-run guidance for the backup destination (storage-agnostic)."""
+    from memware.config import get_dotted, load_config, save_config, set_dotted
+
+    cfg = load_config()
+    cur = get_dotted(cfg, "backup.dest")
+    print("memware backup setup")
+    print("  Pick a folder your OS already syncs or a drive you keep — memware just writes")
+    print(
+        "  snapshots there. Examples: ~/Dropbox/memware, ~/Library/Mobile Documents/com~apple~CloudDocs/memware,"
+    )
+    print("  ~/Google Drive/memware, /Volumes/backup/memware.")
+    if cur:
+        print(f"  Current: {cur}")
+    try:
+        dest = input("Backup folder (blank to keep current): ").strip()
+    except EOFError:
+        dest = ""
+    if dest:
+        set_dotted(cfg, "backup.dest", dest)
+    try:
+        t = (
+            input("Also mirror transcripts there so they outlive the 30-day cleanup? [Y/n]: ")
+            .strip()
+            .lower()
+        )
+    except EOFError:
+        t = ""
+    set_dotted(cfg, "backup.include_transcripts", t != "n")
+    path = save_config(cfg)
+    print(f"\nSaved {path}. Run `memware backup` now, and schedule it daily (see docs/backup.md).")
+    return 0
+
+
+def cmd_config(a: argparse.Namespace) -> int:
+    from memware.config import config_path, get_dotted, load_config, save_config, set_dotted
+
+    cfg = load_config()
+    if a.key and a.value is not None:
+        val: object = a.value
+        if a.key.endswith("keep_days"):
+            val = [int(x) for x in a.value.replace(",", " ").split()]
+        elif a.value.lower() in ("true", "false"):
+            val = a.value.lower() == "true"
+        set_dotted(cfg, a.key, val)
+        save_config(cfg)
+        _out({a.key: get_dotted(cfg, a.key), "path": str(config_path())}, a.json)
+    elif a.key:
+        _out({a.key: get_dotted(cfg, a.key)}, a.json)
+    else:
+        _out({**cfg, "path": str(config_path())}, a.json)
+    return 0
+
+
+NUKE_PHRASE = "DELETE ALL MEMWARE DATA"
+
+
+def cmd_nuke(a: argparse.Namespace) -> int:
+    """Permanently delete the store, its config, review files, AND every snapshot in the
+    backup destination. Guarded by a typed confirmation so it cannot happen by accident."""
+    from memware import backup as bk
+    from memware.config import config_path, get_dotted, load_config, memware_home
+
+    dest = get_dotted(load_config(), "backup.dest")
+    snaps = bk.list_snapshots(dest) if dest else []
+    targets = [Path(a.db).expanduser(), Path(str(a.db) + "-wal"), Path(str(a.db) + "-shm")]
+    home = memware_home()
+    for name in ("ignore-markers.txt", "review-outbox.jsonl", "review-inbox.jsonl"):
+        targets.append(home / name)
+    targets.append(config_path())
+    print("This permanently deletes:")
+    print(f"  store:      {a.db} (+ wal/shm)")
+    print(f"  config:     {config_path()}")
+    print(
+        f"  snapshots:  {len(snaps)} in {dest}"
+        if dest
+        else "  snapshots:  (no backup dest configured)"
+    )
+    print(f"\nType exactly:  {NUKE_PHRASE}")
+    typed = a.confirm
+    if typed is None:
+        try:
+            typed = input("> ").strip()
+        except EOFError:
+            typed = ""
+    if typed != NUKE_PHRASE:
+        print("phrase did not match — nothing deleted", file=sys.stderr)
+        return 1
+    removed = 0
+    for snap in snaps:
+        snap.unlink(missing_ok=True)
+        removed += 1
+    for t in targets:
+        if t.exists():
+            t.unlink()
+            removed += 1
+    _out({"deleted_files": removed, "snapshots_deleted": len(snaps)}, a.json)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="memware", description=__doc__)
     p.add_argument("--db", default=str(DEFAULT_DB), help="SQLite file (env MEMWARE_DB)")
@@ -351,6 +544,55 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = add("stats", "counts")
     s.set_defaults(fn=cmd_stats)
+
+    s = add(
+        "backup", "snapshot the store to a folder (Dropbox/iCloud/Drive/disk) with tiered retention"
+    )
+    s.add_argument("--dest", metavar="DIR", help="destination (default: backup.dest from config)")
+    s.add_argument(
+        "--keep",
+        type=lambda v: [int(x) for x in v.replace(",", " ").split()],
+        metavar="D1,D3,D7…",
+        help="age buckets to keep (default 1,3,7,14)",
+    )
+    s.add_argument(
+        "--transcripts",
+        action="store_true",
+        default=None,
+        help="also mirror transcripts into <dest>/transcripts",
+    )
+    s.add_argument("--no-transcripts", dest="transcripts", action="store_false")
+    s.add_argument("--transcript-src", metavar="DIR")
+    s.set_defaults(fn=cmd_backup)
+
+    s = add("restore", "replace the store with a snapshot (the current store is saved aside first)")
+    s.add_argument(
+        "--from",
+        dest="from_file",
+        metavar="FILE",
+        help="snapshot file (default: latest in backup.dest)",
+    )
+    s.add_argument("--dest", metavar="DIR", help="backup destination to pick the latest from")
+    s.set_defaults(fn=cmd_restore)
+
+    s = add("setup", "interactive one-time backup setup (storage-agnostic)")
+    s.set_defaults(fn=cmd_setup)
+
+    s = add("config", "show or set configuration (e.g. backup.dest, backup.keep_days)")
+    s.add_argument("key", nargs="?")
+    s.add_argument("value", nargs="?")
+    s.set_defaults(fn=cmd_config)
+
+    s = add(
+        "nuke",
+        "permanently delete the store, config, and ALL backups (typed confirmation required)",
+    )
+    s.add_argument(
+        "--confirm",
+        metavar="PHRASE",
+        help='must equal "DELETE ALL MEMWARE DATA" (else you are prompted)',
+    )
+    s.set_defaults(fn=cmd_nuke)
     return p
 
 

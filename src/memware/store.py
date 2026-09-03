@@ -159,6 +159,7 @@ class Store:
         version = int(self.conn.execute("PRAGMA user_version").fetchone()[0])
         if version >= SCHEMA_VERSION:
             return
+        self._safety_snapshot(version)
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             if version < 1:
@@ -178,6 +179,24 @@ class Store:
         finally:
             if self.conn.in_transaction:
                 self.conn.execute("COMMIT")
+
+    def _safety_snapshot(self, from_version: int) -> None:
+        """Before a schema migration alters an existing store, snapshot it to the configured
+        backup destination if there is one — so a memware update that changes *what is
+        stored* is always reversible. Best-effort: never blocks the open."""
+        if from_version <= 0 or str(self.path) == ":memory:":
+            return  # brand-new store: nothing to protect
+        try:
+            from memware import backup as bk
+            from memware.config import get_dotted, load_config
+
+            dest = get_dotted(load_config(), "backup.dest")
+            if not dest:
+                return
+            self.conn.commit()
+            bk.snapshot(self.path, dest)
+        except Exception:
+            pass  # a failed safety copy must not stop the upgrade
 
     def backfill_passages(self, *, batch: int = 1000) -> int:
         """Chunk every turn that has no passages yet. Returns the number of turns done."""

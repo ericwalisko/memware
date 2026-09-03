@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Backups: `memware backup` writes a consistent snapshot (VACUUM INTO) to a storage-agnostic
+  folder (Dropbox/iCloud/Drive/external disk) with tiered retention (newest + 1/3/7/14-day),
+  and mirrors transcripts into `<dest>/transcripts` so they outlive the OS's 30-day cleanup.
+- `memware restore --latest|--from FILE` (saves the current store aside first), `memware setup`
+  (interactive backup setup), `memware config` (get/set, e.g. `backup.dest`), and `memware nuke`
+  (deletes store + config + all snapshots, guarded by a typed confirmation phrase).
+- Safety: a schema migration snapshots the store first when a backup dest is set, and `backfill`
+  warns if a backup holds more turns than the store (the wipe-and-re-backfill trap).
+
+
 ## [0.1.3] - 2026-09-03
 
 ### Changed

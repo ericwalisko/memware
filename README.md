@@ -136,6 +136,22 @@ recall(queries=["which port does the api listen on", "api port", "8443", "gatewa
 Prompt-time injection (the hooks) stays deterministic and only injects beliefs whose
 *subject* the prompt names.
 
+## Backups and the wipe trap
+
+Transcripts are deleted by the OS after ~30 days, so an aged session lives only in the store —
+**back it up, and never wipe-and-re-backfill** (backfill only re-indexes transcripts still on
+disk). memware guards this: migrations snapshot first, and `backfill` warns if a backup is
+larger than the store.
+
+```bash
+memware setup                              # pick a folder: Dropbox / iCloud / Drive / external disk
+memware backup                             # tiered snapshot (1/3/7/14-day) + transcript mirror
+memware restore --latest                   # after a wipe, restore — do not re-backfill
+memware nuke                               # delete everything, typed-confirmation guarded
+```
+
+Full guide: [docs/backup.md](docs/backup.md).
+
 ## Keeping evaluations out of the evidence
 
 Full guide: [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
