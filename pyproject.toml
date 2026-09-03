@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memware"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Memory for AI agents that only remembers the latest truth: a bi-temporal belief ledger plus a transcript index, in one SQLite file."
 readme = "README.md"
 license = "MIT"
@@ -38,6 +38,10 @@ memware-eval = "memware.eval:main"
 Homepage = "https://github.com/ericwalisko/memware"
 Issues = "https://github.com/ericwalisko/memware/issues"
 Changelog = "https://github.com/ericwalisko/memware/blob/main/CHANGELOG.md"
+
+[tool.hatch.version]
+# One source of truth: `memware --version` and the published wheel cannot drift.
+path = "src/memware/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memware"]
