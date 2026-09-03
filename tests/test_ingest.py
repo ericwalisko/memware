@@ -67,3 +67,30 @@ def test_generic_parser_and_tree_sync(store, tmp_path):
         encoding="utf-8",
     )
     assert sum(sync_tree(store, tmp_path, harness="generic").values()) == 2
+
+
+def test_resync_never_duplicates_passages(store, tmp_path):
+    p = tmp_path / "s4.jsonl"
+    write_claude_jsonl(
+        p, "sess-4", [("assistant", "2026-08-13T00:00:00Z", "the cache warms on boot. " * 300)]
+    )
+    assert sync_file(store, p, harness="claude-code") == 1
+    first = store.stats()["passages"]
+    assert first > 1
+    assert sync_file(store, p, harness="claude-code") == 0
+    assert store.stats()["passages"] == first
+    ids = store.conn.execute("SELECT turn_id, ord FROM passage").fetchall()
+    assert len(ids) == len({(r["turn_id"], r["ord"]) for r in ids})
+
+
+def test_truncated_file_drops_passages_with_its_turns(store, tmp_path):
+    p = tmp_path / "s5.jsonl"
+    write_claude_jsonl(
+        p, "sess-5", [("assistant", "2026-08-14T00:00:00Z", "release notes draft. " * 300)]
+    )
+    sync_file(store, p, harness="claude-code")
+    assert store.stats()["passages"] > 1
+    write_claude_jsonl(p, "sess-5", [])  # rewritten shorter than the cursor
+    sync_file(store, p, harness="claude-code")
+    stats = store.stats()
+    assert stats["turns"] == 0 and stats["passages"] == 0

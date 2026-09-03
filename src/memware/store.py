@@ -57,14 +57,30 @@ CREATE TABLE IF NOT EXISTS turn (
   UNIQUE(source, seq)
 );
 CREATE INDEX IF NOT EXISTS turn_session_idx ON turn(session, seq);
-CREATE VIRTUAL TABLE IF NOT EXISTS turn_fts USING fts5(
-  text, content='turn', content_rowid='id', tokenize='porter unicode61'
+
+-- Turns are ranked through their passages (see memware.passage): a ~400-token
+-- span of one turn, anchored by turn_id and start_char. Only passages are
+-- indexed; the turn text stays whole for reading a session back.
+CREATE TABLE IF NOT EXISTS passage (
+  id         INTEGER PRIMARY KEY,
+  turn_id    INTEGER NOT NULL,
+  ord        INTEGER NOT NULL,
+  start_char INTEGER NOT NULL,
+  end_char   INTEGER NOT NULL,
+  text       TEXT NOT NULL,
+  UNIQUE(turn_id, ord)
 );
-CREATE TRIGGER IF NOT EXISTS turn_ai AFTER INSERT ON turn BEGIN
-  INSERT INTO turn_fts(rowid, text) VALUES (new.id, new.text);
+CREATE VIRTUAL TABLE IF NOT EXISTS passage_fts USING fts5(
+  text, content='passage', content_rowid='id', tokenize='porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS passage_ai AFTER INSERT ON passage BEGIN
+  INSERT INTO passage_fts(rowid, text) VALUES (new.id, new.text);
 END;
-CREATE TRIGGER IF NOT EXISTS turn_ad AFTER DELETE ON turn BEGIN
-  INSERT INTO turn_fts(turn_fts, rowid, text) VALUES ('delete', old.id, old.text);
+CREATE TRIGGER IF NOT EXISTS passage_ad AFTER DELETE ON passage BEGIN
+  INSERT INTO passage_fts(passage_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS turn_ad_passages AFTER DELETE ON turn BEGIN
+  DELETE FROM passage WHERE turn_id = old.id;
 END;
 
 CREATE TABLE IF NOT EXISTS cursor (
@@ -87,6 +103,13 @@ CREATE TABLE IF NOT EXISTS review (
 """
 
 DEFAULT_DB = Path(os.environ.get("MEMWARE_DB", "~/.memware/memware.db")).expanduser()
+
+SCHEMA_VERSION = 1
+"""Bumped when an existing file needs work beyond ``CREATE ... IF NOT EXISTS``.
+
+1. Passages replace whole-turn FTS: ``turn_fts`` is dropped and every existing
+   turn is chunked into the ``passage`` table on first open.
+"""
 
 
 def now_iso() -> str:
@@ -112,6 +135,48 @@ class Store:
         if not self._has_fts5():
             raise RuntimeError("this SQLite build lacks FTS5; memware requires it")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Bring an older file up to :data:`SCHEMA_VERSION`. Runs once, in one transaction.
+
+        A store written before version 1 indexed whole turns in ``turn_fts``. That
+        table and its triggers go, and every turn already on disk is chunked — a
+        few seconds for a 30-day corpus, and only on the first open after upgrade.
+        """
+        if int(self.conn.execute("PRAGMA user_version").fetchone()[0]) >= SCHEMA_VERSION:
+            return
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute("DROP TRIGGER IF EXISTS turn_ai")
+            self.conn.execute("DROP TRIGGER IF EXISTS turn_ad")
+            self.conn.execute("DROP TABLE IF EXISTS turn_fts")
+            self.backfill_passages()
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        finally:
+            if self.conn.in_transaction:
+                self.conn.execute("COMMIT")
+
+    def backfill_passages(self, *, batch: int = 1000) -> int:
+        """Chunk every turn that has no passages yet. Returns the number of turns done."""
+        from memware.passage import index_turn
+
+        done, after = 0, -1
+        while True:
+            rows = self.conn.execute(
+                "SELECT t.id, t.text FROM turn t LEFT JOIN passage p ON p.turn_id = t.id "
+                "WHERE t.id > ? AND p.id IS NULL ORDER BY t.id LIMIT ?",
+                (after, batch),
+            ).fetchall()
+            if not rows:
+                return done
+            for r in rows:
+                index_turn(self.conn, int(r["id"]), r["text"])
+            after = int(rows[-1]["id"])
+            done += len(rows)
 
     def _has_fts5(self) -> bool:
         row = self.conn.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()
@@ -130,6 +195,7 @@ class Store:
         q = self.conn.execute
         return {
             "turns": int(q("SELECT count(*) FROM turn").fetchone()[0]),
+            "passages": int(q("SELECT count(*) FROM passage").fetchone()[0]),
             "sessions": int(q("SELECT count(DISTINCT session) FROM turn").fetchone()[0]),
             "beliefs_current": int(
                 q(

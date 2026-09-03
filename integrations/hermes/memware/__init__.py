@@ -40,8 +40,9 @@ _TOOLS: list[dict[str, Any]] = [
     {
         "name": "memware_recall",
         "description": "Search past sessions and currently valid beliefs. Returns ranked, dated "
-        "snippets. Call it before answering anything about prior work; call again with "
-        "different words if the first hits are not it.",
+        "passages — the matching part of a turn, not the whole turn. Call it before "
+        "answering anything about prior work; call again with different words if the "
+        "first hits are not it, and memware_read_session on a hit's id for full context.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -54,8 +55,8 @@ _TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "memware_read_session",
-        "description": "Read a past session's turns in order, or a window around one turn id "
-        "returned by memware_recall.",
+        "description": "Read a past session's turns whole and in order, or a window around one "
+        "turn id returned by memware_recall.",
         "parameters": {
             "type": "object",
             "properties": {

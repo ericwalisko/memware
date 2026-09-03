@@ -25,7 +25,11 @@ def build() -> Any:
 
     @app.tool()
     def recall(query: str, k: int = 8, what: str = "all") -> list[dict[str, Any]]:
-        """Search past turns and currently valid beliefs. what: all|turns|beliefs."""
+        """Search past turns and currently valid beliefs. what: all|turns|beliefs.
+
+        A turn hit returns the matching passage, not the whole turn; pass its ``id``
+        to read_session's ``around`` for the full turn and its neighbours.
+        """
         with Store(db) as s:
             hits = []
             if what in ("all", "beliefs"):
@@ -38,7 +42,7 @@ def build() -> Any:
     def read_session(
         session: str, around: int | None = None, window: int = 5
     ) -> list[dict[str, Any]]:
-        """Read a session's turns, or a window around one turn id."""
+        """Read a session's turns whole, or a window around one turn id from recall."""
         with Store(db) as s:
             return read_turns(s, session, around=around, window=window)
 

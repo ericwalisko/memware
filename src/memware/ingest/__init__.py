@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from memware.passage import index_turn
 from memware.store import Store, now_iso
 
 
@@ -56,12 +57,14 @@ def sync_file(store: Store, path: str | os.PathLike[str], *, harness: str) -> in
         added = 0
         for offset_after, turn in parse(p, offset):
             seq += 1
-            conn.execute(
+            cur = conn.execute(
                 "INSERT OR IGNORE INTO turn(session,seq,ts,role,text,source,harness) "
                 "VALUES (?,?,?,?,?,?,?)",
                 (turn.session, seq, turn.ts, turn.role, turn.text, source, harness),
             )
-            added += 1
+            if cur.rowcount:  # ignored rows are a re-read of the same (source, seq)
+                index_turn(conn, int(cur.lastrowid or 0), turn.text)
+                added += 1
             offset = offset_after
         conn.execute(
             "INSERT INTO cursor(source,offset,seq,updated_at) VALUES (?,?,?,?) "

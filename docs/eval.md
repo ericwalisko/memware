@@ -14,12 +14,30 @@ memware-eval eval/questions.example.jsonl --db ./demo.db
 ```
 
 Reported: accuracy, stale rate (a superseded value appearing in context),
-per-type accuracy, median latency.
+per-type accuracy, median latency, and the size of the retrieved context.
+Recall quotes matching passages rather than whole turns, so that context is
+what a prompt would actually receive.
 
 Building a question set from your own transcripts: pick facts that an agent
 stated at time T, and for stale questions pick facts whose value changed
 between T1 and T2 — the question must expect the T2 value and forbid the T1
 value. Keep the set private; only commit synthetic examples.
+
+### Freeze the corpus before you compare
+
+If the index keeps syncing while you work, the eval measures your working
+session. Running one question set against a live store during development of
+the passage index moved the *unchanged* whole-turn baseline between 17/24 and
+24/24 on fact questions, in both directions, within three hours. 847 turns
+written that day were doing both halves of it: they answered questions the set
+had been built to ask, and — being the most recent thing in the index, which
+recency weighting rewards — they crowded the real evidence out of the top 8.
+
+So snapshot the database and point every arm of the comparison at the same
+file: copy the store, stop syncing it, and drop turns newer than the question
+set (`DELETE FROM turn WHERE ts >= '<date the set was frozen>'` — passages
+cascade). A before/after measured on two different corpora is not a
+measurement. This is the retrieval-level cousin of point 6 below.
 
 ## End-to-end protocol (agent + memware vs agent alone)
 
@@ -53,7 +71,7 @@ value. Keep the set private; only commit synthetic examples.
 7. **Mark invalid answers, don't score them.** Quota and rate-limit text
    ("you've hit your session limit"), empty answers and timeouts are not
    answers; exclude them from the summary and report the count.
-5. Treat a change to production memory as a user-facing, data-affecting change:
+8. Treat a change to production memory as a user-facing, data-affecting change:
    have a human review the numbers before cutting over.
 
 Public long-horizon benchmarks (LongMemEval, LoCoMo) can be adapted by loading

@@ -5,13 +5,16 @@
 memware is one SQLite file with two stores:
 
 - **turns** — immutable evidence. Every prompt and answer from past sessions,
-  indexed with FTS5. Recall is BM25 × recency × use, ~4 ms, no model in the loop.
+  split into ~400-token passages and indexed with FTS5. Recall ranks passages and
+  quotes only the matching ones; reading a session back returns whole turns.
+  BM25 × recency × use, no model in the loop.
 - **beliefs** — a bi-temporal ledger of facts. A new value for the same
   `(subject, relation)` **supersedes** the old one. Recall only ever returns the
   currently valid belief; history is kept for audit and never reaches a prompt.
 
 No daemon, no vector database, no LLM call at capture or read time. A 30-day
-corpus of a busy coding agent indexes in about five seconds into ~30 MB.
+corpus of a busy coding agent — 18k turns, 40k passages — indexes in about
+fourteen seconds into ~120 MB.
 
 ```text
 $ memware sync ~/.claude/projects --harness claude-code

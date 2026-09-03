@@ -9,12 +9,18 @@ how often it was needed. ACT-R writes base-level activation as
 
 Retrieval is recorded (``use_count``/``last_used``) so what gets used gets
 easier to find — the testing effect.
+
+BM25 runs over *passages* (see :mod:`memware.passage`), not whole turns, while
+activation stays the turn's — recency and use belong to the conversation. Hits
+collapse to one per turn and quote only the matching passages, so recall costs
+roughly a third fewer tokens; reading a session back still returns whole turns.
 """
 
 from __future__ import annotations
 
 import math
 import re
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -88,6 +94,14 @@ STOPWORDS = frozenset(
 
 @dataclass(frozen=True)
 class Hit:
+    """One ranked result. ``id`` is the record you can read back — the turn id for
+    a turn hit (:func:`read_turns` takes it as ``around``), the belief id otherwise.
+
+    For turn hits ``text`` is the matching passage or passages rather than the whole
+    turn; ``passage_id`` is the best-scoring one and ``offset`` the character where
+    the quoted text starts inside the turn.
+    """
+
     id: int
     kind: str
     score: float
@@ -99,6 +113,8 @@ class Hit:
     relation: str | None = None
     source: str | None = None
     snippet: str | None = None
+    passage_id: int | None = None
+    offset: int | None = None
 
 
 def fts_query(text: str, max_terms: int = 24) -> str:
@@ -126,6 +142,21 @@ def _age_days(ts: str | None) -> float:
     return max(0.0, (datetime.now(UTC) - t).total_seconds() / 86400.0)
 
 
+ELLIPSIS = " … "
+
+
+def _join_passages(rows: list[sqlite3.Row]) -> str:
+    """Passage texts in document order; an ellipsis stands in for what was skipped."""
+    parts: list[str] = []
+    previous: int | None = None
+    for r in rows:
+        if previous is not None and r["ord"] != previous + 1:
+            parts.append(ELLIPSIS)
+        parts.append(r["passage_text"])
+        previous = int(r["ord"])
+    return "".join(parts)
+
+
 def activation(ts: str | None, use_count: int, *, decay: float, use_weight: float) -> float:
     return float((1.0 + _age_days(ts)) ** (-decay)) * (
         1.0 + use_weight * math.log1p(max(0, use_count))
@@ -139,42 +170,63 @@ def search_turns(
     k: int = 10,
     decay: float = 0.5,
     use_weight: float = 0.5,
-    candidates: int = 100,
+    candidates: int = 200,
     record_use: bool = True,
     snippet_tokens: int = 96,
+    passages_per_turn: int = 3,
 ) -> list[Hit]:
-    """Top-k turns by BM25 x activation. Empty query -> no hits.
+    """Top-k turns by BM25 x activation, each ranked on its best passage.
 
-    Each hit carries ``snippet``: the FTS5 window around the matched terms, which is what
-    a prompt should quote — the head of a long turn often does not contain the answer.
+    Ranking is per passage, but hits collapse to one per turn, so ``k`` still
+    means k distinct turns. ``text`` is that turn's ``passages_per_turn`` best
+    matching passages in document order, joined by an ellipsis where they are not
+    adjacent — the quotable context, a third to a half the size of the whole turn.
+    ``snippet`` is the FTS5 window inside the best passage; ``id`` is the turn,
+    which :func:`read_turns` reads back whole.
+
+    Quoting fewer passages is cheaper but loses facts, because the answer and the
+    question's vocabulary often sit in different parts of one turn: on a 24-question
+    fact set, 1 passage scored 21/24, 2 scored 23/24 and 3 scored 24/24 — matching
+    whole-turn recall on half the context. See docs/eval.md.
+
+    Empty query -> no hits.
     """
     q = fts_query(query)
     if not q:
         return []
     rows = store.conn.execute(
-        "SELECT t.id, t.session, t.ts, t.role, t.text, t.source, t.use_count, "
-        "-bm25(turn_fts) AS rel, snippet(turn_fts, 0, '', '', ' … ', ?) AS snip "
-        "FROM turn_fts JOIN turn t ON t.id = turn_fts.rowid "
-        "WHERE turn_fts MATCH ? ORDER BY rel DESC LIMIT ?",
+        "SELECT p.id AS passage_id, p.turn_id, p.ord, p.start_char, p.text AS passage_text, "
+        "t.session, t.ts, t.role, t.source, t.use_count, "
+        "-bm25(passage_fts) AS rel, snippet(passage_fts, 0, '', '', ' … ', ?) AS snip "
+        "FROM passage_fts JOIN passage p ON p.id = passage_fts.rowid "
+        "JOIN turn t ON t.id = p.turn_id "
+        "WHERE passage_fts MATCH ? ORDER BY rel DESC LIMIT ?",
         (snippet_tokens, q, candidates),
     ).fetchall()
-    hits = [
-        Hit(
-            id=r["id"],
-            kind="turn",
-            score=r["rel"]
-            * activation(r["ts"], r["use_count"], decay=decay, use_weight=use_weight),
-            text=r["text"],
-            session=r["session"],
-            ts=r["ts"],
-            role=r["role"],
-            source=r["source"],
-            snippet=r["snip"],
+    scored: dict[int, list[tuple[float, sqlite3.Row]]] = {}
+    for r in rows:
+        score = r["rel"] * activation(r["ts"], r["use_count"], decay=decay, use_weight=use_weight)
+        scored.setdefault(r["turn_id"], []).append((score, r))
+    hits: list[Hit] = []
+    for turn_id in sorted(scored, key=lambda t: -max(s for s, _ in scored[t]))[:k]:
+        by_score = sorted(scored[turn_id], key=lambda sr: -sr[0])
+        keep = sorted(by_score[: max(1, passages_per_turn)], key=lambda sr: sr[1]["ord"])
+        best = by_score[0][1]
+        hits.append(
+            Hit(
+                id=turn_id,
+                kind="turn",
+                score=by_score[0][0],
+                text=_join_passages([r for _, r in keep]),
+                session=best["session"],
+                ts=best["ts"],
+                role=best["role"],
+                source=best["source"],
+                snippet=best["snip"],
+                passage_id=best["passage_id"],
+                offset=keep[0][1]["start_char"],
+            )
         )
-        for r in rows
-    ]
-    hits.sort(key=lambda h: h.score, reverse=True)
-    hits = hits[:k]
     if record_use and hits:
         ts = now_iso()
         store.conn.executemany(

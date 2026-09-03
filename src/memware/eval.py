@@ -83,10 +83,12 @@ def run(db: str, questions: Path, *, k: int = 8) -> dict[str, Any]:
         for r in results:
             by_type.setdefault(str(r["type"]), []).append(bool(r[ctx_key]["ok"]))
         n = max(1, len(results))
+        chars = [int(r[ctx_key]["context_chars"]) for r in results]
         return {
             "accuracy": sum(bool(r[ctx_key]["ok"]) for r in results) / n,
             "stale_rate": sum(bool(r[ctx_key]["stale"]) for r in results) / n,
             "by_type": {t: sum(v) / len(v) for t, v in by_type.items()},
+            "context_chars_median": statistics.median(chars) if chars else 0,
         }
 
     return {
@@ -113,7 +115,8 @@ def main(argv: list[str] | None = None) -> int:
             sm = rep[key]
             print(
                 f"[{key}] n={rep['n']} accuracy={sm['accuracy']:.3f} "
-                f"stale_rate={sm['stale_rate']:.3f} by_type={sm['by_type']}"
+                f"stale_rate={sm['stale_rate']:.3f} by_type={sm['by_type']} "
+                f"context_chars={sm['context_chars_median']:.0f}"
             )
         print(f"median_latency={rep['latency_ms_median']:.1f}ms")
     return 0
