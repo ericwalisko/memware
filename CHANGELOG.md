@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Docs
+- README/integrations lead with `uv tool`/`pipx` install so the plugin's hooks find the `memware` CLI on PATH (a plain venv `pip install` does not).
+
 ### Added
 - **Passage-level index.** Turns are split into ~300-500-token passages at ingest
   (`memware.passage`), anchored by turn id and character offset, and FTS5 now indexes

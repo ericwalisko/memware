@@ -49,18 +49,47 @@ Full rationale and citations: [docs/design.md](docs/design.md).
 
 ## Install
 
+The Claude Code plugin's hooks call `memware` as a bare command, so the CLI must be on
+the `PATH` your shell uses — **install it as a tool, not into a project virtualenv**:
+
 ```bash
-pip install memware            # core, stdlib only (SQLite with FTS5)
-pip install "memware[mcp]"     # + MCP server
+uv tool install "memware[mcp]"     # recommended
+# or
+pipx install "memware[mcp]"
 ```
+
+Then confirm the shim resolves (if this prints nothing, the hooks will silently do nothing):
+
+```bash
+memware --version
+which memware
+```
+
+<details>
+<summary>Plain <code>pip install</code></summary>
+
+`pip install "memware[mcp]"` works for library and CLI use, but a plain pip install into a
+project or conda environment usually leaves `memware` off the PATH that Claude Code's hooks
+run under — use `uv tool` or `pipx` (above) for the plugin, or install into an environment
+that is always active. `memware` (core) omits the MCP server; drop `[mcp]` only if you do
+not want the MCP tools.
+
+</details>
 
 ## Use it from Claude Code
 
-`integrations/claude-code/` is a Claude Code plugin (`claude plugin marketplace add
-ericwalisko/memware`, then `claude plugin install memware@memware`). Hooks: `SessionEnd`/`PreCompact` sync the
-transcript into the index; an optional `UserPromptSubmit` hook injects the handful of
-currently valid beliefs relevant to the prompt (beliefs only — transcript search is
-on demand through the MCP tools). See [docs/integrations.md](docs/integrations.md).
+```bash
+claude plugin marketplace add ericwalisko/memware
+claude plugin install memware@memware
+claude mcp add memware -- memware-mcp     # optional: recall / read_session / remember tools
+```
+
+Requires the `memware` CLI on your `PATH` (see [Install](#install)). Hooks:
+`SessionEnd`/`PreCompact` sync the transcript into the index; an optional `UserPromptSubmit`
+hook injects the handful of currently valid beliefs whose subject the prompt names (beliefs
+only — transcript search is on demand through the MCP tools). Set `MEMWARE_DB` to move the
+store, and `MEMWARE_NO_CAPTURE=1` for any session you do not want indexed. See
+[docs/integrations.md](docs/integrations.md) and [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
 
 ## Use it from Hermes Agent
 

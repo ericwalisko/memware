@@ -2,8 +2,16 @@
 
 ## Claude Code
 
-`integrations/claude-code/` is a Claude Code plugin and the repository is its
-marketplace:
+The plugin's hooks call `memware` as a bare command, so install the CLI on your PATH
+**as a tool** first (a plain `pip install` into a project/conda env usually leaves it off
+the hook shell's PATH, and the hooks then silently do nothing):
+
+```bash
+uv tool install "memware[mcp]"    # or: pipx install "memware[mcp]"
+memware --version                  # must resolve
+```
+
+Then add the plugin (the repository is its own marketplace):
 
 ```bash
 claude plugin marketplace add ericwalisko/memware
