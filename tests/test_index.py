@@ -21,12 +21,12 @@ def test_turn_recall_ranks_recent_higher_and_records_use(store, tmp_path):
     write_claude_jsonl(
         old,
         "old",
-        [("assistant", "2024-01-01T00:00:00Z", "deploy uses the blue-green rollout script")],
+        [("assistant", "2024-01-01T00:00:00Z", "the old deploy ran a blue-green rollout script")],
     )
     write_claude_jsonl(
         new,
         "new",
-        [("assistant", "2026-08-30T00:00:00Z", "deploy uses the blue-green rollout script")],
+        [("assistant", "2026-08-30T00:00:00Z", "the new deploy runs a blue-green rollout script")],
     )
     sync_file(store, old, harness="claude-code")
     sync_file(store, new, harness="claude-code")
@@ -191,3 +191,36 @@ def test_multi_query_fusion_finds_what_single_phrasings_rank_low(store, tmp_path
     )
     assert "8443" in fused[0].text
     assert search_turns_multi(store, ["", "  "], k=3) == []
+
+
+def _write_turn(tmp_path, session, text, ts="2026-09-01T00:00:00Z"):
+    from tests.conftest import write_claude_jsonl
+
+    p = tmp_path / f"{session}.jsonl"
+    write_claude_jsonl(p, session, [("assistant", ts, text)])
+    return p
+
+
+def test_recall_collapses_byte_identical_turns_but_keeps_distinct_findings(store, tmp_path):
+    """A scheduled prompt captured on several days is one string repeated across turns; it
+    should take a single result slot, not crowd out real evidence. Distinct findings that merely
+    share vocabulary must still surface, and every turn stays in the store."""
+    boiler = "you are the nightly drift scan for the pcc runbooks, review each entry"
+    for day in ("d1", "d2", "d3"):  # byte-identical cron prompt, three days
+        sync_file(store, _write_turn(tmp_path, day, boiler), harness="claude-code")
+    sync_file(  # a real finding from one of those runs — shares vocabulary, different text
+        store,
+        _write_turn(
+            tmp_path, "finding", "the nightly drift scan found a stale runbooks entry to fix"
+        ),
+        harness="claude-code",
+    )
+
+    collapsed = search_turns(store, "nightly drift scan runbooks", k=5)
+    assert len(collapsed) == 2  # the repeated prompt -> one slot, plus the distinct finding
+    assert any("stale runbooks entry" in h.text for h in collapsed)  # finding not crowded out
+
+    raw = search_turns(store, "nightly drift scan runbooks", k=5, collapse_duplicates=False)
+    assert sum(1 for h in raw if h.text.strip() == boiler) == 3  # opt out -> copies return
+
+    assert store.stats()["turns"] == 4  # collapse is a recall-time view; nothing was deleted
