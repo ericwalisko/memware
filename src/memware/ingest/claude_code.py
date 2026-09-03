@@ -12,10 +12,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from memware.ingest import Turn, register
+from memware.store import BOILERPLATE_PREFIXES
 
 MIN_CHARS = 20
 MAX_CHARS = 20_000
-SKIP_PREFIXES: tuple[str, ...] = ("<",)
+
+# "<" catches system-reminders and other injected tag blocks; BOILERPLATE_PREFIXES adds the
+# skill preamble and local-command caveat (shared with the version-2 store migration).
+SKIP_PREFIXES: tuple[str, ...] = ("<", *BOILERPLATE_PREFIXES)
 _MARKERS = (b'"type":"user"', b'"type":"assistant"', b'"type": "user"', b'"type": "assistant"')
 
 

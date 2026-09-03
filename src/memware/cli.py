@@ -15,7 +15,7 @@ from memware.index import (
     search_beliefs_multi,
     search_turns_multi,
 )
-from memware.ingest import capture_disabled, prune_sources, sync_file, sync_tree
+from memware.ingest import capture_disabled, prune_sources, prune_turns, sync_file, sync_tree
 from memware.ledger import Policy, approve, assert_belief, current, history, reject
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.store import DEFAULT_DB, Store
@@ -223,8 +223,12 @@ def cmd_review(a: argparse.Namespace) -> int:
 
 def cmd_prune(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
-        rep = prune_sources(s, glob=a.glob, containing=a.containing)
-        _out({"sources_pruned": len(rep), "turns_removed": sum(rep.values())}, a.json)
+        if a.turns_containing:
+            removed = prune_turns(s, containing=a.turns_containing)
+            _out({"turns_removed": removed}, a.json)
+        else:
+            rep = prune_sources(s, glob=a.glob, containing=a.containing)
+            _out({"sources_pruned": len(rep), "turns_removed": sum(rep.values())}, a.json)
     return 0
 
 
@@ -330,9 +334,19 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--token")
     s.set_defaults(fn=cmd_review)
 
-    s = add("prune", "un-index sources by path glob and/or content marker")
-    s.add_argument("--glob", metavar="GLOB")
-    s.add_argument("--containing", metavar="TEXT")
+    s = add(
+        "prune",
+        "un-index whole sources (--glob/--containing) or individual boilerplate turns (--turns-containing)",
+    )
+    s.add_argument("--glob", metavar="GLOB", help="un-index sources whose path matches this glob")
+    s.add_argument(
+        "--containing", metavar="TEXT", help="un-index whole sources whose head contains TEXT"
+    )
+    s.add_argument(
+        "--turns-containing",
+        metavar="TEXT",
+        help="delete individual turns starting with TEXT (keeps the rest of each session)",
+    )
     s.set_defaults(fn=cmd_prune)
 
     s = add("stats", "counts")

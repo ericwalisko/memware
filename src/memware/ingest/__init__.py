@@ -184,6 +184,17 @@ def prune_source(store: Store, source: str) -> int:
     return n
 
 
+def prune_turns(store: Store, *, containing: str) -> int:
+    """Delete individual turns whose text starts with ``containing`` (a boilerplate prefix),
+    leaving the rest of each session indexed. FTS stays in sync via the delete trigger.
+
+    Unlike :func:`prune_sources` (which drops whole transcripts), this is turn-level — the
+    right tool for harness boilerplate that recurs inside otherwise-real sessions, such as a
+    skill preamble already indexed before the parser learned to skip it."""
+    cur = store.conn.execute("DELETE FROM turn WHERE text LIKE ?", (containing + "%",))
+    return int(cur.rowcount)
+
+
 def prune_sources(
     store: Store, *, glob: str | None = None, containing: str | None = None
 ) -> dict[str, int]:

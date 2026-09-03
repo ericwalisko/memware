@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-03
+
+### Changed
+- **Automatic, no user action:** the Claude Code parser skips harness-injected user boilerplate — a skill's `Base directory for this skill:` preamble (re-injected every session that loads the skill) and the local-command caveat — which otherwise crowd recall as near-duplicates. and a one-time store migration (schema v2) sweeps any already indexed on the next open — so backfill, ongoing capture, and existing stores are all clean without running anything. `memware prune --turns-containing TEXT` is the manual escape hatch.
+
 ### Docs
 - MCP add uses `-s user` so the server is visible in every project; the default `local` scope binds it to one directory and other sessions don't see the tools.
 
