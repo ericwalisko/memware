@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-03
+
+### Fixed
+- Backup retention now **promotes**: a snapshot ages forward through the 1/3/7/14-day tiers
+  instead of being pruned between them. The previous rule pruned every snapshot at age ~2, so a
+  daily-backup loop only ever kept a 0- and 1-day-old and never built a 3/7/14-day-old. Retention
+  keeps the newest plus the oldest per age band, always has a fresh ~1-day-old, drifts within
+  older tiers, prunes past the largest tier, and stays bounded (~5). Verified with a 30-day loop.
+
+
 ## [0.2.1] - 2026-09-03
 
 ## [0.2.0] - 2026-09-03

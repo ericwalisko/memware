@@ -31,20 +31,60 @@ def test_snapshot_is_consistent_and_restore_round_trips(tmp_path):
         assert s.stats()["turns"] == 5
 
 
-def test_tiered_retention_keeps_one_per_bucket(tmp_path):
+def _age_all(dest):
+    """Rename every snapshot one day older — how we advance the clock against the real _now()."""
+    import datetime as dt
+
+    for p in sorted(dest.glob("memware-*.db")):
+        stamp = bk._stamp(p) - dt.timedelta(days=1)
+        p.rename(dest / f"memware-{stamp.strftime('%Y%m%d-%H%M%S')}.db")
+
+
+def _ages(dest):
+    import datetime as dt
+
+    now = dt.datetime.now(dt.UTC)
+    return sorted((now - bk._stamp(p)).total_seconds() / 86400.0 for p in bk.list_snapshots(dest))
+
+
+def test_retention_promotes_and_stays_bounded_over_a_daily_loop(tmp_path):
+    """The real usage pattern: one new snapshot per day, retention each day. A snapshot must age
+    forward through the tiers (not be pruned between them), there is always a ~1-day-old, the pile
+    stays small, and nothing lingers far past the largest tier. Files are dated in real time and
+    aged by renaming, so this exercises the true `_now()`-based logic."""
     import datetime as dt
 
     dest = tmp_path / "b"
     dest.mkdir()
-    now = dt.datetime.now(dt.UTC)
-    # one snapshot per day for 20 days
-    for age in range(20):
-        stamp = (now - dt.timedelta(days=age)).strftime("%Y%m%d-%H%M%S")
+    for _day in range(30):
+        _age_all(dest)  # yesterday's snapshots become a day older
+        stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d-%H%M%S")  # a fresh age-0 today
         (dest / f"memware-{stamp}.db").write_bytes(b"x")
+        bk.apply_retention(dest, [1, 3, 7, 14])
+
+    ages = _ages(dest)
+    assert min(ages) < 1  # always a fresh ~1-day-old
+    assert len(ages) <= 6  # bounded, not an unbounded pile
+    assert max(ages) <= 15  # nothing lingers far past the largest tier
+    assert any(2 <= a <= 9 for a in ages)  # a snapshot promoted into the mid tiers (drift ok)
+    assert any(a >= 10 for a in ages)  # and one aged into the oldest tier
+
+
+def test_retention_prunes_snapshots_older_than_the_largest_tier(tmp_path):
+    dest = tmp_path / "b"
+    dest.mkdir()
+    for age in (0, 2, 6, 13, 20, 40):  # 20 and 40 are past the 14-day tier
+        _write_dated(dest, age)
     bk.apply_retention(dest, [1, 3, 7, 14])
-    kept = bk.list_snapshots(dest)
-    # newest + one each at >=1,>=3,>=7,>=14 days = at most 5, far fewer than 20
-    assert 4 <= len(kept) <= 5
+    assert all(a <= 15 for a in _ages(dest))
+
+
+def _write_dated(dest, age_days):
+    import datetime as dt
+
+    dest.mkdir(parents=True, exist_ok=True)
+    stamp = (dt.datetime.now(dt.UTC) - dt.timedelta(days=age_days)).strftime("%Y%m%d-%H%M%S")
+    (dest / f"memware-{stamp}.db").write_bytes(b"x")
 
 
 def test_backup_cli_uses_config_dest_and_mirrors_transcripts(tmp_path, capsys, monkeypatch):

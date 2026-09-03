@@ -35,9 +35,12 @@ memware backup         # writes memware-YYYYMMDD-HHMMSS.db, prunes to the retent
                        # and (by default) mirrors transcripts into <dest>/transcripts
 ```
 
-**Retention** keeps the newest snapshot plus the newest one at least 1, 3, 7 and 14 days old —
-roughly a 1-, 3-, 7- and 14-day-old backup at all times, not an unbounded pile. Tune with
-`backup.keep_days`.
+**Retention promotes.** Because memware only ever *creates* fresh snapshots, retention lets a
+snapshot **age forward** through the tiers rather than pruning it in between: it keeps the newest
+snapshot and the oldest one in each age band `(0,1] (1,3] (3,7] (7,14]`, so the same file serves
+as the ~1-day-old, then the ~3-, ~7-, ~14-day-old as time passes. You always have a fresh
+~1-day-old; the older tiers drift a little (that is fine and expected); anything past the largest
+tier is pruned. The pile stays bounded (~5). Tune the tiers with `backup.keep_days`.
 
 **Transcripts.** `backup.include_transcripts` (on by default) mirrors your transcript source
 (default `~/.claude/projects`) into `<dest>/transcripts`, additively — an append-only archive

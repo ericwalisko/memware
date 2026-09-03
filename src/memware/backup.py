@@ -62,24 +62,35 @@ def newest_age_hours(dest_dir: str | os.PathLike[str]) -> float | None:
     return (_now().timestamp() - _stamp(snaps[0]).timestamp()) / 3600.0
 
 
+def _age_days(p: Path, now: datetime) -> float:
+    return (now.timestamp() - _stamp(p).timestamp()) / 86400.0
+
+
 def apply_retention(dest_dir: str | os.PathLike[str], keep_days: list[int]) -> list[Path]:
-    """Tiered retention. Always keep the newest snapshot; then for each age bucket in
-    ``keep_days`` (e.g. [1,3,7,14]) keep the newest snapshot at least that old. Delete the
-    rest. Returns the deleted paths. This yields, over time, roughly one 1-, 3-, 7- and
-    14-day-old backup plus the latest — not an unbounded pile."""
-    snaps = list_snapshots(dest_dir)
+    """Promotion retention: since we only ever *create* fresh snapshots, a snapshot must be
+    allowed to **age forward** into the next tier rather than be pruned between tiers.
+
+    Bands are the contiguous intervals ``(0, d0], (d0, d1], …`` for sorted ``keep_days``
+    (default 1,3,7,14). We keep the newest snapshot overall (tomorrow's ~1-day-old) and the
+    *oldest* snapshot in each band — the oldest is the one on the leading edge, so as days
+    pass it crosses into the next band and stays kept, i.e. the same file serves as the ~1-,
+    then ~3-, ~7-, ~14-day-old. Everything else, and anything older than the largest tier,
+    is pruned. Result: always a ~1-day-old, roughly one per tier (they drift; that's fine),
+    and a bounded pile of ~len(keep_days)+1. Returns the deleted paths."""
+    snaps = list_snapshots(dest_dir)  # newest first
     if not snaps:
         return []
     now = _now()
-    keep: set[Path] = {snaps[0]}  # newest always
-    for days in sorted(set(keep_days)):
-        cutoff = now.timestamp() - days * 86400
-        aged = [p for p in snaps if _stamp(p).timestamp() <= cutoff]
-        if aged:
-            keep.add(aged[0])  # newest that is at least `days` old
+    days = sorted(set(int(d) for d in keep_days))
+    keep: set[Path] = {snaps[0]}  # always the freshest
+    edges = [0.0, *[float(d) for d in days]]
+    for lo, hi in zip(edges, edges[1:], strict=False):
+        band = [p for p in snaps if lo < _age_days(p, now) <= hi]
+        if band:
+            keep.add(band[-1])  # oldest in the band (snaps are newest-first) -> promotes forward
     deleted = []
     for p in snaps:
-        if p not in keep:
+        if p not in keep:  # includes anything older than the largest tier
             p.unlink(missing_ok=True)
             deleted.append(p)
     return deleted
