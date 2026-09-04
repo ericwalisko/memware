@@ -91,6 +91,10 @@ sessions; index the transcripts already on disk so recall works over past work f
 memware backfill                 # indexes ~/.claude/projects (idempotent; ~5 s for a month)
 ```
 
+Prefer a guided first run? `memware setup` walks through the backfill and backups together and
+prints the operating guidance — safe on a fresh install and after upgrading from a pre-0.2
+(no-backups) version; `memware setup --yes` accepts the defaults non-interactively.
+
 The *belief ledger* starts empty and is not backfilled — beliefs are derived, not stored in
 transcripts. It fills as you work (via the `remember` tool, or a derive job you schedule).
 Transcript recall is what backfill gives you immediately, and it is where most of the value is.
@@ -147,7 +151,7 @@ larger than the store. Once a destination is set, backups happen **automatically
 end (~once a day)** — no cron, and immune to a laptop sleeping through a scheduled time.
 
 ```bash
-memware setup                              # pick a folder: Dropbox / iCloud / Drive / external disk
+memware setup                              # guided: index sessions, pick a folder, take a first backup
 memware backup                             # tiered snapshot (1/3/7/14-day) + transcript mirror
 memware restore --latest                   # after a wipe, restore — do not re-backfill
 memware nuke                               # delete everything, typed-confirmation guarded

@@ -40,6 +40,7 @@ def _out(obj: object, as_json: bool) -> None:
 
 
 def cmd_init(a: argparse.Namespace) -> int:
+    _maybe_setup_hint(a)
     with Store(a.db) as s:
         _out({"db": str(s.path), **s.stats()}, a.json)
     return 0
@@ -117,6 +118,7 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     The plugin only captures new sessions; this reads what is already on disk.
     Idempotent — safe to re-run — and it honours the ignore-markers list.
     """
+    _maybe_setup_hint(a)
     root = Path(a.root).expanduser()
     if not root.exists():
         print(f"nothing to backfill: {root} does not exist", file=sys.stderr)
@@ -267,6 +269,7 @@ def cmd_prune(a: argparse.Namespace) -> int:
 
 
 def cmd_stats(a: argparse.Namespace) -> int:
+    _maybe_setup_hint(a)
     with Store(a.db) as s:
         _out({"db": str(s.path), **s.stats()}, a.json)
     return 0
@@ -344,37 +347,122 @@ def cmd_restore(a: argparse.Namespace) -> int:
     return 0
 
 
+def _prompt(msg: str, default: str = "") -> str:
+    """input() that returns ``default`` on a closed stdin, so setup is safe non-interactively."""
+    try:
+        return input(msg).strip()
+    except EOFError:
+        return default
+
+
+def _yes(msg: str, *, default_yes: bool = True) -> bool:
+    ans = _prompt(f"{msg} {'[Y/n]' if default_yes else '[y/N]'}: ").lower()
+    return default_yes if not ans else ans[0] == "y"
+
+
+def _maybe_setup_hint(a: argparse.Namespace) -> None:
+    """A one-line nudge to `memware setup` for anyone who has never configured backups — new
+    installs and upgrades from a pre-backup (pre-0.2) version alike. Silent from hooks and in
+    --json mode; stops as soon as setup has run or a destination is configured."""
+    from memware.config import get_dotted, load_config
+
+    if getattr(a, "from_hook", False) or getattr(a, "json", False):
+        return
+    cfg = load_config()
+    if get_dotted(cfg, "setup.completed_version") or get_dotted(cfg, "backup.dest"):
+        return
+    print(
+        "Tip: run `memware setup` to configure backups (one time; this hint then stops).",
+        file=sys.stderr,
+    )
+
+
 def cmd_setup(a: argparse.Namespace) -> int:
-    """Interactive first-run guidance for the backup destination (storage-agnostic)."""
+    """Guided one-time configuration: index the sessions already on disk (new installs),
+    choose a backup destination, run a first backup, and print the operating guidance. Safe to
+    re-run, and safe non-interactive — a closed stdin (or ``--yes``) keeps every current value.
+    Covers a fresh install and an upgrade from a pre-backup (pre-0.2) version alike."""
+    from memware import backup as bk
     from memware.config import get_dotted, load_config, save_config, set_dotted
 
     cfg = load_config()
+    yes = getattr(a, "yes", False)
+    src_default = get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
+
+    with Store(a.db) as s:
+        stats = s.stats()
+    fresh = stats["turns"] == 0
+    print("memware setup\n")
+    if fresh:
+        print("This store is empty. The plugin captures new sessions from now on; you can also")
+        print("index the transcripts already on disk so recall works over past work today.")
+    else:
+        print(f"This store holds {stats['turns']:,} turns from {stats['sessions']:,} sessions.")
+        print("Let's make sure backups are configured so an aged session can't be lost.")
+
+    # 1. Backfill existing transcripts (mainly a fresh install / new machine).
+    root = Path(src_default).expanduser()
+    if (
+        fresh
+        and root.exists()
+        and (yes or _yes(f"\nIndex existing sessions in {src_default} now?"))
+    ):
+        with Store(a.db) as s:
+            report = sync_tree(s, root, harness="claude-code")
+            stats = s.stats()
+        print(
+            f"  indexed {sum(report.values()):,} turns from {len(report)} files "
+            f"({stats['sessions']:,} sessions)."
+        )
+
+    # 2. Backup destination.
+    print("\nBackups: pick a folder your OS already syncs, or a drive you keep — memware just")
+    print("writes there (Dropbox, iCloud Drive, Google Drive, an external disk, a network mount).")
+    print("Snapshots are a rolling 1/3/7/14-day set you can revert to; raw transcripts are")
+    print("mirrored separately so a session outlives your OS's ~30-day transcript cleanup.")
     cur = get_dotted(cfg, "backup.dest")
-    print("memware backup setup")
-    print("  Pick a folder your OS already syncs or a drive you keep — memware just writes")
-    print(
-        "  snapshots there. Examples: ~/Dropbox/memware, ~/Library/Mobile Documents/com~apple~CloudDocs/memware,"
-    )
-    print("  ~/Google Drive/memware, /Volumes/backup/memware.")
     if cur:
         print(f"  Current: {cur}")
-    try:
-        dest = input("Backup folder (blank to keep current): ").strip()
-    except EOFError:
-        dest = ""
+    dest = "" if yes else _prompt("Backup folder (blank to keep current / skip): ")
     if dest:
         set_dotted(cfg, "backup.dest", dest)
-    try:
-        t = (
-            input("Also mirror transcripts there so they outlive the 30-day cleanup? [Y/n]: ")
-            .strip()
-            .lower()
+    dest = get_dotted(cfg, "backup.dest")
+    if dest:
+        set_dotted(
+            cfg,
+            "backup.include_transcripts",
+            True if yes else _yes("Also mirror raw transcripts there (recommended)?"),
         )
-    except EOFError:
-        t = ""
-    set_dotted(cfg, "backup.include_transcripts", t != "n")
-    path = save_config(cfg)
-    print(f"\nSaved {path}. Run `memware backup` now, and schedule it daily (see docs/backup.md).")
+
+    # 3. Persist, and mark setup done so the discovery hint stops.
+    set_dotted(cfg, "setup.completed_version", __version__)
+    print(f"\nSaved {save_config(cfg)}.")
+
+    # 4. Offer a first backup right now.
+    if dest and (yes or _yes("Run a first backup now?")):
+        dpath = Path(dest).expanduser()
+        out = bk.snapshot(a.db, dpath)
+        bk.apply_retention(dpath, get_dotted(cfg, "backup.keep_days") or [1, 3, 7, 14])
+        n = (
+            bk.mirror_transcripts(get_dotted(cfg, "backup.transcript_src") or src_default, dpath)
+            if get_dotted(cfg, "backup.include_transcripts")
+            else 0
+        )
+        print(f"  snapshot {Path(out).name}" + (f", {n} transcripts mirrored" if n else ""))
+
+    # 5. Operating guidance.
+    print("\nHow backups keep running:")
+    if dest:
+        print("  • The Claude Code plugin backs up at session end, at most once every ~20h — no")
+        print("    cron, and never missed by a laptop sleeping through a scheduled time.")
+        print("  • Always-on machine without the plugin? Schedule `memware backup` (launchd on")
+        print("    macOS, systemd on Linux; avoid plain cron on a laptop). See docs/backup.md.")
+    else:
+        print("  • No destination set — recall still works, but there's no wipe-trap safety net.")
+        print("    Re-run `memware setup` any time to add one.")
+    print("  • Sensitive session? Set MEMWARE_NO_CAPTURE=1 and it is never indexed.")
+    print("  • After a wipe, `memware restore --latest` — never wipe-and-re-backfill (backfill")
+    print("    only re-indexes transcripts still on disk). See docs/backup.md.")
     return 0
 
 
@@ -596,7 +684,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dest", metavar="DIR", help="backup destination to pick the latest from")
     s.set_defaults(fn=cmd_restore)
 
-    s = add("setup", "interactive one-time backup setup (storage-agnostic)")
+    s = add("setup", "guided one-time setup: index existing sessions, configure backups")
+    s.add_argument("--yes", action="store_true", help="accept defaults; non-interactive")
     s.set_defaults(fn=cmd_setup)
 
     s = add("config", "show or set configuration (e.g. backup.dest, backup.keep_days)")
