@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS review (
 );
 """
 
+
 def _default_db_path() -> Path:
     """The store path: ``$MEMWARE_DB`` if set, else ``memware.db`` under the memware home
     (which is XDG-aware for fresh installs; see :func:`memware.config.memware_home`)."""
