@@ -13,3 +13,6 @@ htmlcov/
 *.db-wal
 *.db-shm
 .memware/
+
+# uv lockfile (library, not committed)
+uv.lock

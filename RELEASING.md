@@ -71,13 +71,23 @@ Troubleshooting below.
 
 ## Cutting a release
 
-1. **Bump the version.** It lives in exactly one place:
+1. **Bump the version.** The package version lives in:
 
    ```
    src/memware/__init__.py   →   __version__ = "0.1.1"
    ```
 
-   `pyproject.toml` reads it via `[tool.hatch.version]`, so nothing else needs editing.
+   `pyproject.toml` reads it via `[tool.hatch.version]`. The Claude Code plugin also carries
+   its own copy of the version in two manifests, and `tests/test_plugin_manifest.py` fails CI
+   unless both equal the package version — so bump all three together:
+
+   ```
+   integrations/claude-code/.claude-plugin/plugin.json   →   "version"
+   .claude-plugin/marketplace.json                       →   plugins[memware].version
+   ```
+
+   `claude plugin update` only reinstalls when the manifest version rises, so a plugin or hook
+   change that skips this bump never reaches an installed machine.
 
 2. **Cut the CHANGELOG.** Move the `## [Unreleased]` entries under a new
    `## [X.Y.Z] - YYYY-MM-DD` heading and leave `## [Unreleased]` empty above it.
