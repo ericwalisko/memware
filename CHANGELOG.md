@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-03
+
+### Added
+- `memware setup` is now a guided one-time walkthrough for both new installs and upgrades from
+  a pre-backup (pre-0.2) version: it offers to index the sessions already on disk, helps pick a
+  storage-agnostic backup destination, takes a first backup, and prints the operating guidance
+  (automatic session-end backups, `MEMWARE_NO_CAPTURE`, the wipe trap). `--yes` runs it
+  non-interactively. A one-line hint points anyone who has never configured backups at it, and
+  stops once setup has run or a destination is set.
+
 ### Fixed
 - The Claude Code plugin manifest version was stuck at 0.1.1 across every release, so
   `claude plugin update` compared 0.1.1 to 0.1.1 and never reinstalled — no plugin or hook

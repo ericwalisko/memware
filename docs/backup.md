@@ -21,7 +21,10 @@ wipe, **restore from a backup — do not re-backfill.** memware helps:
 A destination is just a folder. Point it at whatever you already sync or keep:
 
 ```bash
-memware setup          # interactive: asks for the folder, offers transcript mirroring
+memware setup          # guided walkthrough: indexes existing sessions (new installs),
+                       # picks a folder, offers transcript mirroring, takes a first backup.
+                       # Run it on a fresh install or after upgrading from a pre-0.2 version;
+                       # `memware setup --yes` accepts defaults non-interactively.
 # or set it directly:
 memware config backup.dest "~/Dropbox/memware"        # or ~/Library/Mobile Documents/…/memware,
                                                        # ~/Google Drive/memware, /Volumes/backup/memware
