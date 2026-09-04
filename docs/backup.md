@@ -53,8 +53,11 @@ location with `backup.transcript_src` and it will read from there too.
 ## How it stays current on its own (no scheduler)
 
 Once a backup destination is set (`memware setup`), the Claude Code plugin and the Hermes
-provider back up **automatically at session end, at most once per `backup.auto_interval_hours`
-(default 20)**. This rides your usage rather than a clock, so it is immune to the sleep problem:
+provider back up **automatically at session boundaries, at most once per `backup.auto_interval_hours`
+(default 20)**. The Claude Code plugin backs up from both `SessionStart` and `SessionEnd`; the
+`SessionStart` hook is the reliable one, since some environments **force-kill** Claude Code (a
+worktree/pane manager may `SIGKILL` the process group on close) and a `SIGKILL` runs no
+`SessionEnd`. This rides your usage rather than a clock, so it is immune to the sleep problem:
 a laptop only needs to be awake *while you are using it*, which it is. Nothing to schedule, and
 a missed day simply catches up on your next session. Turn it off with
 `memware config backup.auto false`.
