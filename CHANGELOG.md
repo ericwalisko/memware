@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-03
+
+### Added
+- A `SessionStart` plugin hook that catches up any session whose `SessionEnd` never ran. Some
+  environments force-kill Claude Code — a worktree/pane manager can `SIGKILL` the process
+  group on close, and a `SIGKILL` cannot run `SessionEnd` — so its sync + backup were skipped.
+  On the next start, a bare `memware sync` (new: no path = catch up the configured
+  `backup.transcript_src`, default `~/.claude/projects`) plus a throttled backup run,
+  **backgrounded** so startup is never delayed. Raw transcripts were durable regardless; this
+  makes the *index* current without relying on a clean exit.
+
+### Changed
+- The store now sets `PRAGMA busy_timeout=5000`, so a concurrent writer waits and retries instead of failing with "database is locked" — the SessionStart catch-up, a session-end sync, and the backup cron can now overlap safely.
+
 ## [0.2.5] - 2026-09-03
 
 ### Added

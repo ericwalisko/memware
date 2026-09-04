@@ -107,3 +107,22 @@ def test_setup_hint_shows_until_backups_configured(tmp_path, capsys, monkeypatch
     capsys.readouterr()
     main(["--db", db, "stats"])  # once a destination exists the tip is gone
     assert "memware setup" not in capsys.readouterr().err
+
+
+def test_bare_sync_catches_up_configured_transcript_src(tmp_path, capsys, monkeypatch):
+    """`memware sync` with no path indexes the configured transcript source — what the
+    SessionStart hook runs to catch up sessions whose SessionEnd never fired (e.g. a worktree
+    force-killed by Orca). A path or --from-hook still targets exactly what's given."""
+    monkeypatch.setenv("MEMWARE_HOME", str(tmp_path / "home"))
+    projects = tmp_path / "projects"
+    (projects / "p").mkdir(parents=True)
+    write_claude_jsonl(
+        projects / "p" / "s.jsonl",
+        "s",
+        [("assistant", "2026-08-25T00:00:00Z", "the indexer catches up on the next session start")],
+    )
+    db = str(tmp_path / "m.db")
+    main(["--db", db, "config", "backup.transcript_src", str(projects)])
+    capsys.readouterr()
+    assert main(["--db", db, "sync", "--json"]) == 0  # no path -> configured source
+    assert json.loads(capsys.readouterr().out)["added"] == 1

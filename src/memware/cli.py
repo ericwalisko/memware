@@ -54,6 +54,15 @@ def cmd_sync(a: argparse.Namespace) -> int:
         tp = _hook_payload().get("transcript_path")
         if tp:
             paths.append(str(tp))
+    if not paths and not a.from_hook:
+        # Bare `memware sync` = catch up the configured transcript source (default
+        # ~/.claude/projects). The SessionStart hook uses this to index sessions whose
+        # SessionEnd never ran — e.g. a worktree manager that SIGKILLs the process group.
+        from memware.config import get_dotted, load_config
+
+        src = get_dotted(load_config(), "backup.transcript_src")
+        if src:
+            paths.append(str(src))
     if not paths:
         print("nothing to sync", file=sys.stderr)
         return 0
