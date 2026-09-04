@@ -71,6 +71,33 @@ not bring them back as long as the marker is in the ignore list.
    The moment "zebra habitat" is written into a chat that gets indexed, it stops
    being a negative.
 
+## Recurring automation prompts (the collapse edge)
+
+Recall collapses hits whose quoted text is **byte-identical**, so a scheduled prompt captured
+the same way every run takes a single result slot instead of many. The match is deliberately
+exact: fuzzy or normalised matching would risk merging genuinely different facts (`port 8443`
+vs `port 9000`, `v1` vs `v2`) into one and hiding real evidence — the opposite of the point.
+
+The edge it does **not** cover: a prompt that interpolates a **date, run number, or timestamp**
+produces *near*-identical turns that are not byte-identical, so each run survives and can crowd
+recall. Handle it at capture, not with collapse — the text *before* the varying token is a stable
+content signature:
+
+```bash
+# one-shot: drop every copy already indexed (the stable prefix matches them all, dates and all)
+memware prune --turns-containing "You are the NIGHTLY DRIFT SCAN"
+
+# ongoing: if that prompt begins its own automation sessions (a cron that opens a fresh
+# Claude session), skip the whole session at every sync:
+echo "You are the NIGHTLY DRIFT SCAN" >> ~/.memware/ignore-markers.txt
+```
+
+`ignore-markers.txt` matches the **head** of a transcript, so it skips a session whose first
+turn is the recurring prompt — the usual shape for a cron. If the prompt is embedded *mid*-session
+in work you otherwise keep, there is no ongoing per-turn skip yet: re-run `prune --turns-containing`
+periodically (its stable prefix keeps catching the dated variants). Static recurring prompts need
+none of this — they collapse cleanly on their own.
+
 ## Quick reference
 
 | goal | do this |
@@ -78,4 +105,5 @@ not bring them back as long as the marker is in the ignore list.
 | never capture this run | `MEMWARE_NO_CAPTURE=1` in its environment |
 | never capture anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB` |
+| tame a recurring/dated automation prompt | `prune --turns-containing PREFIX`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
 | evaluate without self-contamination | `memware-eval --corpus … --beliefs-from …` |
