@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from memware.store import Store, now_iso
+from memware.term import ellipsis
 
 _TOKEN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_\-./]{1,}")
 STOPWORDS = frozenset(
@@ -156,7 +157,7 @@ def _join_passages(rows: list[sqlite3.Row]) -> str:
     previous: int | None = None
     for r in rows:
         if previous is not None and r["ord"] != previous + 1:
-            parts.append(ELLIPSIS)
+            parts.append(f" {ellipsis()} ")
         parts.append(r["passage_text"])
         previous = int(r["ord"])
     return "".join(parts)
@@ -200,10 +201,11 @@ def search_turns(
     q = fts_query(query)
     if not q:
         return []
+    mark = ellipsis()  # our own constant (…/...); not user input
     rows = store.conn.execute(
         "SELECT p.id AS passage_id, p.turn_id, p.ord, p.start_char, p.text AS passage_text, "
         "t.session, t.ts, t.role, t.source, t.use_count, "
-        "-bm25(passage_fts) AS rel, snippet(passage_fts, 0, '', '', ' … ', ?) AS snip "
+        f"-bm25(passage_fts) AS rel, snippet(passage_fts, 0, '', '', ' {mark} ', ?) AS snip "
         "FROM passage_fts JOIN passage p ON p.id = passage_fts.rowid "
         "JOIN turn t ON t.id = p.turn_id "
         "WHERE passage_fts MATCH ? ORDER BY rel DESC LIMIT ?",

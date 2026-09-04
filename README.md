@@ -188,6 +188,28 @@ surface, and does the stale value stay hidden? It needs no model, so results are
 reproducible. The protocol for end-to-end comparisons — agent alone vs agent + memware —
 is in [docs/eval.md](docs/eval.md).
 
+## Editor and shell integration
+
+memware ships no editor plugins — `--plain` (tab-separated, id-first) and `--json` are the
+integration surface, and everything is a copy-paste recipe on top of them. Shell completions
+come from `memware completions zsh|bash|fish` (needs the `[shell]` extra:
+`uv tool install "memware[mcp,shell]"`). `--plain` pipes cleanly to `fzf`/`awk`/`cut`:
+
+```bash
+memware recall "which port does the api use" --plain | fzf --delimiter='\t' --with-nth=10
+```
+
+Emacs, Vim, Neovim, an `$EDITOR` bulk-edit round-trip, and completion install steps are in
+[docs/editor-integration.md](docs/editor-integration.md).
+
+## Accessibility
+
+memware emits no colour at all (so `NO_COLOR` is honoured by construction), and no information
+is ever carried by colour. Default output is screen-reader-friendly — labeled, one field per
+line, blank line between records; `--plain` and `--json` are the stable machine formats; and
+`--ascii` (auto-on in a non-UTF-8 locale) avoids glyphs a screen reader or terminal might
+mangle. Full statement: [docs/accessibility.md](docs/accessibility.md).
+
 ## Status
 
 Alpha. The schema may change before 1.0; the ledger semantics will not.

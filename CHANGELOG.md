@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-04
+
+### Added
+- **`--plain` output** for `recall`, `beliefs`, and `read`: tab-separated, id-first, one
+  record per line (tabs/newlines in values collapse to spaces), for piping to fzf/awk/cut.
+- **Shell completions**: `memware completions {bash,zsh,fish}` prints a completion script
+  (generated from the parser via shtab). New `memware[shell]` extra.
+- **`memware assert -`**: batch-assert tab-separated `subject/relation/value[/source]` lines
+  from stdin (blank lines and `#` comments skipped). Pairs with `beliefs --plain | cut` for
+  an `$EDITOR` round-trip.
+- **Richer `--help`**: per-command examples and an ENVIRONMENT/FILES/ACCESSIBILITY epilog,
+  option defaults shown; duplicate global flags hidden from subcommand help.
+- **XDG Base Directory support** for fresh installs: the memware home resolves to
+  `$MEMWARE_HOME`, else an existing `~/.memware`, else `$XDG_DATA_HOME/memware`, else
+  `~/.memware` — so an existing install is never migrated. The store path follows it.
+- Man page (`docs/memware.1`), `docs/editor-integration.md` (emacs/vim/neovim/fzf recipes,
+  no plugins), and `docs/accessibility.md`.
+
+### Changed
+- **Accessibility**: memware emits no colour at all (so `NO_COLOR` is honoured by
+  construction and nothing depends on colour). The default human output is now labeled
+  (`field : value`, one per line, empty fields skipped) — linear for screen readers. New
+  `--ascii` flag and `MEMWARE_ASCII`, plus automatic fallback on a non-UTF-8 locale, replace
+  the `…` elision glyph with `...`.
+
 ## [0.2.6] - 2026-09-03
 
 ### Added

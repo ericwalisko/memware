@@ -102,7 +102,19 @@ CREATE TABLE IF NOT EXISTS review (
 );
 """
 
-DEFAULT_DB = Path(os.environ.get("MEMWARE_DB", "~/.memware/memware.db")).expanduser()
+
+def _default_db_path() -> Path:
+    """The store path: ``$MEMWARE_DB`` if set, else ``memware.db`` under the memware home
+    (which is XDG-aware for fresh installs; see :func:`memware.config.memware_home`)."""
+    env = os.environ.get("MEMWARE_DB")
+    if env:
+        return Path(env).expanduser()
+    from memware.config import memware_home
+
+    return memware_home() / "memware.db"
+
+
+DEFAULT_DB = _default_db_path()
 
 SCHEMA_VERSION = 2
 """Bumped when an existing file needs work beyond ``CREATE ... IF NOT EXISTS``.

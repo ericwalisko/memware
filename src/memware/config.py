@@ -13,7 +13,26 @@ from typing import Any
 
 
 def memware_home() -> Path:
-    return Path(os.environ.get("MEMWARE_HOME", "~/.memware")).expanduser()
+    """Directory for config, markers, and (by default) the store.
+
+    Resolution, first match wins — so an existing install is never migrated and a new one
+    follows the XDG Base Directory spec:
+
+    1. ``$MEMWARE_HOME`` — explicit override.
+    2. ``~/.memware`` — if it already exists (a pre-existing install stays put).
+    3. ``$XDG_DATA_HOME/memware`` — a fresh install when XDG is configured.
+    4. ``~/.memware`` — the default.
+    """
+    env = os.environ.get("MEMWARE_HOME")
+    if env:
+        return Path(env).expanduser()
+    legacy = Path("~/.memware").expanduser()
+    if legacy.exists():
+        return legacy
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg).expanduser() / "memware"
+    return legacy
 
 
 def config_path() -> Path:

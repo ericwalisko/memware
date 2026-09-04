@@ -126,3 +126,65 @@ def test_bare_sync_catches_up_configured_transcript_src(tmp_path, capsys, monkey
     capsys.readouterr()
     assert main(["--db", db, "sync", "--json"]) == 0  # no path -> configured source
     assert json.loads(capsys.readouterr().out)["added"] == 1
+
+
+def test_plain_output_is_tab_separated_id_first(tmp_path, capsys):
+    db = str(tmp_path / "m.db")
+    main(["--db", db, "assert", "api", "listens on port", "8443"])
+    capsys.readouterr()
+    main(["--db", db, "beliefs", "--plain"])
+    cols = capsys.readouterr().out.strip().splitlines()[0].split("\t")
+    assert cols[0] == "1" and cols[1] == "api" and cols[3] == "8443"
+
+
+def test_default_output_is_labeled_for_screen_readers(tmp_path, capsys):
+    db = str(tmp_path / "m.db")
+    main(["--db", db, "assert", "api", "listens on port", "8443"])
+    capsys.readouterr()
+    main(["--db", db, "beliefs", "api"])
+    out = capsys.readouterr().out
+    assert "subject : api" in out and "value : 8443" in out
+
+
+def test_assert_batch_from_stdin(tmp_path, capsys, monkeypatch):
+    db = str(tmp_path / "m.db")
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO("api\tlistens on port\t8443\n# a comment\n\ndb\turl\tpg://x\n")
+    )
+    assert main(["--db", db, "assert", "-", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["asserted"] == 2
+
+
+def test_assert_without_value_errors_cleanly(tmp_path, capsys):
+    db = str(tmp_path / "m.db")
+    assert main(["--db", db, "assert", "api", "listens on port"]) == 2
+    assert "SUBJECT RELATION VALUE" in capsys.readouterr().err
+
+
+def test_completions_emits_a_shell_script(capsys):
+    assert main(["completions", "zsh"]) == 0
+    assert "#compdef memware" in capsys.readouterr().out
+
+
+def test_help_shows_examples(capsys):
+    import contextlib
+
+    with contextlib.suppress(SystemExit):
+        main(["recall", "--help"])
+    out = capsys.readouterr().out
+    assert "Examples:" in out and "memware recall" in out
+
+
+def test_memware_home_override_legacy_and_xdg(tmp_path, monkeypatch):
+    from memware.config import memware_home
+
+    monkeypatch.setenv("MEMWARE_HOME", str(tmp_path / "explicit"))
+    assert memware_home() == tmp_path / "explicit"  # explicit override wins
+
+    monkeypatch.delenv("MEMWARE_HOME")
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert memware_home() == tmp_path / "xdg" / "memware"  # fresh install -> XDG
+
+    (tmp_path / "h" / ".memware").mkdir(parents=True)
+    assert memware_home() == tmp_path / "h" / ".memware"  # existing legacy dir wins over XDG
