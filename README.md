@@ -100,7 +100,7 @@ transcripts. It fills as you work (via the `remember` tool, or a derive job you 
 Transcript recall is what backfill gives you immediately, and it is where most of the value is.
 
 Requires the `memware` CLI on your `PATH` (see [Install](#install)). Hooks:
-`SessionEnd`/`PreCompact` sync the transcript into the index; an optional `UserPromptSubmit`
+a `SessionStart` hook catches up any session whose `SessionEnd` was skipped (some environments force-kill Claude Code — a worktree manager may `SIGKILL` it — and a kill cannot run `SessionEnd`); `SessionEnd`/`PreCompact` sync the transcript into the index; an optional `UserPromptSubmit`
 hook injects the handful of currently valid beliefs whose subject the prompt names (beliefs
 only — transcript search is on demand through the MCP tools). Set `MEMWARE_DB` to move the
 store, and `MEMWARE_NO_CAPTURE=1` for any session you do not want indexed. See

@@ -22,8 +22,11 @@ Hooks (`hooks/hooks.json`):
 
 | event | command | effect |
 |---|---|---|
+| `SessionStart` | `memware sync` (catch-up) + `memware backup --if-stale 20`, backgrounded | indexes any session whose `SessionEnd` never ran, then a throttled backup — see note |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
 | `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few currently valid beliefs relevant to the prompt as `additionalContext` |
+
+`SessionEnd` runs when Claude Code exits cleanly, but some environments **force-kill** it (a worktree/pane manager may `SIGKILL` the process group on close), and a `SIGKILL` cannot run any hook. The `SessionStart` hook covers that: it runs a bare `memware sync` — which catches up the configured `backup.transcript_src` (default `~/.claude/projects`) — plus a throttled backup, **backgrounded** so it never delays startup. So the previous session is indexed at the next start even if its `SessionEnd` was skipped; the raw transcript is durable on disk regardless.
 
 The prompt-time hook injects **beliefs only**, capped by `-k`. Transcript
 search is on demand through the MCP server. Add it at **user** scope so every
