@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
   **backgrounded** so startup is never delayed. Raw transcripts were durable regardless; this
   makes the *index* current without relying on a clean exit.
 
+### Changed
+- The store now sets `PRAGMA busy_timeout=5000`, so a concurrent writer waits and retries instead of failing with "database is locked" — the SessionStart catch-up, a session-end sync, and the backup cron can now overlap safely.
+
 ## [0.2.5] - 2026-09-03
 
 ### Added

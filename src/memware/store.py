@@ -144,6 +144,10 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        # WAL allows one writer at a time; wait-and-retry rather than failing a concurrent
+        # write with "database is locked". Several memware processes can touch the store at
+        # once — the SessionStart catch-up, a session-end sync, and the backup cron can overlap.
+        self.conn.execute("PRAGMA busy_timeout=5000")
         if not self._has_fts5():
             raise RuntimeError("this SQLite build lacks FTS5; memware requires it")
         self.conn.executescript(SCHEMA)
