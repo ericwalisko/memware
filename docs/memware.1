@@ -1,0 +1,286 @@
+.TH MEMWARE 1 "2026-09-03" "memware 0.3.0" "User Commands"
+.SH NAME
+memware \- local, model\-free memory for AI agents: transcript recall and a bi\-temporal belief ledger
+.SH SYNOPSIS
+.B memware
+.RB [ \-\-json | \-\-plain ]
+.RB [ \-\-ascii ]
+.RB [ \-\-db
+.IR FILE ]
+.I command
+.RI [ args ]
+.PP
+Global options may appear before or after the
+.IR command .
+.SH DESCRIPTION
+memware is a single SQLite store with two tables. The append\-only
+.B turns
+index holds past prompts and answers, split into passages and searched with FTS5/BM25. The
+bi\-temporal
+.B belief
+ledger records facts in which a new value for the same
+.RI ( subject ", " relation )
+.B supersedes
+the old one; recall only ever returns the currently valid belief, and history is kept for
+audit. There is no daemon, no vector database, and no model call at capture or read time.
+.PP
+Recall is keyword search; the agent supplies the meaning by passing several phrasings, which
+are fused by reciprocal rank.
+.PP
+Data is written to standard output; diagnostics go to standard error. memware emits no colour
+under any circumstances.
+.SH COMMANDS
+.TP
+.B init
+Create the store.
+.TP
+.BI "sync " [PATH]
+Catch up the configured transcript source (default
+.IR ~/.claude/projects )
+into the index, or a given
+.IR PATH .
+.TP
+.B backfill
+One\-time index of the transcripts already on disk under
+.IR ~/.claude/projects .
+Idempotent.
+.TP
+.BI "recall " QUERY " ..."
+Search turns and beliefs. Pass several phrasings, fused by reciprocal rank. Flags:
+.BR \-k " (count),"
+.BI "\-\-what " {all,turns,beliefs} ,
+.BR \-\-full ", "
+.BR \-\-snippet\-tokens .
+.TP
+.B context
+Emit the currently valid beliefs whose subject the prompt names, for prompt\-time injection.
+Hook\-friendly.
+.TP
+.BI "assert " "SUBJECT RELATION VALUE"
+Assert a fact; a new value supersedes the prior value for the same key. Flags:
+.BR \-\-source ", "
+.BR \-\-valid\-from ", "
+.BR \-\-reliability ", "
+.BR \-\-policy .
+Batch mode
+.B assert \-
+reads
+.IR subject <TAB> relation <TAB> value [<TAB> source ]
+lines from standard input, skipping blank lines and lines beginning with
+.RB \` # \(cq.
+.TP
+.BI "beliefs " "[SUBJECT [RELATION]]"
+Show current beliefs, or the full history of one key.
+.TP
+.BI "read " SESSION
+Read a session's turns back in context. Flags:
+.BR \-\-around ", "
+.BR \-\-window .
+.TP
+.B "review list|approve|reject|sync"
+Manage contested supersessions through the review channel.
+.TP
+.B prune
+Un\-index matching turns. Flags:
+.BR \-\-glob ", "
+.BR \-\-containing ", "
+.BR \-\-turns\-containing .
+.TP
+.B stats
+Print store statistics.
+.TP
+.B backup
+Write a tiered snapshot (1/3/7/14\-day) plus a transcript mirror. Flags:
+.BR \-\-dest ", "
+.BR \-\-keep ", "
+.BR \-\-if\-stale ", "
+.BR \-\-quiet .
+.TP
+.B restore
+Restore the store from a snapshot. Flags:
+.BR \-\-from ", "
+.BR \-\-latest .
+.TP
+.B setup
+Guided one\-time setup: index existing sessions, pick a backup destination, take a first backup.
+.TP
+.BI "config " "KEY [VALUE]"
+Get or set a configuration value.
+.TP
+.B nuke
+Permanently delete all memware data.
+.B \-\-confirm
+requires typing the exact phrase
+.RB \` "DELETE ALL MEMWARE DATA" \(cq.
+.TP
+.B "completions {bash,zsh,fish}"
+Print a shell completion script (generated with
+.IR shtab ,
+which requires the
+.B [shell]
+extra). Exits 2 if
+.I shtab
+is not installed.
+.SH OPTIONS
+Global flags, valid before or after the command:
+.TP
+.B \-\-json
+Machine\-readable JSON output.
+.TP
+.B \-\-plain
+Tab\-separated records, one per line, id\-first, in a fixed column order; tabs and newlines in
+values collapse to spaces. For piping to
+.BR fzf ", " awk ", " cut .
+.TP
+.B \-\-ascii
+ASCII only \(em replaces the Unicode horizontal ellipsis elision glyph (U+2026) with three
+ASCII dots
+.RB (\` ... \(cq).
+Also switches on automatically when the locale is not UTF\-8.
+.TP
+.BI "\-\-db " FILE
+Store path (environment
+.BR MEMWARE_DB ).
+.TP
+.B \-\-version
+Print the version and exit.
+.PP
+The default human output (no
+.BR \-\-json / \-\-plain )
+for the record listers
+.RB ( recall ", " beliefs ", " read )
+is labeled: one
+.RI \` "field : value" \(cq
+per line, a blank line between records, empty fields skipped.
+.SH ENVIRONMENT
+.TP
+.B MEMWARE_DB
+Store path (same as
+.BR \-\-db ).
+.TP
+.B MEMWARE_HOME
+Config and store directory. XDG\-aware: uses
+.B MEMWARE_HOME
+if set, else
+.I ~/.memware
+if it already exists, else
+.IR $XDG_DATA_HOME/memware ,
+else
+.IR ~/.memware .
+.TP
+.B MEMWARE_ASCII
+Set to
+.B 1
+for ASCII output (same as
+.BR \-\-ascii ).
+.TP
+.B MEMWARE_NO_CAPTURE
+Set to
+.B 1
+to never index the current session.
+.TP
+.B MEMWARE_IGNORE_MARKERS
+Path to a file of content signatures; a transcript whose head contains one is never indexed.
+.TP
+.B NO_COLOR
+Honoured by construction \(em memware emits no colour at all.
+.SH FILES
+.TP
+.I <home>/config.json
+Configuration.
+.TP
+.I <home>/ignore-markers.txt
+Content signatures for transcripts that must never be indexed.
+.PP
+.I <home>
+is resolved as described for
+.B MEMWARE_HOME
+above.
+.SH ACCESSIBILITY
+memware never conveys information by colour and emits no colour escapes. Default output is
+labeled, one field per line, for screen readers;
+.B \-\-plain
+and
+.B \-\-json
+are stable machine formats. Data goes to stdout and diagnostics to stderr.
+.B \-\-ascii
+(or a non\-UTF\-8 locale) avoids non\-ASCII glyphs. See
+.I docs/accessibility.md
+for the full statement.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 2
+Usage error (for example,
+.B assert
+missing
+.I VALUE
+without
+.BR \- ,
+or
+.B completions
+when
+.I shtab
+is not installed).
+.SH EXAMPLES
+Catch up new transcripts into the index:
+.PP
+.RS
+.EX
+memware sync ~/.claude/projects
+.EE
+.RE
+.PP
+Assert a fact, superseding any prior value:
+.PP
+.RS
+.EX
+memware assert "api" "listens on port" "8443" \-\-source "session 3f2a, turn 41"
+.EE
+.RE
+.PP
+Recall a belief with several phrasings:
+.PP
+.RS
+.EX
+memware recall "which port does the api use" "api port" "8443" \-\-what beliefs
+.EE
+.RE
+.PP
+Pick a hit with fzf and read its session back:
+.PP
+.RS
+.EX
+memware recall "gateway port" \-\-plain | fzf \-\-delimiter='\et' \-\-with\-nth=10 \e
+  | cut \-f4 | xargs \-r memware read
+.EE
+.RE
+.SH INSTALLATION
+Read this page without installing it:
+.PP
+.RS
+.EX
+man \-l docs/memware.1
+.EE
+.RE
+.PP
+Or install it by copying it into a
+.I man1
+directory on your
+.BR MANPATH ,
+for example
+.IR ~/.local/share/man/man1/memware.1 ,
+then run
+.BR "man memware" .
+.SH SEE ALSO
+.IR docs/design.md ,
+.IR docs/backup.md ,
+.IR docs/integrations.md ,
+.IR docs/keeping-memory-clean.md ,
+.IR docs/editor-integration.md ,
+.IR docs/accessibility.md .
+.PP
+Project home:
+.I https://github.com/ericwalisko/memware

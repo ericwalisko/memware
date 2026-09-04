@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from memware import __version__
 from memware.index import (
@@ -18,7 +20,81 @@ from memware.index import (
 from memware.ingest import capture_disabled, prune_sources, prune_turns, sync_file, sync_tree
 from memware.ledger import Policy, approve, assert_belief, current, history, reject
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
-from memware.store import DEFAULT_DB, Store
+from memware.store import Store
+
+
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Show option defaults, and preserve the layout of examples in descriptions/epilogs."""
+
+
+# (key, label) column orders for the record-listing commands. Used for --plain (tab-separated,
+# in this order) and for the default labeled view; keys absent from a row are skipped.
+_RECALL_COLS = [
+    ("id", "id"),
+    ("kind", "kind"),
+    ("score", "score"),
+    ("session", "session"),
+    ("ts", "when"),
+    ("role", "role"),
+    ("subject", "subject"),
+    ("relation", "relation"),
+    ("source", "source"),
+    ("text", "text"),
+]
+_BELIEF_COLS = [
+    ("id", "id"),
+    ("subject", "subject"),
+    ("relation", "relation"),
+    ("value", "value"),
+    ("valid_from", "valid from"),
+    ("valid_to", "valid to"),
+    ("reliability", "reliability"),
+    ("status", "status"),
+    ("source", "source"),
+]
+_TURN_COLS = [("id", "id"), ("seq", "seq"), ("role", "role"), ("ts", "when"), ("text", "text")]
+
+
+def _emit(a: argparse.Namespace, rows: object, columns: list[tuple[str, str]]) -> None:
+    """Emit records honouring --json / --plain / the default view.
+
+    --json  : indented JSON, the canonical shape for scripts that parse structure.
+    --plain : one record per line, tab-separated in ``columns`` order — pipe to fzf/awk/cut.
+              Tabs and newlines inside a value become spaces so each record stays on one line.
+    default : labeled, one field per line, a blank line between records — linear and
+              unambiguous for a screen reader, nothing aligned by eye, and no colour ever.
+    """
+    if getattr(a, "json", False):
+        print(json.dumps(rows, indent=2, default=str))
+        return
+    items: list[Any] = list(rows) if isinstance(rows, list) else [rows]
+    if getattr(a, "plain", False):
+        for row in items:
+            if isinstance(row, str):
+                print(row)
+                continue
+            d = dict(row)
+            cells = [
+                "" if d.get(k) is None else str(d.get(k)).replace("\t", " ").replace("\n", " ")
+                for k, _ in columns
+            ]
+            print("\t".join(cells))
+        return
+    width = max((len(lbl) for _, lbl in columns), default=0)
+    for i, row in enumerate(items):
+        if isinstance(row, str):
+            print(row)
+            continue
+        if i:
+            print()
+        d = dict(row)
+        for k, lbl in columns:
+            v = d.get(k)
+            if v is None or v == "":
+                continue
+            print(f"{lbl.rjust(width)} : " + str(v).replace(chr(10), " "))
+    if not items:
+        print("(no matches)")
 
 
 def _hook_payload() -> dict[str, object]:
@@ -176,7 +252,7 @@ def cmd_recall(a: argparse.Namespace) -> int:
             }
             for h in hits
         ]
-        _out(rows, a.json)
+        _emit(a, rows, _RECALL_COLS)
     return 0
 
 
@@ -212,6 +288,14 @@ def cmd_context(a: argparse.Namespace) -> int:
 
 
 def cmd_assert(a: argparse.Namespace) -> int:
+    if a.subject == "-":
+        return _assert_stdin(a)
+    if a.relation is None or a.value is None:
+        print(
+            "assert needs SUBJECT RELATION VALUE, or `-` to read TSV lines from stdin",
+            file=sys.stderr,
+        )
+        return 2
     with Store(a.db) as s:
         r = assert_belief(
             s,
@@ -235,16 +319,59 @@ def cmd_assert(a: argparse.Namespace) -> int:
     return 0
 
 
+def _assert_stdin(a: argparse.Namespace) -> int:
+    """Batch-assert tab-separated ``subject<TAB>relation<TAB>value[<TAB>source]`` lines from
+    stdin. Blank lines and lines starting with ``#`` are skipped. Pairs with ``beliefs --plain``
+    so facts can round-trip through an editor or script: read them out, pipe them back in."""
+    outcomes: list[dict[str, object]] = []
+    with Store(a.db) as s:
+        for raw in sys.stdin:
+            line = raw.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                print(f"skipped (need 3+ tab-separated fields): {line!r}", file=sys.stderr)
+                continue
+            source = parts[3] if len(parts) > 3 else a.source
+            r = assert_belief(
+                s,
+                parts[0],
+                parts[1],
+                parts[2],
+                valid_from=a.valid_from,
+                source=source,
+                reliability=a.reliability,
+                policy=Policy(a.policy),
+            )
+            outcomes.append(
+                {
+                    "subject": parts[0],
+                    "relation": parts[1],
+                    "value": parts[2],
+                    "outcome": r.outcome.value,
+                    "belief_id": r.belief_id,
+                }
+            )
+    if getattr(a, "json", False):
+        print(json.dumps({"asserted": len(outcomes), "outcomes": outcomes}, indent=2, default=str))
+    else:
+        for o in outcomes:
+            print(f"{o['outcome']}: {o['subject']} {o['relation']} = {o['value']}")
+        print(f"({len(outcomes)} asserted)")
+    return 0
+
+
 def cmd_beliefs(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         rows = history(s, a.subject, a.relation) if a.relation else current(s, a.subject)
-        _out(rows, a.json)
+        _emit(a, rows, _BELIEF_COLS)
     return 0
 
 
 def cmd_read(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
-        _out(read_turns(s, a.session, around=a.around, window=a.window), a.json)
+        _emit(a, read_turns(s, a.session, around=a.around, window=a.window), _TURN_COLS)
     return 0
 
 
@@ -541,22 +668,98 @@ def cmd_nuke(a: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="memware", description=__doc__)
-    p.add_argument("--db", default=str(DEFAULT_DB), help="SQLite file (env MEMWARE_DB)")
-    p.add_argument("--json", action="store_true", help="machine-readable output")
-    p.add_argument("--version", action="version", version=__version__)
-    sub = p.add_subparsers(dest="cmd", required=True)
+_DESCRIPTION = (
+    "Memory for AI agents that only remembers the latest truth — a local SQLite belief "
+    "ledger and transcript index. No daemon, no vector database, no model in the loop."
+)
 
-    def add(name: str, help: str) -> argparse.ArgumentParser:
-        sp = sub.add_parser(name, help=help)
-        sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+_EPILOG = """\
+Examples:
+  memware backfill                          index the sessions already on disk (run once)
+  memware recall "which port" "api port"    search; pass several phrasings, they are fused
+  memware recall "db url" --plain | fzf     scriptable, tab-separated, one hit per line
+  memware beliefs api                       current beliefs about a subject
+  memware assert api "listens on" 8443      record a fact (supersedes the old value)
+  memware setup                             guided backup + first-run configuration
+  memware completions zsh > ~/.zfunc/_memware      install shell completion
+
+Environment:
+  MEMWARE_DB          store path (default: <home>/memware.db)
+  MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
+  MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
+  MEMWARE_NO_CAPTURE=1  never index the current session
+  NO_COLOR            honoured by construction — memware emits no colour at all
+
+Files:
+  <home>/config.json          configuration (see `memware config`)
+  <home>/ignore-markers.txt   content signatures never to index
+
+Accessibility:
+  No information is ever conveyed by colour. --plain gives tab-separated records for scripts
+  and screen readers; --ascii avoids non-ASCII glyphs. See docs/accessibility.md.
+
+See also: man memware  ·  https://github.com/ericwalisko/memware
+"""
+
+
+def cmd_completions(a: argparse.Namespace) -> int:
+    """Print a shell completion script for bash/zsh/fish (generated from the parser by shtab)."""
+    try:
+        import shtab
+    except ImportError:
+        print(
+            "shell completions need shtab:  pip install 'memware[shell]'  (or: pip install shtab)",
+            file=sys.stderr,
+        )
+        return 2
+    print(shtab.complete(build_parser(), shell=a.shell))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    from memware.config import memware_home
+
+    p = argparse.ArgumentParser(
+        prog="memware", description=_DESCRIPTION, epilog=_EPILOG, formatter_class=_HelpFormatter
+    )
+    default_db = os.environ.get("MEMWARE_DB") or str(memware_home() / "memware.db")
+    p.add_argument("--db", default=default_db, metavar="FILE", help="SQLite store (env MEMWARE_DB)")
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument(
+        "--plain",
+        action="store_true",
+        help="tab-separated records, one per line (scriptable; pipe to fzf/awk/cut)",
+    )
+    p.add_argument(
+        "--ascii",
+        action="store_true",
+        help="ASCII only; no non-ASCII glyphs (screen readers, non-UTF-8 terminals)",
+    )
+    p.add_argument("--version", action="version", version=__version__)
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
+
+    def add(name: str, help: str, epilog: str | None = None) -> argparse.ArgumentParser:
+        sp = sub.add_parser(
+            name, help=help, description=help, epilog=epilog, formatter_class=_HelpFormatter
+        )
+        for flag in ("--json", "--plain", "--ascii"):  # global; documented on the top-level
+            sp.add_argument(
+                flag, action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+            )
         return sp
 
     s = add("init", "create the database")
     s.set_defaults(fn=cmd_init)
 
-    s = add("sync", "index new turns from transcripts")
+    s = add(
+        "sync",
+        "index new turns from transcripts",
+        epilog=(
+            "Examples:\n"
+            "  memware sync                      catch up the configured transcript source\n"
+            "  memware sync ~/.claude/projects   index a specific tree (idempotent)"
+        ),
+    )
     s.add_argument("paths", nargs="*")
     s.add_argument("--harness", default="claude-code")
     s.add_argument("--from-hook", action="store_true")
@@ -574,7 +777,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.set_defaults(fn=cmd_sync)
 
-    s = add("backfill", "one-time index of existing transcripts (run once on a new machine)")
+    s = add(
+        "backfill",
+        "one-time index of existing transcripts (run once on a new machine)",
+        epilog="Example:\n  memware backfill        index ~/.claude/projects once on a new machine",
+    )
     s.add_argument(
         "root",
         nargs="?",
@@ -585,7 +792,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--exclude", action="append", default=[], metavar="GLOB")
     s.set_defaults(fn=cmd_backfill)
 
-    s = add("recall", "search turns and beliefs; pass several phrasings to fuse them")
+    s = add(
+        "recall",
+        "search turns and beliefs; pass several phrasings to fuse them",
+        epilog=(
+            "Examples:\n"
+            '  memware recall "which port does the api use" "api port" 8443\n'
+            '  memware recall "auth flow" --what beliefs\n'
+            '  memware recall "auth flow" --plain | fzf         pick a hit interactively\n'
+            '  memware recall "auth flow" --plain | cut -f1      just the ids'
+        ),
+    )
     s.add_argument(
         "queries",
         nargs="+",
@@ -605,10 +822,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--from-hook", action="store_true")
     s.set_defaults(fn=cmd_context)
 
-    s = add("assert", "record a belief; supersedes the previous value")
-    s.add_argument("subject")
-    s.add_argument("relation")
-    s.add_argument("value")
+    s = add(
+        "assert",
+        "record a belief; supersedes the previous value",
+        epilog=(
+            "Examples:\n"
+            '  memware assert api "listens on port" 8443 --source "session 3f2a"\n'
+            "  printf 'api\\tlistens on port\\t8443\\n' | memware assert -   (batch TSV from stdin)"
+        ),
+    )
+    s.add_argument("subject", help="subject, or `-` to batch-read TSV lines from stdin")
+    s.add_argument("relation", nargs="?", help="relation (omit only when subject is `-`)")
+    s.add_argument("value", nargs="?", help="value (omit only when subject is `-`)")
     s.add_argument("--valid-from")
     s.add_argument("--source")
     s.add_argument("--reliability", type=float, default=0.5)
@@ -617,12 +842,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.set_defaults(fn=cmd_assert)
 
-    s = add("beliefs", "current beliefs, or the history of one key")
+    s = add(
+        "beliefs",
+        "current beliefs, or the history of one key",
+        epilog=(
+            "Examples:\n"
+            "  memware beliefs                        all current beliefs\n"
+            "  memware beliefs api                    current beliefs about a subject\n"
+            '  memware beliefs api "listens on port"  full history of one key'
+        ),
+    )
     s.add_argument("subject", nargs="?")
     s.add_argument("relation", nargs="?")
     s.set_defaults(fn=cmd_beliefs)
 
-    s = add("read", "read a session's turns")
+    s = add(
+        "read",
+        "read a session's turns",
+        epilog="Example:\n  memware read <session-id> --around <turn-id> --window 5",
+    )
     s.add_argument("session")
     s.add_argument("--around", type=int)
     s.add_argument("--window", type=int, default=5)
@@ -656,7 +894,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_stats)
 
     s = add(
-        "backup", "snapshot the store to a folder (Dropbox/iCloud/Drive/disk) with tiered retention"
+        "backup",
+        "snapshot the store to a folder (Dropbox/iCloud/Drive/disk) with tiered retention",
+        epilog=(
+            "Examples:\n"
+            "  memware backup             snapshot + transcript mirror to backup.dest\n"
+            "  memware restore --latest   after a wipe (never re-backfill)"
+        ),
     )
     s.add_argument("--dest", metavar="DIR", help="destination (default: backup.dest from config)")
     s.add_argument(
@@ -712,11 +956,26 @@ def build_parser() -> argparse.ArgumentParser:
         help='must equal "DELETE ALL MEMWARE DATA" (else you are prompted)',
     )
     s.set_defaults(fn=cmd_nuke)
+
+    s = add(
+        "completions",
+        "print a shell completion script (bash/zsh/fish)",
+        epilog=(
+            "Examples:\n"
+            "  memware completions zsh  > ~/.zfunc/_memware\n"
+            "  memware completions bash > ~/.local/share/bash-completion/completions/memware\n"
+            "  memware completions fish > ~/.config/fish/completions/memware.fish"
+        ),
+    )
+    s.add_argument("shell", choices=["bash", "zsh", "fish"])
+    s.set_defaults(fn=cmd_completions)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
+    if getattr(a, "ascii", False):
+        os.environ["MEMWARE_ASCII"] = "1"  # honoured by memware.term for glyph fallback
     return int(a.fn(a))
 
 

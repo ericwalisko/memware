@@ -27,7 +27,8 @@ dependencies = []
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.2"]
-dev = ["pytest>=8", "pytest-cov>=5", "ruff==0.16.5", "mypy>=1.11", "pyyaml>=6"]
+shell = ["shtab>=1.7"]  # `memware completions` (bash/zsh/fish)
+dev = ["pytest>=8", "pytest-cov>=5", "ruff==0.16.5", "mypy>=1.11", "pyyaml>=6", "shtab>=1.7"]
 
 [project.scripts]
 memware = "memware.cli:main"
