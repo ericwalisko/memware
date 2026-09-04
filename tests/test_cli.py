@@ -161,9 +161,22 @@ def test_assert_without_value_errors_cleanly(tmp_path, capsys):
     assert "SUBJECT RELATION VALUE" in capsys.readouterr().err
 
 
-def test_completions_emits_a_shell_script(capsys):
-    assert main(["completions", "zsh"]) == 0
-    assert "#compdef memware" in capsys.readouterr().out
+def test_completions_command(capsys):
+    """With shtab installed it prints a script; without it, a clear install hint and exit 2.
+    The test tolerates both so it passes whether or not the optional `[shell]` extra is present
+    (e.g. the release job verifies against the bare wheel)."""
+    try:
+        import shtab  # noqa: F401
+
+        has_shtab = True
+    except ImportError:
+        has_shtab = False
+    rc = main(["completions", "zsh"])
+    out = capsys.readouterr()
+    if has_shtab:
+        assert rc == 0 and "#compdef memware" in out.out
+    else:
+        assert rc == 2 and "shtab" in out.err
 
 
 def test_help_shows_examples(capsys):
