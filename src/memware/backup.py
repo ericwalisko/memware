@@ -97,28 +97,66 @@ def apply_retention(dest_dir: str | os.PathLike[str], keep_days: list[int]) -> l
     return deleted
 
 
-def mirror_transcripts(src_root: str | os.PathLike[str], dest_dir: str | os.PathLike[str]) -> int:
+class MirrorResult:
+    """What ``mirror_transcripts`` did: files copied, and files it had to leave for next time.
+
+    ``skipped`` is a list of ``(target, reason)`` — the run does not abort on one bad file."""
+
+    __slots__ = ("copied", "skipped")
+
+    def __init__(self) -> None:
+        self.copied = 0
+        self.skipped: list[tuple[Path, str]] = []
+
+    def __int__(self) -> int:  # the pre-0.3.1 return type was the copied count
+        return self.copied
+
+
+def mirror_transcripts(
+    src_root: str | os.PathLike[str], dest_dir: str | os.PathLike[str]
+) -> MirrorResult:
     """Copy new/changed ``*.jsonl`` transcripts from ``src_root`` into ``dest_dir`` (additive,
     never deletes — an append-only archive that outlives the OS's own transcript cleanup).
-    Returns the number of files copied."""
+
+    Two rules, both learned from a synced destination (Dropbox, 2026-09-04 → 09-08, five
+    nightly runs in a row died here):
+
+    1. The target is never opened for writing. A synced folder evicts files it has already
+       uploaded to "dataless" placeholders, and opening one of those for write makes the
+       sync engine materialise it first, which fails with ``EDEADLK`` (errno 11) roughly
+       half the time. So the copy goes to a temp file beside the target and is renamed
+       over it — ``os.replace`` swaps the directory entry and never touches the old bytes.
+    2. One file that cannot be written is skipped and reported, not raised. A mirror is
+       best-effort and retried on every run; the snapshot that ran before it is the thing
+       that must not be lost, and an exception here used to take the whole ``backup`` exit
+       code (and the cron that reads it) down with it.
+    """
     src = Path(src_root).expanduser()
     dest = (Path(dest_dir).expanduser()) / "transcripts"
+    result = MirrorResult()
     if not src.exists():
-        return 0
-    copied = 0
+        return result
     for f in src.rglob("*.jsonl"):
         rel = f.relative_to(src)
         target = dest / rel
-        if (
-            target.exists()
-            and target.stat().st_mtime >= f.stat().st_mtime
-            and target.stat().st_size == f.stat().st_size
-        ):
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, target)
-        copied += 1
-    return copied
+        try:
+            if (
+                target.exists()
+                and target.stat().st_mtime >= f.stat().st_mtime
+                and target.stat().st_size == f.stat().st_size
+            ):
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.mw-tmp")
+            try:
+                shutil.copy2(f, tmp)
+                os.replace(tmp, target)
+            finally:
+                tmp.unlink(missing_ok=True)
+            result.copied += 1
+        except OSError as e:
+            result.skipped.append((target, f"{e.strerror or e} (errno {e.errno})"))
+    return result
 
 
 def restore(snapshot_path: str | os.PathLike[str], store_path: str | os.PathLike[str]) -> Path:
