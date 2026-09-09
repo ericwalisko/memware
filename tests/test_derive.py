@@ -434,3 +434,18 @@ def test_env_file_supplies_openai_settings_and_process_env_wins(tmp_path, monkey
     assert env["OPENAI_BASE_URL"] == "http://x/v1" and env["OPENAI_MODEL"] == "from-file"
     monkeypatch.setenv("MEMWARE_DERIVE_MODEL", "from-env")
     assert md.OpenAIProvider(md.read_env([f])).model == "from-env"
+
+
+# ── one derive at a time ────────────────────────────────────────────────
+def test_a_live_lock_skips_and_a_stale_lock_is_taken_over(db, tmp_path, monkeypatch, capsys):
+    """Two session-start hooks firing together must not derive the same turns twice."""
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    state = tmp_path / "state.json"
+    lock = tmp_path / "state.json.lock"
+    lock.write_text(str(os.getpid()))  # a live holder
+    assert main(["--db", db, "derive", "--state", str(state), "--apply"]) == 0
+    assert "another derive is running" in capsys.readouterr().out
+    assert prov.usage.calls == 0 and not state.exists()
+    lock.write_text("999999999")  # a dead holder: taken over
+    assert main(["--db", db, "derive", "--state", str(state), "--apply"]) == 0
+    assert prov.usage.calls == 1 and state.exists() and not lock.exists()

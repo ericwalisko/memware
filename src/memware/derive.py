@@ -641,6 +641,50 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+class RunLock:
+    """One derive at a time per state file. Two session-start hooks firing together (or a
+    hook beside a manual run) would both read the same watermark and derive the same turns
+    twice. The lock file holds the pid; a dead pid is taken over."""
+
+    def __init__(self, state_file: Path):
+        self.path = state_file.with_name(state_file.name + ".lock")
+        self.held = False
+
+    def acquire(self) -> bool:
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    pid = int(self.path.read_text().strip() or 0)
+                except (ValueError, OSError):
+                    pid = 0
+                if pid and _pid_alive(pid):
+                    return False
+                self.path.unlink(missing_ok=True)  # stale: the holder is gone
+                continue
+            with os.fdopen(fd, "w") as fh:
+                fh.write(str(os.getpid()))
+            self.held = True
+            return True
+        return False
+
+    def release(self) -> None:
+        if self.held:
+            self.path.unlink(missing_ok=True)
+            self.held = False
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def last_run_age_hours(state: dict[str, Any]) -> float | None:
     last = state.get("last_run")
     if not last:
@@ -823,6 +867,17 @@ def run(a: argparse.Namespace) -> int:
             say(f"skipped: last run {age:.1f}h ago (< {a.if_stale}h)")
             return EXIT_OK
 
+    lock = RunLock(sp)
+    if not lock.acquire():
+        say(f"skipped: another derive is running ({lock.path})")
+        return EXIT_OK
+    try:
+        return _run_locked(a, db, sp, state, say)
+    finally:
+        lock.release()
+
+
+def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any], say: Any) -> int:
     env = read_env()
     cfg = load_config()
     provider_name = (
