@@ -22,7 +22,7 @@ Hooks (`hooks/hooks.json`):
 
 | event | command | effect |
 |---|---|---|
-| `SessionStart` | `memware sync` (catch-up) + `memware backup --if-stale 20`, backgrounded | indexes any session whose `SessionEnd` never ran, then a throttled backup — see note |
+| `SessionStart` | `memware sync` (catch-up) + `memware backup --if-stale 20`, then `memware derive --apply --auto --if-stale 24` (a no-op until `memware config derive.auto true`), all backgrounded | indexes any session whose `SessionEnd` never ran, then a throttled backup — see note |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
 | `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few currently valid beliefs relevant to the prompt as `additionalContext` |
 

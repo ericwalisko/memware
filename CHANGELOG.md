@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`memware derive`** — fill the belief ledger from the transcripts. Reads every turn
+  indexed since its last run, has a model propose `(subject, relation, value)` triples for
+  the sentences that look like durable facts, and files only those that pass a
+  deterministic groundedness check (every word of the value must occur in the excerpt).
+  Incremental (watermark beside the store), dry run by default, `--apply` to write.
+  Providers: `claude-code` (default — the Claude Code CLI on your subscription, Haiku,
+  nothing to configure) and `openai` (any OpenAI-compatible endpoint via `OPENAI_*`).
+  Exit codes 2 (not configured) and 4 (provider unavailable, nothing written) are the
+  scheduling contract.
+- **`memware config derive.auto true`** lets the Claude Code plugin's session-start hook
+  run `derive` in the background, at most once a day — no cron, no always-on machine.
+  `docs/scheduling.md` covers LaunchAgents (catch up after sleep), systemd timers
+  (`Persistent=true`), and plain cron for those who want a clock instead.
+
 ## [0.3.0] - 2026-09-04
 
 ### Added

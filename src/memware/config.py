@@ -50,6 +50,12 @@ DEFAULTS: dict[str, Any] = {
         "auto": True,  # when a dest is set, the session-end hook backs up ~once/day (no cron needed)
         "auto_interval_hours": 20,  # minimum gap between automatic backups
     },
+    # `memware derive`: fill the ledger from the transcripts (docs/scheduling.md).
+    "derive": {
+        "auto": False,  # let the plugin's session-start hook run it (~once/day, no cron needed)
+        "provider": "claude-code",  # claude-code (the Claude Code CLI, no key) | openai
+        "model": None,  # provider default (claude-code: haiku)
+    },
 }
 
 

@@ -96,7 +96,8 @@ prints the operating guidance — safe on a fresh install and after upgrading fr
 (no-backups) version; `memware setup --yes` accepts the defaults non-interactively.
 
 The *belief ledger* starts empty and is not backfilled — beliefs are derived, not stored in
-transcripts. It fills as you work (via the `remember` tool, or a derive job you schedule).
+transcripts. It fills as you work (via the `remember` tool) and through `memware derive`,
+which mines the indexed transcripts for durable facts — see [Deriving beliefs](#deriving-beliefs).
 Transcript recall is what backfill gives you immediately, and it is where most of the value is.
 
 Requires the `memware` CLI on your `PATH` (see [Install](#install)). Hooks:
@@ -105,6 +106,29 @@ hook injects the handful of currently valid beliefs whose subject the prompt nam
 only — transcript search is on demand through the MCP tools). Set `MEMWARE_DB` to move the
 store, and `MEMWARE_NO_CAPTURE=1` for any session you do not want indexed. See
 [docs/integrations.md](docs/integrations.md) and [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
+
+## Deriving beliefs
+
+```bash
+memware derive            # dry run: prints the facts it would file
+memware derive --apply    # files them; runs again later from where it stopped
+```
+
+`derive` reads every transcript turn indexed since its last run, has a model turn the
+sentences that look like facts into `(subject, relation, value)` triples, and files only
+the triples that pass a deterministic check: every word of the value must appear in the
+excerpt, so a model cannot introduce a fact the evidence does not contain. Derived beliefs
+carry reliability 0.5, below anything you stated yourself, so a contradiction lands in
+`memware review` rather than on top of your belief.
+
+The default provider is the Claude Code CLI on your own subscription (`claude -p`, Haiku),
+so there is nothing to configure. `--provider openai` sends the extraction to any
+OpenAI-compatible endpoint instead (`OPENAI_BASE_URL` / `OPENAI_MODEL` / `OPENAI_API_KEY`).
+
+You do not need an always-on machine. The plugin can run it for you on session start, at
+most once a day: `memware config derive.auto true`. Other options — a macOS LaunchAgent
+that catches up after sleep, a systemd timer with `Persistent=true`, plain cron — are in
+[docs/scheduling.md](docs/scheduling.md).
 
 ## Use it from Hermes Agent
 
