@@ -399,6 +399,8 @@ def test_claude_code_provider_runs_on_the_subscription(db, tmp_path, monkeypatch
     assert "haiku via claude -p (subscription)" in out and "created=2" in out
     calls = log.read_text()
     assert "--model haiku --output-format json --system-prompt" in calls
+    assert "--tools  --no-session-persistence --exclude-dynamic-system-prompt-sections" in calls
+    assert "--bare" not in calls, "--bare skips the subscription login"
     assert "KEY=unset" in calls, "the API key must not reach claude -p"
     assert "THINK=0" in calls, "thinking is switched off for the extraction"
     assert calls.count("KEY=") == 1, "both sessions' excerpts went in one spawn"
@@ -432,3 +434,18 @@ def test_env_file_supplies_openai_settings_and_process_env_wins(tmp_path, monkey
     assert env["OPENAI_BASE_URL"] == "http://x/v1" and env["OPENAI_MODEL"] == "from-file"
     monkeypatch.setenv("MEMWARE_DERIVE_MODEL", "from-env")
     assert md.OpenAIProvider(md.read_env([f])).model == "from-env"
+
+
+# ── one derive at a time ────────────────────────────────────────────────
+def test_a_live_lock_skips_and_a_stale_lock_is_taken_over(db, tmp_path, monkeypatch, capsys):
+    """Two session-start hooks firing together must not derive the same turns twice."""
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    state = tmp_path / "state.json"
+    lock = tmp_path / "state.json.lock"
+    lock.write_text(str(os.getpid()))  # a live holder
+    assert main(["--db", db, "derive", "--state", str(state), "--apply"]) == 0
+    assert "another derive is running" in capsys.readouterr().out
+    assert prov.usage.calls == 0 and not state.exists()
+    lock.write_text("999999999")  # a dead holder: taken over
+    assert main(["--db", db, "derive", "--state", str(state), "--apply"]) == 0
+    assert prov.usage.calls == 1 and state.exists() and not lock.exists()

@@ -308,6 +308,13 @@ _LIMIT = re.compile(
 )
 
 
+def _neutral_cwd() -> Path:
+    """The memware home (created if absent): a directory with no CLAUDE.md for the CLI to load."""
+    home = memware_home()
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
 class ClaudeCodeProvider:
     """The Claude Code CLI on your own subscription: ``claude -p`` with the API key unset.
 
@@ -338,6 +345,10 @@ class ClaudeCodeProvider:
         # Mechanical extraction: thinking buys nothing here. Measured on Haiku, same output,
         # 450 -> 0 thinking tokens and 5.4 s -> 1.2 s per spawn.
         env["MAX_THINKING_TOKENS"] = "0"
+        # A tool-less, project-free call. Measured without these: Haiku reached for a tool on
+        # a third of the batches (stop_reason tool_use, rc 1) and answered another third in
+        # prose about "the project", because the CLI had loaded the cwd's CLAUDE.md and memory
+        # into its system prompt. Not --bare: that skips the subscription login.
         argv = [
             self.binary,
             "-p",
@@ -350,10 +361,20 @@ class ClaudeCodeProvider:
             system,
             "--max-turns",
             "1",
+            "--tools",
+            "",
+            "--no-session-persistence",
+            "--exclude-dynamic-system-prompt-sections",
         ]
         p = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL
-        )  # else claude waits 3 s for piped stdin
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            stdin=subprocess.DEVNULL,  # else claude waits 3 s for piped stdin
+            cwd=str(_neutral_cwd()),  # never a project directory
+        )
         raw = (p.stdout or "").strip()
         try:
             d = json.loads(raw) if raw else {}
@@ -620,6 +641,50 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+class RunLock:
+    """One derive at a time per state file. Two session-start hooks firing together (or a
+    hook beside a manual run) would both read the same watermark and derive the same turns
+    twice. The lock file holds the pid; a dead pid is taken over."""
+
+    def __init__(self, state_file: Path):
+        self.path = state_file.with_name(state_file.name + ".lock")
+        self.held = False
+
+    def acquire(self) -> bool:
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    pid = int(self.path.read_text().strip() or 0)
+                except (ValueError, OSError):
+                    pid = 0
+                if pid and _pid_alive(pid):
+                    return False
+                self.path.unlink(missing_ok=True)  # stale: the holder is gone
+                continue
+            with os.fdopen(fd, "w") as fh:
+                fh.write(str(os.getpid()))
+            self.held = True
+            return True
+        return False
+
+    def release(self) -> None:
+        if self.held:
+            self.path.unlink(missing_ok=True)
+            self.held = False
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def last_run_age_hours(state: dict[str, Any]) -> float | None:
     last = state.get("last_run")
     if not last:
@@ -802,6 +867,17 @@ def run(a: argparse.Namespace) -> int:
             say(f"skipped: last run {age:.1f}h ago (< {a.if_stale}h)")
             return EXIT_OK
 
+    lock = RunLock(sp)
+    if not lock.acquire():
+        say(f"skipped: another derive is running ({lock.path})")
+        return EXIT_OK
+    try:
+        return _run_locked(a, db, sp, state, say)
+    finally:
+        lock.release()
+
+
+def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any], say: Any) -> int:
     env = read_env()
     cfg = load_config()
     provider_name = (
@@ -811,6 +887,8 @@ def run(a: argparse.Namespace) -> int:
     )
     model = a.model or get_dotted(cfg, "derive.model")
     provider = make_provider(provider_name, env, model=str(model) if model else None)
+    if a.chunk:
+        provider.chunk = a.chunk
     watermark = a.since if a.since is not None else int(state["watermark"])
 
     conn = open_readonly(db)
@@ -925,6 +1003,12 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
         "(any OpenAI-compatible endpoint via OPENAI_* env)",
     )
     sp.add_argument("--model", help="model for the provider (claude-code default: haiku)")
+    sp.add_argument(
+        "--chunk",
+        type=int,
+        metavar="N",
+        help="excerpts per model call (claude-code default 24, openai 8)",
+    )
     sp.add_argument(
         "--since",
         type=int,

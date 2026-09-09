@@ -9,8 +9,8 @@
     {
       "name": "memware",
       "source": "./integrations/claude-code",
-      "description": "Session transcripts indexed for recall; a belief ledger that only remembers the latest truth. Hooks: SessionEnd/PreCompact sync, prompt-time belief context.",
-      "version": "0.3.0",
+      "description": "Session transcripts indexed for recall; a belief ledger that only remembers the latest truth. Hooks: SessionEnd/PreCompact sync, prompt-time belief context, and (opt-in) a daily `memware derive` on session start.",
+      "version": "0.4.0",
       "author": {
         "name": "ericwalisko"
       }
