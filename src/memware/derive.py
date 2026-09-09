@@ -335,6 +335,9 @@ class ClaudeCodeProvider:
 
     def complete(self, system: str, user: str, timeout: int = 300) -> str:
         env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # subscription
+        # Mechanical extraction: thinking buys nothing here. Measured on Haiku, same output,
+        # 450 -> 0 thinking tokens and 5.4 s -> 1.2 s per spawn.
+        env["MAX_THINKING_TOKENS"] = "0"
         argv = [
             self.binary,
             "-p",
@@ -348,7 +351,9 @@ class ClaudeCodeProvider:
             "--max-turns",
             "1",
         ]
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
+        p = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL
+        )  # else claude waits 3 s for piped stdin
         raw = (p.stdout or "").strip()
         try:
             d = json.loads(raw) if raw else {}
@@ -362,8 +367,10 @@ class ClaudeCodeProvider:
             raise RuntimeError(f"claude -p failed (rc {p.returncode}): {(p.stderr or raw)[:200]!r}")
         self.usage.calls += 1
         u = d.get("usage") or {} if isinstance(d, dict) else {}
-        self.usage.prompt_tokens += int(u.get("input_tokens") or 0) + int(
-            u.get("cache_read_input_tokens") or 0
+        self.usage.prompt_tokens += (
+            int(u.get("input_tokens") or 0)
+            + int(u.get("cache_read_input_tokens") or 0)
+            + int(u.get("cache_creation_input_tokens") or 0)
         )
         self.usage.completion_tokens += int(u.get("output_tokens") or 0)
         if not text:

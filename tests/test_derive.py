@@ -374,6 +374,7 @@ def fake_claude(tmp_path: Path, monkeypatch, body: str) -> Path:
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> '{log}'\n"
         f"printf 'KEY=%s\\n' \"${{ANTHROPIC_API_KEY-unset}}\" >> '{log}'\n"
+        f"printf 'THINK=%s\\n' \"${{MAX_THINKING_TOKENS-unset}}\" >> '{log}'\n"
         f"cat <<'EOF'\n{body}\nEOF\n"
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
@@ -399,6 +400,7 @@ def test_claude_code_provider_runs_on_the_subscription(db, tmp_path, monkeypatch
     calls = log.read_text()
     assert "--model haiku --output-format json --system-prompt" in calls
     assert "KEY=unset" in calls, "the API key must not reach claude -p"
+    assert "THINK=0" in calls, "thinking is switched off for the extraction"
     assert calls.count("KEY=") == 1, "both sessions' excerpts went in one spawn"
 
 
