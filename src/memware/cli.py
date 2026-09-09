@@ -456,7 +456,17 @@ def cmd_backup(a: argparse.Namespace) -> int:
     )
     if include:
         src = a.transcript_src or get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
-        result["transcripts_mirrored"] = bk.mirror_transcripts(src, dest)
+        mirrored = bk.mirror_transcripts(src, dest)
+        result["transcripts_mirrored"] = mirrored.copied
+        if mirrored.skipped:
+            # Reported, not fatal: the snapshot above already succeeded and the mirror is
+            # retried on every run. Silence would hide a destination that never takes
+            # writes; a traceback took five nightly crons down over one dataless file.
+            result["transcripts_skipped"] = len(mirrored.skipped)
+            for target, why in mirrored.skipped[:5]:
+                print(f"transcript not mirrored: {target}: {why}", file=sys.stderr)
+            if len(mirrored.skipped) > 5:
+                print(f"... and {len(mirrored.skipped) - 5} more", file=sys.stderr)
     if not a.quiet:
         _out(result, a.json)
     return 0

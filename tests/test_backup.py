@@ -1,4 +1,5 @@
 import json
+import os
 
 from memware import backup as bk
 from memware.cli import main
@@ -158,3 +159,95 @@ def test_if_stale_throttles_and_no_dest_is_silent_noop(tmp_path, capsys, monkeyp
     # immediate second call is within the window -> skipped, no new snapshot
     assert main(["--db", str(db), "backup", "--if-stale", "20", "--no-transcripts", "--json"]) == 0
     assert len(bk.list_snapshots(dest)) == n1
+
+
+def test_mirror_never_opens_the_target_for_writing(tmp_path, monkeypatch):
+    """A synced destination (Dropbox) evicts uploaded files to dataless placeholders, and
+    opening one of those for write makes the sync engine materialise it first — which
+    failed with EDEADLK on five nightly runs in a row (2026-09-04 → 09-08). So the mirror
+    writes beside the target and renames over it; the target itself is never opened."""
+    import builtins
+    import errno
+    from pathlib import Path
+
+    src = tmp_path / "projects" / "p"
+    src.mkdir(parents=True)
+    (src / "s.jsonl").write_text("new\n")
+    dest = tmp_path / "dropbox"
+    target = dest / "transcripts" / "p" / "s.jsonl"
+    target.parent.mkdir(parents=True)
+    target.write_text("old")
+    os.utime(target, (0, 0))  # stale: older and smaller than the source
+    real_open = builtins.open
+
+    def refuse_writes_to_target(file, mode="r", *a, **k):
+        if Path(str(file)) == target and any(c in mode for c in "wa+"):
+            raise OSError(errno.EDEADLK, "Resource deadlock avoided")
+        return real_open(file, mode, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", refuse_writes_to_target)
+    res = bk.mirror_transcripts(tmp_path / "projects", dest)
+    assert (res.copied, res.skipped) == (1, [])
+    assert target.read_text() == "new\n"
+    assert not list(target.parent.glob(".*.mw-tmp"))  # no temp litter beside it
+
+
+def test_mirror_skips_an_unwritable_target_and_keeps_going(tmp_path, monkeypatch):
+    """One file that cannot be written is reported, not raised: it used to take the whole
+    run — and `backup`'s exit code, and the cron reading it — down with it."""
+    import errno
+    from pathlib import Path
+
+    src = tmp_path / "projects"
+    (src / "a").mkdir(parents=True)
+    (src / "b").mkdir()
+    (src / "a" / "x.jsonl").write_text("x")
+    (src / "b" / "y.jsonl").write_text("y")
+    dest = tmp_path / "dropbox"
+    real_replace = os.replace
+
+    def deadlock_on_x(s, d):
+        if Path(d).name == "x.jsonl":
+            raise OSError(errno.EDEADLK, "Resource deadlock avoided")
+        return real_replace(s, d)
+
+    monkeypatch.setattr(os, "replace", deadlock_on_x)
+    res = bk.mirror_transcripts(src, dest)
+    assert res.copied == 1
+    assert [t.name for t, _ in res.skipped] == ["x.jsonl"]
+    assert f"errno {errno.EDEADLK}" in res.skipped[0][1]  # 35 on Linux, 11 on macOS
+    assert (dest / "transcripts" / "b" / "y.jsonl").read_text() == "y"
+    assert not list((dest / "transcripts" / "a").glob(".*"))  # the temp file was cleaned up
+
+
+def test_backup_cli_reports_skipped_transcripts_and_still_exits_zero(tmp_path, capsys, monkeypatch):
+    """The snapshot is the thing that must not be lost; a mirror skip is retried tomorrow."""
+    import errno
+    from pathlib import Path
+
+    monkeypatch.setenv("MEMWARE_HOME", str(tmp_path / "home"))
+    db = _seed(tmp_path / "m.db", 2)
+    proj = tmp_path / "projects" / "p"
+    proj.mkdir(parents=True)
+    write_claude_jsonl(
+        proj / "s.jsonl", "s", [("assistant", "2026-08-01T00:00:00Z", "a real prior session line")]
+    )
+    dest = tmp_path / "dropbox" / "memware"
+    main(["--db", str(db), "config", "backup.dest", str(dest)])
+    capsys.readouterr()
+    main(["--db", str(db), "config", "backup.transcript_src", str(tmp_path / "projects")])
+    capsys.readouterr()
+    real_replace = os.replace
+
+    def deadlock_on_transcripts(s, d):
+        if Path(d).suffix == ".jsonl":
+            raise OSError(errno.EDEADLK, "Resource deadlock avoided")
+        return real_replace(s, d)
+
+    monkeypatch.setattr(os, "replace", deadlock_on_transcripts)
+    assert main(["--db", str(db), "backup", "--json"]) == 0
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["snapshot"].endswith(".db")
+    assert (out["transcripts_mirrored"], out["transcripts_skipped"]) == (0, 1)
+    assert "transcript not mirrored" in cap.err and f"errno {errno.EDEADLK}" in cap.err
