@@ -123,7 +123,7 @@ def mirror_transcripts(
 
     1. The target is never opened for writing. A synced folder evicts files it has already
        uploaded to "dataless" placeholders, and opening one of those for write makes the
-       sync engine materialise it first, which fails with ``EDEADLK`` (errno 11) roughly
+       sync engine materialise it first, which fails with ``EDEADLK`` (errno 11 on macOS) roughly
        half the time. So the copy goes to a temp file beside the target and is renamed
        over it — ``os.replace`` swaps the directory entry and never touches the old bytes.
     2. One file that cannot be written is skipped and reported, not raised. A mirror is

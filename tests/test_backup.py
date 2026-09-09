@@ -215,7 +215,7 @@ def test_mirror_skips_an_unwritable_target_and_keeps_going(tmp_path, monkeypatch
     res = bk.mirror_transcripts(src, dest)
     assert res.copied == 1
     assert [t.name for t, _ in res.skipped] == ["x.jsonl"]
-    assert "errno 11" in res.skipped[0][1]
+    assert f"errno {errno.EDEADLK}" in res.skipped[0][1]  # 35 on Linux, 11 on macOS
     assert (dest / "transcripts" / "b" / "y.jsonl").read_text() == "y"
     assert not list((dest / "transcripts" / "a").glob(".*"))  # the temp file was cleaned up
 
@@ -250,4 +250,4 @@ def test_backup_cli_reports_skipped_transcripts_and_still_exits_zero(tmp_path, c
     out = json.loads(cap.out)
     assert out["snapshot"].endswith(".db")
     assert (out["transcripts_mirrored"], out["transcripts_skipped"]) == (0, 1)
-    assert "transcript not mirrored" in cap.err and "errno 11" in cap.err
+    assert "transcript not mirrored" in cap.err and f"errno {errno.EDEADLK}" in cap.err
