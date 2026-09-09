@@ -399,6 +399,8 @@ def test_claude_code_provider_runs_on_the_subscription(db, tmp_path, monkeypatch
     assert "haiku via claude -p (subscription)" in out and "created=2" in out
     calls = log.read_text()
     assert "--model haiku --output-format json --system-prompt" in calls
+    assert "--tools  --no-session-persistence --exclude-dynamic-system-prompt-sections" in calls
+    assert "--bare" not in calls, "--bare skips the subscription login"
     assert "KEY=unset" in calls, "the API key must not reach claude -p"
     assert "THINK=0" in calls, "thinking is switched off for the extraction"
     assert calls.count("KEY=") == 1, "both sessions' excerpts went in one spawn"

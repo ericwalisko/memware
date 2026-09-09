@@ -308,6 +308,13 @@ _LIMIT = re.compile(
 )
 
 
+def _neutral_cwd() -> Path:
+    """The memware home (created if absent): a directory with no CLAUDE.md for the CLI to load."""
+    home = memware_home()
+    home.mkdir(parents=True, exist_ok=True)
+    return home
+
+
 class ClaudeCodeProvider:
     """The Claude Code CLI on your own subscription: ``claude -p`` with the API key unset.
 
@@ -338,6 +345,10 @@ class ClaudeCodeProvider:
         # Mechanical extraction: thinking buys nothing here. Measured on Haiku, same output,
         # 450 -> 0 thinking tokens and 5.4 s -> 1.2 s per spawn.
         env["MAX_THINKING_TOKENS"] = "0"
+        # A tool-less, project-free call. Measured without these: Haiku reached for a tool on
+        # a third of the batches (stop_reason tool_use, rc 1) and answered another third in
+        # prose about "the project", because the CLI had loaded the cwd's CLAUDE.md and memory
+        # into its system prompt. Not --bare: that skips the subscription login.
         argv = [
             self.binary,
             "-p",
@@ -350,10 +361,20 @@ class ClaudeCodeProvider:
             system,
             "--max-turns",
             "1",
+            "--tools",
+            "",
+            "--no-session-persistence",
+            "--exclude-dynamic-system-prompt-sections",
         ]
         p = subprocess.run(
-            argv, capture_output=True, text=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL
-        )  # else claude waits 3 s for piped stdin
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+            stdin=subprocess.DEVNULL,  # else claude waits 3 s for piped stdin
+            cwd=str(_neutral_cwd()),  # never a project directory
+        )
         raw = (p.stdout or "").strip()
         try:
             d = json.loads(raw) if raw else {}
@@ -811,6 +832,8 @@ def run(a: argparse.Namespace) -> int:
     )
     model = a.model or get_dotted(cfg, "derive.model")
     provider = make_provider(provider_name, env, model=str(model) if model else None)
+    if a.chunk:
+        provider.chunk = a.chunk
     watermark = a.since if a.since is not None else int(state["watermark"])
 
     conn = open_readonly(db)
@@ -925,6 +948,12 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
         "(any OpenAI-compatible endpoint via OPENAI_* env)",
     )
     sp.add_argument("--model", help="model for the provider (claude-code default: haiku)")
+    sp.add_argument(
+        "--chunk",
+        type=int,
+        metavar="N",
+        help="excerpts per model call (claude-code default 24, openai 8)",
+    )
     sp.add_argument(
         "--since",
         type=int,
