@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from memware import __version__
+from memware.derive import add_arguments as _derive_arguments
+from memware.derive import cmd_derive
 from memware.index import (
     read_turns,
     search_beliefs,
@@ -695,6 +697,8 @@ Examples:
 
 Environment:
   MEMWARE_DB          store path (default: <home>/memware.db)
+  MEMWARE_DERIVE_PROVIDER / MEMWARE_DERIVE_MODEL   `derive`: claude-code (default) | openai, and its model
+  OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY   `derive --provider openai` (or <home>/.env)
   MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
   MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
   MEMWARE_NO_CAPTURE=1  never index the current session
@@ -865,6 +869,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("subject", nargs="?")
     s.add_argument("relation", nargs="?")
     s.set_defaults(fn=cmd_beliefs)
+
+    s = add(
+        "derive",
+        "fill the ledger from the transcripts: durable facts as beliefs (docs/scheduling.md)",
+        epilog=(
+            "Examples:\n"
+            "  memware derive                         dry run: print what it would file\n"
+            "  memware derive --apply                 file the candidates, advance the watermark\n"
+            "  memware config derive.auto true        let the Claude Code plugin run it daily\n"
+            "  memware derive --provider openai       any OpenAI-compatible endpoint (OPENAI_* env)\n"
+            "Exit: 0 done · 2 not configured · 4 provider unavailable (nothing written, retry later)"
+        ),
+    )
+    _derive_arguments(s)
+    s.set_defaults(fn=cmd_derive)
 
     s = add(
         "read",
