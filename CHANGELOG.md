@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-09
+
 ### Added
 - **`memware derive`** — fill the belief ledger from the transcripts. Reads every turn
   indexed since its last run, has a model propose `(subject, relation, value)` triples for
