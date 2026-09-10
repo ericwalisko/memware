@@ -13,6 +13,7 @@ from typing import Any
 from memware import __version__
 from memware.derive import add_arguments as _derive_arguments
 from memware.derive import cmd_derive
+from memware.derive import status as derive_status
 from memware.index import (
     read_turns,
     search_beliefs,
@@ -264,7 +265,9 @@ def cmd_context(a: argparse.Namespace) -> int:
     if not prompt.strip():
         return 0
     with Store(a.db) as s:
-        hits = search_beliefs(s, prompt, k=a.k, require_subject=True)
+        # Injection is not retrieval: nobody asked for these, so they must not gain activation
+        # or count as used — use_count means an agent or a person retrieved the belief.
+        hits = search_beliefs(s, prompt, k=a.k, require_subject=True, record_use=False)
     if not hits:
         return 0
     lines = []
@@ -406,10 +409,101 @@ def cmd_prune(a: argparse.Namespace) -> int:
     return 0
 
 
+STALE_DERIVE_DAYS = 30
+
+
+def _stats_verdicts(r: dict[str, Any]) -> list[str]:
+    """One line per degenerate state a person should act on, from a ``cmd_stats`` report. Human
+    output only: under --json the fields carry the same facts. The case this exists for is a
+    store with thousands of turns and no beliefs, where "derive never ran" and "derive found
+    nothing" otherwise print the same zero."""
+    d, u = r["derive"], r["utilization"]
+    out: list[str] = []
+    if r["turns"] and not r["beliefs_current"] and not d["runs"]:
+        out.append(
+            "ledger empty: derive has never run. `memware derive --plan` previews with no "
+            "network call; `memware config derive.auto true` enables it."
+        )
+    age = d["last_run_age_hours"]
+    pending = d["turns_pending"]
+    if not d["auto"] and age is not None and age > STALE_DERIVE_DAYS * 24 and pending:
+        out.append(
+            f"derive last ran {int(age // 24)} days ago and derive.auto is off "
+            f"({pending:,} turn{'' if pending == 1 else 's'} not yet derived). "
+            "`memware derive --apply` catches up; `memware config derive.auto true` keeps it "
+            "current."
+        )
+    if r["turns"] and not u["beliefs_recalled_30d"] and not u["turns_recalled_30d"]:
+        out.append("nothing has been recalled in 30 days")
+    return out
+
+
+def _when(ts: str | None, age: float | None, never: str) -> str:
+    if not ts:
+        return never
+    if age is None:
+        return ts
+    ago = f"{age:.1f} hours" if age < 48 else f"{int(age // 24)} days"
+    return f"{ts} ({ago} ago)"
+
+
+def _print_stats(r: dict[str, Any]) -> None:
+    """Labeled ``field : value`` lines, a blank line between sections, verdicts last."""
+    d, u = r["derive"], r["utilization"]
+    share = u["turns_ever_recalled_share"]
+    sections: list[list[tuple[str, str]]] = [
+        [
+            ("db", r["db"]),
+            ("turns", f"{r['turns']:,}"),
+            ("passages", f"{r['passages']:,}"),
+            ("sessions", f"{r['sessions']:,}"),
+            ("beliefs current", f"{r['beliefs_current']:,}"),
+            ("beliefs total", f"{r['beliefs_total']:,}"),
+            ("reviews open", f"{r['reviews_open']:,}"),
+        ],
+        [
+            ("derive auto", "on" if d["auto"] else "off"),
+            ("derive state file", d["state_file"]),
+            ("derive runs", f"{d['runs']:,}"),
+            ("derive last run", _when(d["last_run"], d["last_run_age_hours"], "never run")),
+            ("derive watermark", f"{d['watermark']:,}"),
+            ("latest turn id", f"{d['max_turn_id']:,}"),
+            ("turns not yet derived", f"{d['turns_pending']:,}"),
+        ],
+        [
+            ("beliefs recalled in 7 days", f"{u['beliefs_recalled_7d']:,}"),
+            ("beliefs recalled in 30 days", f"{u['beliefs_recalled_30d']:,}"),
+            ("turns recalled in 7 days", f"{u['turns_recalled_7d']:,}"),
+            ("turns recalled in 30 days", f"{u['turns_recalled_30d']:,}"),
+            (
+                "turns ever recalled",
+                f"{u['turns_ever_recalled']:,} of {r['turns']:,}"
+                + ("" if share is None else f" ({share:.1%})"),
+            ),
+            ("last recalled", _when(u["last_recalled"], u["last_recalled_age_hours"], "never")),
+        ],
+        [("verdict", v) for v in _stats_verdicts(r)],
+    ]
+    blocks = [section for section in sections if section]
+    width = max(len(label) for block in blocks for label, _ in block)
+    print(
+        "\n\n".join(
+            "\n".join(f"{label.rjust(width)} : {value}" for label, value in block)
+            for block in blocks
+        )
+    )
+
+
 def cmd_stats(a: argparse.Namespace) -> int:
     _maybe_setup_hint(a)
     with Store(a.db) as s:
-        _out({"db": str(s.path), **s.stats()}, a.json)
+        report: dict[str, Any] = {"db": str(s.path), **s.stats()}
+        report["derive"] = derive_status(s.conn, s.path)
+        report["utilization"] = s.utilization()
+    if a.json:
+        _out(report, True)
+    else:
+        _print_stats(report)
     return 0
 
 
@@ -920,7 +1014,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.set_defaults(fn=cmd_prune)
 
-    s = add("stats", "counts")
+    s = add(
+        "stats",
+        "counts, derive state, and recall utilization; says plainly when memory is inert",
+    )
     s.set_defaults(fn=cmd_stats)
 
     s = add(

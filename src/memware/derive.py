@@ -58,7 +58,7 @@ from typing import Any
 from memware import __version__
 from memware.config import get_dotted, load_config, memware_home
 from memware.ledger import Policy, assert_belief
-from memware.store import Store
+from memware.store import Store, age_hours
 
 RELIABILITY = 0.5  # a machine read a transcript: below every human-stated belief
 POLICY = Policy.GATE_CONFLICTS
@@ -731,14 +731,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def last_run_age_hours(state: dict[str, Any]) -> float | None:
-    last = state.get("last_run")
-    if not last:
-        return None
-    try:
-        t = time.mktime(time.strptime(str(last), "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
-    except ValueError:
-        return None
-    return (time.time() - t) / 3600.0
+    return age_hours(state.get("last_run"))
 
 
 ROLES = ("user", "assistant")
@@ -784,6 +777,31 @@ def max_turn_id(conn: sqlite3.Connection, roles: tuple[str, ...] = ROLES) -> int
         f"SELECT MAX(id) AS m FROM turn WHERE role IN ({marks})", tuple(roles)
     ).fetchone()
     return int(row["m"] or 0)
+
+
+def status(conn: sqlite3.Connection, db_path: str | os.PathLike[str]) -> dict[str, Any]:
+    """What ``memware stats`` reports about derive, read-only: whether the plugin hook may run
+    it, whether it has ever applied, and how far the watermark trails the transcripts. A store
+    whose derive never ran and one whose derive found nothing both have no beliefs; these
+    fields are what tell them apart."""
+    sp = state_path(db_path)
+    state = load_state(sp)
+    watermark = int(state["watermark"])
+    marks = ",".join("?" * len(ROLES))
+    pending = conn.execute(
+        f"SELECT count(*) FROM turn WHERE id > ? AND role IN ({marks})", (watermark, *ROLES)
+    ).fetchone()[0]
+    age = last_run_age_hours(state)
+    return {
+        "auto": bool(get_dotted(load_config(), "derive.auto")),
+        "state_file": str(sp),
+        "runs": int(state["runs"]),
+        "last_run": state["last_run"],
+        "last_run_age_hours": None if age is None else round(age, 1),
+        "watermark": watermark,
+        "max_turn_id": max_turn_id(conn),
+        "turns_pending": int(pending),
+    }
 
 
 def source_pointer(session: str, turn_id: int) -> str:
