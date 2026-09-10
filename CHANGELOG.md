@@ -15,6 +15,19 @@ All notable changes to this project are documented here. The format follows
   it), with the phrasing how-to tightened behind it, all under 130 words. `beliefs` and
   `read_session` each gained a trigger line. A test holds the budget and the triggers. The
   Hermes provider's tool schema is unchanged.
+- The README, `docs/scheduling.md` and `memware derive --help` no longer describe the dry run
+  as side-effect free. A dry run sends every excerpt to the provider and skips only the write.
+  `--plan` is the view that sends nothing. `--apply` and `--plan` are mutually exclusive.
+- `memware derive --chunk` rejects values below 1 instead of silently treating 0 as the default.
+
+### Added
+- **`memware derive --plan`** — the no-network view of a run. It gathers the excerpts exactly as
+  a run would (same watermark, session cap and dedupe) and prints each one with its session and
+  source pointer. It then prints the session, excerpt, character and model-call counts and the
+  destination (provider and model, or the `OPENAI_BASE_URL` endpoint), and stops before any
+  provider exists. No model call, no writes, no run lock. It works with no `claude` on PATH and
+  no `OPENAI_*` and says what a real run would still need. Honours `--since`, `--max-sessions`,
+  `--provider`, `--model` and `--chunk`; `--quiet` keeps only the summary.
 
 ## [0.4.0] - 2026-09-09
 

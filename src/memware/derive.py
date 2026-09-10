@@ -28,6 +28,12 @@ The watermark (the highest turn id considered) lives beside the database in
 live one. Runs are incremental and idempotent, which is what makes ``--if-stale`` safe to call
 from a session hook: run it whenever the machine is on, it does the right amount of work.
 
+Without ``--apply`` a run is a dry run, and a dry run is not offline: it sends every excerpt to
+the provider and skips only the ledger write and the watermark. ``--plan`` is the view that
+sends nothing — the same excerpts, each with its source pointer, the number of model calls and
+the destination, printed before any provider exists. It is what to read before switching
+``derive`` on for transcripts that must not leave the machine.
+
 Exit codes: 0 done (or nothing to do); 1 unexpected failure; 2 not configured (no provider
 credential, no ``claude`` on PATH); 4 provider unavailable right now (rejected credential,
 usage limit) — nothing written, watermark untouched, try again later.
@@ -228,27 +234,35 @@ class OpenAIProvider:
     chunk = 8
 
     def __init__(self, env: dict[str, str]):
-        self.base = (env.get("OPENAI_BASE_URL") or "").rstrip("/")
-        self.model = env.get("MEMWARE_DERIVE_MODEL") or env.get("OPENAI_MODEL") or ""
-        self.key = env.get("OPENAI_API_KEY", "")
+        self.base, self.model, self.key = self.settings(env)
         self.usage = Usage()
-        missing = [
-            k
-            for k, v in (
-                ("OPENAI_BASE_URL", self.base),
-                ("OPENAI_MODEL", self.model),
-                ("OPENAI_API_KEY", self.key),
-            )
-            if not v
-        ]
+        missing = self.missing(env)
         if missing:
             raise ProviderConfigError(
                 f"provider openai needs {', '.join(missing)} — set them in the environment or "
                 f"in {env_file()} (or use --provider claude-code, which needs neither)"
             )
 
+    @staticmethod
+    def settings(env: dict[str, str]) -> tuple[str, str, str]:
+        """(base URL, model, key) from the environment alone — ``--plan`` reads them too."""
+        return (
+            (env.get("OPENAI_BASE_URL") or "").rstrip("/"),
+            env.get("MEMWARE_DERIVE_MODEL") or env.get("OPENAI_MODEL") or "",
+            env.get("OPENAI_API_KEY", ""),
+        )
+
+    @classmethod
+    def missing(cls, env: dict[str, str]) -> list[str]:
+        names = ("OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY")
+        return [k for k, v in zip(names, cls.settings(env), strict=True) if not v]
+
+    @staticmethod
+    def destination(model: str, base: str) -> str:
+        return f"{model} @ {base}"
+
     def describe(self) -> str:
-        return f"{self.model} @ {self.base}"
+        return self.destination(self.model, self.base)
 
     def _post(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
         req = urllib.request.Request(
@@ -328,7 +342,7 @@ class ClaudeCodeProvider:
     chunk = 24
 
     def __init__(self, env: dict[str, str], model: str | None = None, binary: str = "claude"):
-        self.model = model or env.get("MEMWARE_DERIVE_MODEL") or "haiku"
+        self.model = self.resolve_model(env, model)
         self.binary = binary
         self.usage = Usage()
         if shutil.which(binary) is None:
@@ -337,8 +351,16 @@ class ClaudeCodeProvider:
                 "(https://claude.com/claude-code), or use --provider openai"
             )
 
+    @staticmethod
+    def resolve_model(env: dict[str, str], model: str | None = None) -> str:
+        return model or env.get("MEMWARE_DERIVE_MODEL") or "haiku"
+
+    @staticmethod
+    def destination(model: str, binary: str = "claude") -> str:
+        return f"{model} via {binary} -p (subscription)"
+
     def describe(self) -> str:
-        return f"{self.model} via {self.binary} -p (subscription)"
+        return self.destination(self.model, self.binary)
 
     def complete(self, system: str, user: str, timeout: int = 300) -> str:
         env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # subscription
@@ -406,6 +428,29 @@ def make_provider(name: str, env: dict[str, str], model: str | None = None) -> A
         if model:
             env = {**env, "MEMWARE_DERIVE_MODEL": model}
         return OpenAIProvider(env)
+    raise ProviderConfigError(f"unknown provider {name!r} (claude-code | openai)")
+
+
+def provider_plan(
+    name: str, env: dict[str, str], model: str | None = None
+) -> tuple[str, int, str | None]:
+    """(destination, excerpts per call, why a run would refuse to start — or None).
+
+    Read from flags, config and environment alone; no provider is constructed. The
+    constructors refuse on a machine with no ``claude`` and no ``OPENAI_*``, and that is the
+    machine whose owner most wants ``--plan`` before setting either up. The destination is
+    the string the provider's own ``describe()`` prints in a run."""
+    if name == "claude-code":
+        where = ClaudeCodeProvider.destination(ClaudeCodeProvider.resolve_model(env, model))
+        why = None if shutil.which("claude") else "`claude` is not on PATH"
+        return where, ClaudeCodeProvider.chunk, why
+    if name == "openai":
+        if model:
+            env = {**env, "MEMWARE_DERIVE_MODEL": model}
+        base, chosen, _ = OpenAIProvider.settings(env)
+        missing = OpenAIProvider.missing(env)
+        where = OpenAIProvider.destination(chosen or "(no model)", base or "(no endpoint)")
+        return where, OpenAIProvider.chunk, (f"{', '.join(missing)} not set" if missing else None)
     raise ProviderConfigError(f"unknown provider {name!r} (claude-code | openai)")
 
 
@@ -867,6 +912,9 @@ def run(a: argparse.Namespace) -> int:
             say(f"skipped: last run {age:.1f}h ago (< {a.if_stale}h)")
             return EXIT_OK
 
+    if a.plan:
+        return plan(a, db, sp, state)
+
     lock = RunLock(sp)
     if not lock.acquire():
         say(f"skipped: another derive is running ({lock.path})")
@@ -877,16 +925,67 @@ def run(a: argparse.Namespace) -> int:
         lock.release()
 
 
-def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any], say: Any) -> int:
-    env = read_env()
+def chosen_provider(a: argparse.Namespace, env: dict[str, str]) -> tuple[str, str | None]:
+    """(provider name, model or None): the flag, then the environment, then the config."""
     cfg = load_config()
-    provider_name = (
+    name = (
         a.provider
         or env.get("MEMWARE_DERIVE_PROVIDER")
         or str(get_dotted(cfg, "derive.provider") or "claude-code")
     )
     model = a.model or get_dotted(cfg, "derive.model")
-    provider = make_provider(provider_name, env, model=str(model) if model else None)
+    return name, str(model) if model else None
+
+
+def plan(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any]) -> int:
+    """``--plan``: every excerpt a run would send and where it would go — then stop.
+
+    The same watermark, session cap and region dedupe as a run (``gather_regions`` is the
+    run's own), but no provider is built, no model is called and nothing is written: not the
+    ledger, not the watermark, not the run lock, which a read-only view has no reason to hold.
+    ``--quiet`` keeps the summary and drops the excerpts."""
+    env = read_env()
+    name, model = chosen_provider(a, env)
+    where, default_chunk, why = provider_plan(name, env, model)
+    chunk = a.chunk or default_chunk
+    watermark = a.since if a.since is not None else int(state["watermark"])
+    say = (lambda *x, **k: None) if a.quiet else print
+
+    conn = open_readonly(db)
+    try:
+        head = max_turn_id(conn)
+        sessions = sessions_with_new_turns(conn, watermark, max_sessions=a.max_sessions)
+        gathered = gather_regions(conn, sessions, watermark)
+    finally:
+        conn.close()
+
+    say(f"db          : {db}")
+    say(f"state       : {sp}")
+    say(f"watermark   : {watermark} -> {head} ({head - watermark} new turns)")
+    say("mode        : PLAN (no model call, no writes)\n")
+    # Numbered as the model would see them: a run sends "[n] <excerpt>", n across all chunks.
+    for n, (session, turn, region) in enumerate(gathered, 1):
+        say(f"  [{n}] {region}")
+        say(f"      session {session}  source {source_pointer(session, int(turn['id']))}")
+    if gathered:
+        say("")
+    print(
+        f"sessions    : {len(sessions)} with new turns"
+        f"{' (capped)' if len(sessions) >= a.max_sessions else ''}"
+    )
+    print(f"excerpts    : {len(gathered)}  ({sum(len(g[2]) for g in gathered):,} chars)")
+    print(f"model calls : {-(-len(gathered) // chunk)}  ({len(gathered)} excerpts / chunk {chunk})")
+    print(f"destination : {name}: {where}")
+    if why:
+        print(f"not ready   : {why} — a run would exit {EXIT_CONFIG} and send nothing")
+    say("watermark   : NOT advanced (plan)")
+    return EXIT_OK
+
+
+def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any], say: Any) -> int:
+    env = read_env()
+    provider_name, model = chosen_provider(a, env)
+    provider = make_provider(provider_name, env, model=model)
     if a.chunk:
         provider.chunk = a.chunk
     watermark = a.since if a.since is not None else int(state["watermark"])
@@ -912,7 +1011,10 @@ def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any],
                 save_state(sp, state)
             return EXIT_OK
         say(f"provider    : {provider.describe()}")
-        say(f"mode        : {'APPLY (writes)' if a.apply else 'dry run (no writes)'}\n")
+        say(
+            f"mode        : "
+            f"{'APPLY (writes)' if a.apply else 'dry run (excerpts go to the model, no writes)'}\n"
+        )
         gathered = gather_regions(conn, sessions, watermark)
     finally:
         conn.close()
@@ -990,11 +1092,30 @@ def cmd_derive(a: argparse.Namespace) -> int:
         return EXIT_FAIL
 
 
+def _positive_int(s: str) -> int:
+    try:
+        n = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {s!r}") from None
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
 def add_arguments(sp: argparse.ArgumentParser) -> None:
-    sp.add_argument(
+    mode = sp.add_mutually_exclusive_group()
+    mode.add_argument(
         "--apply",
         action="store_true",
-        help="write candidates and advance the watermark (default: dry run, prints them)",
+        help="write candidates and advance the watermark. Without it a run is a dry run: it "
+        "still sends every excerpt to the provider and skips only the write (see --plan)",
+    )
+    mode.add_argument(
+        "--plan",
+        action="store_true",
+        help="the no-network view: print every excerpt a run would send, the model calls and "
+        "the destination, then stop — no provider call, no writes, works before `claude` or "
+        "OPENAI_* is set up",
     )
     sp.add_argument(
         "--provider",
@@ -1005,7 +1126,7 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--model", help="model for the provider (claude-code default: haiku)")
     sp.add_argument(
         "--chunk",
-        type=int,
+        type=_positive_int,
         metavar="N",
         help="excerpts per model call (claude-code default 24, openai 8)",
     )
@@ -1028,5 +1149,9 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
         action="store_true",
         help="with --if-stale: also skip unless `memware config derive.auto true`",
     )
-    sp.add_argument("--quiet", action="store_true", help="print nothing on success or skip")
+    sp.add_argument(
+        "--quiet",
+        action="store_true",
+        help="print nothing on success or skip (with --plan: only the summary)",
+    )
     sp.add_argument("--verbose", action="store_true", help="print every rejected excerpt")

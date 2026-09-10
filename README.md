@@ -110,7 +110,8 @@ store, and `MEMWARE_NO_CAPTURE=1` for any session you do not want indexed. See
 ## Deriving beliefs
 
 ```bash
-memware derive            # dry run: prints the facts it would file
+memware derive --plan     # no network: every excerpt a run would send, and where
+memware derive            # dry run: sends the excerpts to the model, prints the facts, files nothing
 memware derive --apply    # files them; runs again later from where it stopped
 ```
 
@@ -124,6 +125,12 @@ carry reliability 0.5, below anything you stated yourself, so a contradiction la
 The default provider is the Claude Code CLI on your own subscription (`claude -p`, Haiku),
 so there is nothing to configure. `--provider openai` sends the extraction to any
 OpenAI-compatible endpoint instead (`OPENAI_BASE_URL` / `OPENAI_MODEL` / `OPENAI_API_KEY`).
+
+A dry run is not offline: it sends the excerpts to that provider and skips only the write.
+`--plan` is the view that sends nothing. It lists every excerpt a run would send with its
+source pointer, then the session, excerpt, character and model-call counts and the
+destination, and it works before `claude` or `OPENAI_*` is set up. Read it before you turn
+derive on for transcripts that must not leave the machine.
 
 You do not need an always-on machine. The plugin can run it for you on session start, at
 most once a day: `memware config derive.auto true`. Other options — a macOS LaunchAgent

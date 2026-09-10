@@ -875,7 +875,8 @@ def build_parser() -> argparse.ArgumentParser:
         "fill the ledger from the transcripts: durable facts as beliefs (docs/scheduling.md)",
         epilog=(
             "Examples:\n"
-            "  memware derive                         dry run: print what it would file\n"
+            "  memware derive --plan                  no network: every excerpt a run would send, and where\n"
+            "  memware derive                         dry run: sends excerpts to the model, writes nothing\n"
             "  memware derive --apply                 file the candidates, advance the watermark\n"
             "  memware config derive.auto true        let the Claude Code plugin run it daily\n"
             "  memware derive --provider openai       any OpenAI-compatible endpoint (OPENAI_* env)\n"
