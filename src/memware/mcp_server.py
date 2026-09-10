@@ -25,14 +25,21 @@ def build() -> Any:
 
     @app.tool()
     def recall(queries: list[str], k: int = 8, what: str = "all") -> list[dict[str, Any]]:
-        """Search past sessions and currently valid beliefs.
+        """Call this when the question involves:
+        - a past decision or its rationale ("why did we choose X?")
+        - a rejected alternative
+        - why something is the way it is
+        - work from an earlier session
+        - anything cross-repo
+        - anything not in the working tree: a value said in chat, a quoted number,
+          what was tried before
+        And before answering "I don't know" or re-deriving something likely settled.
+        Not for: finding code in the tree now (grep it).
 
-        Pass 3-5 phrasings, not one: the question as asked, a synonym or two, related
-        concepts, and the literal value you expect to see (a port number, a file name,
-        a version). Results are fused across phrasings. The index is keyword-based; your
-        phrasings are what make it semantic. what: all|turns|beliefs. A turn hit carries
-        the matching passage rather than the whole turn, plus a session id and an ``id``
-        you can pass to read_session's ``around`` for the full turn and its neighbours.
+        Searches past sessions and current beliefs. Pass 3-5 phrasings: the question, synonyms,
+        related concepts, the literal value you expect (a port, file name, version). The index
+        is keyword-based; fusing your phrasings makes it semantic. what: all|turns|beliefs.
+        Pass a turn hit's ``id`` to read_session's ``around`` for the full turn.
         """
         with Store(db) as s:
             hits = []
@@ -46,13 +53,19 @@ def build() -> Any:
     def read_session(
         session: str, around: int | None = None, window: int = 5
     ) -> list[dict[str, Any]]:
-        """Read a session's turns whole, or a window around one turn id from recall."""
+        """Call this when a recall hit needs its surrounding conversation.
+
+        Reads a session's turns whole, or a window around one turn id from recall.
+        """
         with Store(db) as s:
             return read_turns(s, session, around=around, window=window)
 
     @app.tool()
     def beliefs(subject: str | None = None) -> list[dict[str, Any]]:
-        """Currently valid beliefs, optionally filtered by subject."""
+        """Call this for the current value of a setting or decision the ledger tracks.
+
+        Returns currently valid beliefs, optionally filtered by subject.
+        """
         with Store(db) as s:
             return current(s, subject)
 
