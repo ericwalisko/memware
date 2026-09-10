@@ -2,6 +2,8 @@ import io
 import json
 import sys
 
+import pytest
+
 from memware.cli import main
 from tests.conftest import write_claude_jsonl
 
@@ -93,20 +95,180 @@ def test_setup_yes_backfills_and_makes_first_backup(tmp_path, capsys, monkeypatc
     assert (dest / "transcripts" / "p" / "s.jsonl").exists()  # transcripts mirrored
 
 
+BACKUP_TIP = "to configure backups"
+DERIVE_HINT = "added `derive`"
+
+
 def test_setup_hint_shows_until_backups_configured(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("MEMWARE_HOME", str(tmp_path / "home"))
     db = str(tmp_path / "m.db")
 
-    main(["--db", db, "stats"])  # never set up -> the tip appears on stderr
-    assert "memware setup" in capsys.readouterr().err
+    main(["--db", db, "stats"])  # never set up -> both tips appear on stderr
+    err = capsys.readouterr().err
+    assert BACKUP_TIP in err and DERIVE_HINT in err
 
-    main(["--db", db, "stats", "--json"])  # machine-readable callers never see it
+    main(["--db", db, "stats", "--json"])  # machine-readable callers never see them
     assert "memware setup" not in capsys.readouterr().err
 
     main(["--db", db, "config", "backup.dest", str(tmp_path / "bk")])
     capsys.readouterr()
-    main(["--db", db, "stats"])  # once a destination exists the tip is gone
+    main(["--db", db, "stats"])  # once a destination exists the backup tip is gone...
+    err = capsys.readouterr().err
+    assert BACKUP_TIP not in err
+    assert DERIVE_HINT in err  # ...but nothing has asked about derive yet
+
+    main(["--db", db, "config", "derive.auto", "false"])
+    capsys.readouterr()
+    main(["--db", db, "stats"])
     assert "memware setup" not in capsys.readouterr().err
+
+
+def _answers(monkeypatch, *lines):
+    """Feed setup's prompts; input() raises EOFError once they run out, like a closed stdin."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO("".join(f"{x}\n" for x in lines)))
+
+
+def _no_transcripts(db, tmp_path):
+    """Point the backfill step at nothing, so setup never offers to index this machine's own
+    ~/.claude/projects and the prompts are the same everywhere."""
+    main(["--db", db, "config", "backup.transcript_src", str(tmp_path / "no-transcripts")])
+
+
+def test_derive_consent_hint_after_an_upgrade_until_setup_asks(tmp_path, capsys, monkeypatch):
+    """The reported install: setup last ran on 0.2.5, before derive existed, and derive.auto was
+    never written. Every stats run says derive exists until setup has asked; setup asks, writes
+    the answer, and the hint stops."""
+    from memware.config import get_dotted, has_key, load_config
+
+    db = str(tmp_path / "m.db")
+    main(["--db", db, "config", "setup.completed_version", "0.2.5"])
+    _no_transcripts(db, tmp_path)
+    capsys.readouterr()
+
+    main(["--db", db, "stats"])
+    err = capsys.readouterr().err
+    assert err.count(DERIVE_HINT) == 1
+    assert "memware derive --plan" in err
+    assert BACKUP_TIP not in err  # setup ran before; only the new question is raised
+
+    main(["--db", db, "stats", "--json"])
+    assert DERIVE_HINT not in capsys.readouterr().err
+
+    _answers(monkeypatch, "", "n")  # keep no backup folder; decline derive
+    assert main(["--db", db, "setup"]) == 0
+    out = capsys.readouterr().out
+    assert "Excerpts go to" in out and "memware derive --plan" in out
+    assert "Enable automatic derive (runs at session start, at most once a day)? [y/N]" in out
+    assert has_key("derive.auto")  # the decline is on file, not merely the default
+    assert get_dotted(load_config(), "derive.auto") is False
+
+    main(["--db", db, "stats"])
+    assert "memware setup" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"setup.completed_version": "0.2.5", "derive.auto": "false"},  # declined without setup
+        {"setup.completed_version": "0.2.5", "derive.auto": "true"},  # switched on by hand
+        {"setup.completed_version": "0.4.0"},  # setup already asked
+        {"setup.completed_version": "0.10.0"},  # a string compare would call this older
+    ],
+)
+def test_derive_consent_hint_stops_once_answered_or_asked(tmp_path, capsys, settings):
+    db = str(tmp_path / "m.db")
+    for k, v in settings.items():
+        main(["--db", db, "config", k, v])
+    capsys.readouterr()
+    main(["--db", db, "stats"])
+    assert DERIVE_HINT not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("closed_stdin", [False, True], ids=["--yes", "closed-stdin"])
+def test_setup_never_switches_derive_without_an_answer(tmp_path, capsys, monkeypatch, closed_stdin):
+    from memware.config import get_dotted, has_key, load_config
+
+    db = str(tmp_path / "m.db")
+    _no_transcripts(db, tmp_path)
+    args = ["--db", db, "setup", *([] if closed_stdin else ["--yes"])]
+
+    _answers(monkeypatch)
+    assert main(args) == 0
+    assert "Automatic derive stays off" in capsys.readouterr().out
+    assert not has_key("derive.auto")  # not even a decline is invented
+    assert get_dotted(load_config(), "derive.auto") is False
+
+    main(["--db", db, "config", "derive.auto", "true"])
+    _answers(monkeypatch)
+    assert main(args) == 0
+    assert "Automatic derive stays on" in capsys.readouterr().out
+    assert get_dotted(load_config(), "derive.auto") is True  # nor is a yes taken away
+
+
+def test_setup_derive_answer_is_persisted_and_offered_back(tmp_path, capsys, monkeypatch):
+    from memware.config import get_dotted, load_config
+
+    db = str(tmp_path / "m.db")
+    _no_transcripts(db, tmp_path)
+    capsys.readouterr()
+
+    _answers(monkeypatch, "", "y")
+    assert main(["--db", db, "setup"]) == 0
+    assert "Automatic derive on" in capsys.readouterr().out
+    assert get_dotted(load_config(), "derive.auto") is True
+
+    _answers(monkeypatch, "", "")  # re-run: Enter keeps what is on file
+    assert main(["--db", db, "setup"]) == 0
+    out = capsys.readouterr().out
+    assert "Current: on" in out and "at most once a day)? [Y/n]" in out
+    assert get_dotted(load_config(), "derive.auto") is True
+
+
+def test_derive_destination_names_where_excerpts_go(tmp_path, monkeypatch):
+    from memware.cli import _derive_destination
+    from memware.config import load_config
+
+    for k in ("MEMWARE_DERIVE_PROVIDER", "MEMWARE_DERIVE_MODEL", "OPENAI_BASE_URL", "OPENAI_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    assert _derive_destination(load_config()) == (
+        "haiku via the Claude Code CLI (`claude -p`) on your own subscription"
+    )
+    monkeypatch.setenv("MEMWARE_DERIVE_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.example.com/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "small-model")
+    assert _derive_destination(load_config()) == (
+        "small-model at llm.example.com, an OpenAI-compatible endpoint"
+    )
+
+
+@pytest.mark.parametrize("have_packaging", [True, False])
+def test_consent_versions_compare_as_versions(monkeypatch, have_packaging):
+    from memware.cli import _older
+
+    if not have_packaging:
+        monkeypatch.setitem(sys.modules, "packaging.version", None)  # the import now fails
+    assert _older("0.2.5", "0.4.0")
+    assert not _older("0.10.0", "0.4.0")  # as strings, "0.10.0" < "0.4.0"
+    assert not _older("0.4.0", "0.4.0")
+    assert not _older("0.4", "0.4.0")
+    assert not _older("0.4.1", "0.4.0")
+    assert _older("not a version", "0.4.0")  # unreadable reads as never asked
+
+
+def test_config_set_writes_only_that_key(tmp_path, capsys):
+    """Saving the merged view wrote every default into the file as if chosen, so a user who
+    had never been asked about derive read the same as one who had declined it."""
+    from memware.config import config_path, has_key
+
+    db = str(tmp_path / "m.db")
+    main(["--db", db, "config", "backup.dest", str(tmp_path / "bk")])
+    assert json.loads(config_path().read_text()) == {"backup": {"dest": str(tmp_path / "bk")}}
+    assert not has_key("derive.auto")
+    capsys.readouterr()
+
+    main(["--db", db, "config", "--json"])  # reading still shows the merged defaults
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["derive"]["auto"] is False and shown["backup"]["keep_days"] == [1, 3, 7, 14]
 
 
 def test_bare_sync_catches_up_configured_transcript_src(tmp_path, capsys, monkeypatch):

@@ -45,10 +45,30 @@ All notable changes to this project are documented here. The format follows
   old and turns waiting; or nothing recalled in 30 days. A derive that ran and found nothing
   no longer looks the same as one that never ran. `--json` carries the same facts as fields
   and prints no verdict.
+- **`memware setup` asks about `derive`.** After the backup steps, setup says what derive
+  does and where the excerpts go: Haiku through the Claude Code CLI on your own
+  subscription, or the OpenAI-compatible endpoint you configured. It points at
+  `memware derive --plan` for a preview that makes no network call, then asks whether to
+  switch on the automatic run. Setup writes either answer, so a decline sticks. `--yes`
+  and a closed stdin leave `derive.auto` unchanged, so setup never switches it on
+  without an answer.
 
 ### Fixed
 - `derive --if-stale` read the last run as an hour older than it was whenever the local zone
   was on daylight time; the age is now UTC arithmetic.
+- Upgrading to 0.4.0 never mentioned `derive`. Derive is off by default, which is right,
+  since it sends transcript excerpts to a model. But nothing said it existed: the setup
+  hint only checked that setup had run at some point, never on which version. `init`,
+  `backfill` and `stats` now print a one-line hint when a version added a feature that
+  sends data to a model and setup has not asked about it yet. For `derive` that means
+  setup last ran before 0.4.0 (or never) and `derive.auto` is not set. The hint stops once
+  setup runs on 0.4.0 or later, or once `derive.auto` is set to either value. It stays
+  silent from hooks and with `--json`.
+- `memware config KEY VALUE` and `memware setup` now write only the keys you set. Both
+  used to save the whole merged config, which recorded every default as if you had chosen
+  it. A default changed in a later release then never reached you, and "never asked about
+  derive" looked the same as "declined". Configs saved that way on 0.4.0 already hold
+  `derive.auto: false`, so those installs will not see the new hint.
 
 ## [0.4.0] - 2026-09-09
 

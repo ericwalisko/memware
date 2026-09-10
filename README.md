@@ -91,9 +91,10 @@ sessions; index the transcripts already on disk so recall works over past work f
 memware backfill                 # indexes ~/.claude/projects (idempotent; ~5 s for a month)
 ```
 
-Prefer a guided first run? `memware setup` walks through the backfill and backups together and
-prints the operating guidance — safe on a fresh install and after upgrading from a pre-0.2
-(no-backups) version; `memware setup --yes` accepts the defaults non-interactively.
+Prefer a guided first run? `memware setup` walks through the backfill and backups together, asks
+whether `derive` may run automatically, and prints the operating guidance. Run it on a fresh install
+or after an upgrade. `memware setup --yes` accepts the defaults non-interactively and never
+switches derive on.
 
 The *belief ledger* starts empty and is not backfilled — beliefs are derived, not stored in
 transcripts. It fills as you work (via the `remember` tool) and through `memware derive`,
@@ -133,9 +134,10 @@ destination, and it works before `claude` or `OPENAI_*` is set up. Read it befor
 derive on for transcripts that must not leave the machine.
 
 You do not need an always-on machine. The plugin can run it for you on session start, at
-most once a day: `memware config derive.auto true`. Other options — a macOS LaunchAgent
-that catches up after sleep, a systemd timer with `Persistent=true`, plain cron — are in
-[docs/scheduling.md](docs/scheduling.md).
+most once a day. `memware setup` is where you switch that on: it shows where the excerpts go
+before it asks. `memware config derive.auto true` sets the same switch directly. Other
+options — a macOS LaunchAgent that catches up after sleep, a systemd timer with
+`Persistent=true`, plain cron — are in [docs/scheduling.md](docs/scheduling.md).
 
 ## Use it from Hermes Agent
 
