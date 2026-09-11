@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **MCP tool descriptions say when to call them, not only how.** Recall fires only when the
+  model elects to call it, and it competes with grep, so its description now opens with an
+  explicit "Call this when" list (past decisions and their rationale, rejected alternatives,
+  why something is the way it is, earlier sessions, cross-repo, anything not in the working
+  tree, and before answering "I don't know") and a "Not for" line (code in the tree: grep
+  it), with the phrasing how-to tightened behind it, all under 130 words. `beliefs` and
+  `read_session` each gained a trigger line. A test holds the budget and the triggers. The
+  Hermes provider's tool schema is unchanged.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added
