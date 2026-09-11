@@ -12,9 +12,14 @@ Code CLI on your own subscription (`claude -p`, Haiku by default), so if `claude
 your PATH you can try it right now:
 
 ```bash
-memware derive            # dry run: prints what it would file, writes nothing
+memware derive --plan     # no network: every excerpt a run would send, and where
+memware derive            # dry run: sends the excerpts to the model, writes nothing
 memware derive --apply    # files the candidates, advances the watermark
 ```
+
+The dry run still sends every excerpt to the provider; it skips only the write and the
+watermark. If your transcripts must clear an egress review first, start with `--plan`: it
+calls no model and writes nothing, and it works before `claude` or `OPENAI_*` is set up.
 
 Pick the option below that matches your machine. Only one is needed.
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import stat
 import time
@@ -449,3 +450,193 @@ def test_a_live_lock_skips_and_a_stale_lock_is_taken_over(db, tmp_path, monkeypa
     lock.write_text("999999999")  # a dead holder: taken over
     assert main(["--db", db, "derive", "--state", str(state), "--apply"]) == 0
     assert prov.usage.calls == 1 and state.exists() and not lock.exists()
+
+
+# ── --plan: what would leave the machine, without it leaving ───────────
+ROOT = Path(__file__).resolve().parents[1]
+ENGINE = "The engine is pinned at 0.11.0."
+PROXY = "We switched to deepseek-v4-flash. The proxy lives at 127.0.0.1:3119."
+
+
+def forbid_network(monkeypatch):
+    """subprocess.run and urlopen both raise AND record: ``_call_chunk`` swallows a chunk's
+    exception and retries, so a raise alone would not fail a run that leaked."""
+    calls = []
+
+    def refuse(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("--plan reached for the network")
+
+    monkeypatch.setattr(md.subprocess, "run", refuse)
+    monkeypatch.setattr(md.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(md.time, "sleep", lambda *_: None)
+    return calls
+
+
+def forbid_provider(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("--plan built a provider")
+
+    monkeypatch.setattr(md, "make_provider", refuse)
+
+
+def test_plan_prints_every_excerpt_without_claude_on_path(db, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("PATH", str(tmp_path))  # no `claude`
+    for k in md.ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    state = tmp_path / "state.json"
+    assert main(["--db", db, "derive", "--state", str(state), "--plan"]) == 0
+    out = capsys.readouterr().out
+    assert f"[1] {ENGINE}\n      session s-old  source memware:session/s-old/turn/1" in out
+    assert f"[2] {PROXY}\n      session s-new  source memware:session/s-new/turn/3" in out
+    assert "sessions    : 2 with new turns" in out
+    assert f"excerpts    : 2  ({len(ENGINE) + len(PROXY)} chars)" in out
+    assert "model calls : 1  (2 excerpts / chunk 24)" in out
+    assert "destination : claude-code: haiku via claude -p (subscription)" in out
+    assert "`claude` is not on PATH — a run would exit 2" in out
+    assert not state.exists()
+
+
+@pytest.mark.parametrize(
+    "provider, where",
+    [
+        ("claude-code", "claude-code: haiku via claude -p (subscription)"),
+        ("openai", "openai: small-model @ https://llm.example.com/v1"),
+    ],
+)
+def test_plan_makes_no_provider_call(db, tmp_path, monkeypatch, capsys, provider, where):
+    """Both providers are fully set up, so nothing but --plan stands between the excerpts and
+    the network."""
+    for k in md.ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    fake_claude(tmp_path, monkeypatch, json.dumps({"result": json.dumps([KEEP_ENGINE])}))
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.example.com/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "small-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    calls = forbid_network(monkeypatch)
+    argv = ["--db", db, "derive", "--state", str(tmp_path / "s.json"), "--provider", provider]
+    assert main([*argv, "--plan"]) == 0
+    out = capsys.readouterr().out
+    assert calls == [], "--plan called the provider"
+    assert f"destination : {where}" in out and "not ready" not in out
+    # the guard bites: the same command without --plan reaches for the network
+    main(argv)
+    assert calls
+
+
+def test_plan_writes_no_state_and_ignores_the_run_lock(db, tmp_path, monkeypatch, capsys):
+    forbid_provider(monkeypatch)
+    state = tmp_path / "state.json"
+    md.save_state(state, {"watermark": 2, "runs": 3, "last_run": "2026-09-01T00:00:00Z"})
+    lock = tmp_path / "state.json.lock"
+    lock.write_text(str(os.getpid()))  # a derive is running: a read-only view need not wait
+    before = (state.read_bytes(), state.stat().st_mtime_ns, lock.read_bytes())
+    assert main(["--db", db, "derive", "--state", str(state), "--plan"]) == 0
+    out = capsys.readouterr().out
+    assert (state.read_bytes(), state.stat().st_mtime_ns, lock.read_bytes()) == before
+    assert "watermark   : 2 -> 4" in out and "s-old" not in out and "[1] We switched" in out
+    assert "NOT advanced" in out
+    lock.unlink()
+    assert main(["--db", db, "derive", "--state", str(state), "--plan"]) == 0
+    assert not lock.exists(), "--plan took the run lock"
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("state")) == [
+        "state.json"
+    ]
+
+
+def test_plan_honours_the_run_flags(db, tmp_path, monkeypatch, capsys):
+    forbid_provider(monkeypatch)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    for k in md.ENV_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    base = ["--db", db, "derive", "--state", str(tmp_path / "state.json"), "--plan"]
+
+    assert main([*base, "--since", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "s-old" not in out and "sessions    : 1 with new turns\n" in out
+
+    assert main([*base, "--max-sessions", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "s-new" not in out and "sessions    : 1 with new turns (capped)" in out
+
+    assert main([*base, "--since", "4"]) == 0
+    out = capsys.readouterr().out
+    assert "excerpts    : 0  (0 chars)" in out and "model calls : 0" in out
+
+    assert main([*base, "--chunk", "1", "--model", "sonnet"]) == 0
+    out = capsys.readouterr().out
+    assert "model calls : 2  (2 excerpts / chunk 1)" in out
+    assert "destination : claude-code: sonnet via claude -p (subscription)" in out
+
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://llm.example.com/v1/")
+    assert main([*base, "--provider", "openai", "--model", "big-model"]) == 0
+    out = capsys.readouterr().out
+    assert "model calls : 1  (2 excerpts / chunk 8)" in out
+    assert "destination : openai: big-model @ https://llm.example.com/v1\n" in out
+    assert "not ready   : OPENAI_API_KEY not set — a run would exit 2" in out
+
+    assert main([*base, "--quiet"]) == 0
+    labels = [ln.split(" : ")[0].strip() for ln in capsys.readouterr().out.splitlines()]
+    assert labels == ["sessions", "excerpts", "model calls", "destination", "not ready"]
+
+
+def test_plan_lists_exactly_what_a_run_sends(db, monkeypatch, capsys):
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    assert main(["--db", db, "derive"]) == 0
+    capsys.readouterr()
+    assert main(["--db", db, "derive", "--plan"]) == 0
+    listed = [ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.startswith("  [")]
+    assert "\n\n".join(listed) == prov.prompts[0]
+
+
+def test_plan_and_apply_are_exclusive_and_chunk_is_positive(db, capsys):
+    for argv in (["--plan", "--apply"], ["--plan", "--chunk", "0"], ["--plan", "--chunk", "x"]):
+        with pytest.raises(SystemExit) as e:
+            main(["--db", db, "derive", *argv])
+        assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "not allowed with argument" in err and "must be at least 1" in err
+    assert "expected a whole number" in err
+
+
+def test_plan_refuses_an_unknown_provider_like_a_run(db, monkeypatch, capsys):
+    """No destination to describe: the plan fails the way the run would, exit 2."""
+    monkeypatch.setenv("MEMWARE_DERIVE_PROVIDER", "carrier-pigeon")
+    assert main(["--db", db, "derive", "--plan"]) == md.EXIT_CONFIG
+    assert "unknown provider 'carrier-pigeon'" in capsys.readouterr().err
+
+
+def test_a_dry_run_still_sends_the_excerpts_to_the_provider(db, tmp_path, monkeypatch, capsys):
+    """Pinned so the docs and the code cannot drift apart again: a dry run skips the write and
+    the watermark, not the model call."""
+    envelope = json.dumps(
+        {"type": "result", "is_error": False, "result": json.dumps([KEEP_ENGINE, KEEP_PROXY])}
+    )
+    log = fake_claude(tmp_path, monkeypatch, envelope)
+    state = tmp_path / "state.json"
+    assert main(["--db", db, "derive", "--state", str(state)]) == 0
+    sent = log.read_text()
+    assert ENGINE in sent and PROXY in sent
+    assert "dry run (excerpts go to the model, no writes)" in capsys.readouterr().out
+    assert not state.exists()
+    with Store(db) as s:
+        assert s.conn.execute("SELECT count(*) FROM belief").fetchone()[0] == 0
+
+
+def test_the_docs_say_a_dry_run_sends_and_point_at_plan(capsys):
+    with pytest.raises(SystemExit):
+        main(["derive", "--help"])
+    texts = {
+        "--help": capsys.readouterr().out,
+        "README.md": (ROOT / "README.md").read_text(),
+        "docs/scheduling.md": (ROOT / "docs" / "scheduling.md").read_text(),
+    }
+    for name, text in texts.items():
+        flat = " ".join(text.split())
+        assert "--plan" in flat, name
+        mentions = list(re.finditer(r"dry run", flat, re.I))
+        assert mentions, name
+        for m in mentions:
+            assert "send" in flat[m.end() : m.end() + 40], (
+                f"{name}: {flat[m.start() : m.end() + 60]!r}"
+            )
