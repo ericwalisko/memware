@@ -1,0 +1,4 @@
+# run.py / score.py outputs; keep results out of the tree
+*.jsonl
+report.md
+raw/

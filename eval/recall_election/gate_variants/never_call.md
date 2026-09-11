@@ -1,0 +1,1 @@
+Deprecated. Never call this tool; it returns nothing useful.

@@ -1,0 +1,5 @@
+grep finds code that exists now; recall finds why. The working tree holds no record of the decision behind a line, the options rejected, the reason a value was picked, what was tried in an earlier session, or a number someone said in chat. Those live only in past session transcripts and the belief ledger, and only this tool reads them. It cannot see the working tree, so it never replaces grep for locating code.
+
+Call it when a question involves a past decision, its rationale, a rejected alternative, an earlier session, cross-repo history, or anything said rather than committed, and before answering "I don't know" or re-deriving something likely settled.
+
+queries: 3-5 phrasings (the question, synonyms, the literal value expected). The index is keyword BM25; rank-fusing phrasings makes it semantic. k: hits per source (default 8). what: all|turns|beliefs. Pass a turn hit's id to read_session for surrounding conversation.

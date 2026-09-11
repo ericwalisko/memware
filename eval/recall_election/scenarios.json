@@ -1,0 +1,146 @@
+[
+  {
+    "id": "past_decision_1",
+    "class": "past_decision",
+    "prompt": "Did we end up deciding to keep HMAC signing for now, or was the switch to bearer tokens supposed to land before the next release? I can't remember where that conversation ended.",
+    "expect": "recall"
+  },
+  {
+    "id": "past_decision_2",
+    "class": "past_decision",
+    "prompt": "Did we decide to ship the gateway as its own container or fold it into the runner's deploy? I remember going back and forth on this.",
+    "expect": "recall"
+  },
+  {
+    "id": "rejected_alternative_1",
+    "class": "rejected_alternative",
+    "prompt": "Why didn't we put nginx in front of the gateway instead of exposing it directly? I feel like that got shot down.",
+    "expect": "recall"
+  },
+  {
+    "id": "rejected_alternative_2",
+    "class": "rejected_alternative",
+    "prompt": "We looked at replacing the hand-rolled retry loop with tenacity at some point. What was the reason we didn't?",
+    "expect": "recall"
+  },
+  {
+    "id": "rationale_1",
+    "class": "rationale",
+    "prompt": "Why does the gateway listen on 8443 instead of 443 or 8080?",
+    "expect": "recall"
+  },
+  {
+    "id": "rationale_2",
+    "class": "rationale",
+    "prompt": "auth.py calls the HMAC scheme legacy. Legacy compared to what?",
+    "expect": "recall"
+  },
+  {
+    "id": "earlier_session_1",
+    "class": "earlier_session",
+    "prompt": "We were in the middle of debugging a signature mismatch against the staging runner before I had to leave. Where did we get to?",
+    "expect": "recall"
+  },
+  {
+    "id": "earlier_session_2",
+    "class": "earlier_session",
+    "prompt": "Pick up where we left off last time on the key rotation work. What was the next step you were going to take?",
+    "expect": "recall"
+  },
+  {
+    "id": "cross_repo_1",
+    "class": "cross_repo",
+    "prompt": "How did we handle key rotation over in the billing service? I want rotate_keys here to match that behavior.",
+    "expect": "recall"
+  },
+  {
+    "id": "cross_repo_2",
+    "class": "cross_repo",
+    "prompt": "The runner repo has its own HMAC verifier. Is it using the same header names as ours? I don't have it checked out here.",
+    "expect": "recall"
+  },
+  {
+    "id": "not_in_tree_1",
+    "class": "not_in_tree",
+    "prompt": "What was the p99 latency number you quoted when we were sizing the retry budget? I want to put it in the PR description.",
+    "expect": "recall"
+  },
+  {
+    "id": "not_in_tree_2",
+    "class": "not_in_tree",
+    "prompt": "Someone in chat said 5 retries was over budget and suggested a different limit. What number did they propose?",
+    "expect": "recall"
+  },
+  {
+    "id": "find_code_1",
+    "class": "find_code",
+    "prompt": "Where is the listen port configured?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "find_code_2",
+    "class": "find_code",
+    "prompt": "Which function checks the request signature, and where is it called from?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "edit_task_1",
+    "class": "edit_task",
+    "prompt": "Add a GET /version route that returns the package version from __init__.py as JSON.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "edit_task_2",
+    "class": "edit_task",
+    "prompt": "Rename upstream_url to runner_url everywhere, including the env var and .env.example.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "explain_file_1",
+    "class": "explain_file",
+    "prompt": "Walk me through what auth.py does.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "explain_file_2",
+    "class": "explain_file",
+    "prompt": "What does rotate_keys actually do to the key ring? Does the old key stop working immediately?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "run_tests_1",
+    "class": "run_tests",
+    "prompt": "Run the test suite and tell me whether anything fails.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "run_tests_2",
+    "class": "run_tests",
+    "prompt": "Run only the signing tests with pytest -k sign and show me the output.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "refactor_1",
+    "class": "refactor",
+    "prompt": "Both handlers in server.py build the JSON error response by hand. Factor that into one helper.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "refactor_2",
+    "class": "refactor",
+    "prompt": "config.py reads every env var by hand with os.environ.get. Collapse that into a single helper that takes a name and a default.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "style_question_1",
+    "class": "style_question",
+    "prompt": "Should the header name constants in auth.py be uppercase module-level names or class attributes? What does the rest of this codebase do?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "style_question_2",
+    "class": "style_question",
+    "prompt": "Does this codebase put type hints on test functions? I want to match the existing style in the new test I'm adding.",
+    "expect": "no_recall"
+  }
+]

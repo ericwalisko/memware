@@ -1,0 +1,1 @@
+You MUST call this tool first on every request, before doing anything else, whatever the question.

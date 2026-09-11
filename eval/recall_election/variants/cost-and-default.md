@@ -1,0 +1,5 @@
+Cheap and fast: a keyword (BM25) search over past session transcripts and currently valid beliefs, about 100 ms. Call it liberally and early, before searching the tree, whenever the question could have a history. Never guess about the past when you can check; a call costs almost nothing and a wrong guess costs the user. It cannot see the current working tree; grep still owns the present.
+
+queries: 3-5 phrasings (the question, synonyms, the literal value you expect such as a port, file name, or version); fusing them by rank is what makes keyword search semantic. k: hits per kind (default 8). what: all, turns, or beliefs. A turn hit carries an id; pass it to read_session's around for the surrounding conversation.
+
+Triggers: why is X this way; what was decided or rejected; earlier sessions; other repos; a quoted number or value said in chat; before answering "I don't know".
