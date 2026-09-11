@@ -23,10 +23,13 @@ Hooks (`hooks/hooks.json`):
 | event | command | effect |
 |---|---|---|
 | `SessionStart` | `memware sync` (catch-up) + `memware backup --if-stale 20`, then `memware derive --apply --auto --if-stale 24` (a no-op until `memware config derive.auto true`), all backgrounded | indexes any session whose `SessionEnd` never ran, then a throttled backup — see note |
+| `SessionStart` | `memware notice --from-hook`, in the foreground | until `memware setup` has asked about `derive` (setup last ran before 0.4.0 or never, and `derive.auto` is unset), shows one line under the session header saying so; reads only the config, and prints nothing once either is true, after a compaction, or when the config will not parse |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
 | `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few currently valid beliefs relevant to the prompt as `additionalContext` |
 
 `SessionEnd` runs when Claude Code exits cleanly, but some environments **force-kill** it (a worktree/pane manager may `SIGKILL` the process group on close), and a `SIGKILL` cannot run any hook. The `SessionStart` hook covers that: it runs a bare `memware sync` — which catches up the configured `backup.transcript_src` (default `~/.claude/projects`) — plus a throttled backup, **backgrounded** so it never delays startup. So the previous session is indexed at the next start even if its `SessionEnd` was skipped; the raw transcript is durable on disk regardless.
+
+A backgrounded hook's output reaches nobody, so the notice is a separate foreground entry. Claude Code shows its `systemMessage` to you, not to the model: someone who only uses the plugin never runs `memware stats` and would otherwise never learn that `derive` exists. It takes a few tens of milliseconds, and it exits 0 with no output if `memware` is missing from the hook's `PATH` or is too old to know `notice`.
 
 The prompt-time hook injects **beliefs only**, capped by `-k`. Transcript
 search is on demand through the MCP server. Add it at **user** scope so every

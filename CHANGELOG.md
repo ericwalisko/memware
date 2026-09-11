@@ -52,6 +52,14 @@ All notable changes to this project are documented here. The format follows
   switch on the automatic run. Setup writes either answer, so a decline sticks. `--yes`
   and a closed stdin leave `derive.auto` unchanged, so setup never switches it on
   without an answer.
+- **The Claude Code plugin says `derive` exists, at session start.** Someone who only uses
+  the plugin never types a memware command, so the hint `stats` prints never reached them.
+  A new foreground `SessionStart` entry runs `memware notice --from-hook`, and Claude Code
+  shows the same hint as a line under the session header. It shows at every session start
+  until setup has asked (setup runs on 0.4.0 or later) or `derive.auto` is set either way.
+  It reads only the config file, never the store. It prints nothing after a compaction or
+  when the config will not parse. It exits 0 with no output when `memware` is missing or
+  too old to know `notice`. `memware notice` prints the same lines in a terminal.
 
 ### Fixed
 - `derive --if-stale` read the last run as an hour older than it was whenever the local zone

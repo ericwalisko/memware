@@ -56,6 +56,17 @@ Search turns and beliefs. Pass several phrasings, fused by reciprocal rank. Flag
 Emit the currently valid beliefs whose subject the prompt names, for prompt\-time injection.
 Hook\-friendly.
 .TP
+.B notice
+Print what
+.B setup
+has not asked about yet, one line each, such as whether
+.B derive
+may run; nothing when there is none. Reads only the configuration.
+.B \-\-from\-hook
+prints Claude Code hook JSON with a
+.BR systemMessage ,
+which the plugin shows at session start.
+.TP
 .BI "assert " "SUBJECT RELATION VALUE"
 Assert a fact; a new value supersedes the prior value for the same key. Flags:
 .BR \-\-source ", "
