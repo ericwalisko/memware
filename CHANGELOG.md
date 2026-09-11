@@ -27,6 +27,24 @@ All notable changes to this project are documented here. The format follows
   and `last_used` mean an agent or a person retrieved the belief.
 
 ### Added
+- **`memware digest`, injected at session start.** The prompt hook injects beliefs only and
+  nothing until the ledger fills, so most sessions never saw memware content, and a model that
+  has not seen it rarely calls recall. A foreground `SessionStart` entry beside the notice
+  (`memware digest --from-hook`, 5 s timeout) now injects one block of at most 1,200
+  characters. It opens with "memware has N sessions and M beliefs for this project; call recall
+  for past decisions, earlier sessions, anything not in the working tree." It then lists the
+  project's 5 most recent sessions, each as its date and first prompt clipped to 120
+  characters, and the currently valid beliefs whose subject shares a whole word with the
+  directory, repository or package name (`pyproject.toml`, `package.json`). The project is
+  scoped by transcript path, the way Claude Code names its per-project directories, and
+  answered from the existing `(source, seq)` index with no search. Inside a git repository the
+  primary checkout and every live worktree count as one project. The starting session is left
+  out, and nothing the digest reads counts as a use. It prints nothing for a project with no
+  indexed session or when there is no store, and never creates one. `-k`, `--max-chars` and
+  `--cwd` change the defaults. Only Claude Code transcripts are covered, and sessions from a
+  removed worktree drop out of the digest but not out of recall (`docs/integrations.md`). Like
+  the notice, the hook exits 0 with no output when `memware` is missing or too old to know
+  `digest`.
 - **`memware derive --plan`** — the no-network view of a run. It gathers the excerpts exactly as
   a run would (same watermark, session cap and dedupe) and prints each one with its session and
   source pointer. It then prints the session, excerpt, character and model-call counts and the

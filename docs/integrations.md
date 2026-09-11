@@ -24,6 +24,7 @@ Hooks (`hooks/hooks.json`):
 |---|---|---|
 | `SessionStart` | `memware sync` (catch-up) + `memware backup --if-stale 20`, then `memware derive --apply --auto --if-stale 24` (a no-op until `memware config derive.auto true`), all backgrounded | indexes any session whose `SessionEnd` never ran, then a throttled backup — see note |
 | `SessionStart` | `memware notice --from-hook`, in the foreground | until `memware setup` has asked about `derive` (setup last ran before 0.4.0 or never, and `derive.auto` is unset), shows one line under the session header saying so; reads only the config, and prints nothing once either is true, after a compaction, or when the config will not parse |
+| `SessionStart` | `memware digest --from-hook`, in the foreground (5 s timeout) | injects a block of at most 1,200 characters: a line pointing at `recall`, this project's 5 most recent sessions (date and first prompt), and the currently valid beliefs whose subject names the project; nothing for a project memware has no session for — see [the digest](#the-session-start-digest) |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
 | `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few currently valid beliefs relevant to the prompt as `additionalContext` |
 
@@ -48,6 +49,32 @@ Tools: `recall` (takes a list of phrasings — have the agent pass 3–5, includ
 
 Subagents: the plugin does not inject into subagents. They can call the MCP
 tools. Their transcripts are synced with the parent session's.
+
+### The session-start digest
+
+The prompt hook injects nothing until the ledger has beliefs, so for most sessions the digest is
+the first memware content the model sees. That matters because the model only recalls when it
+chooses to. Run `memware digest` in a project directory to see the block the hook injects. Like
+the notice, the hook exits 0 with no output if `memware` is missing from the hook's `PATH` or is
+too old to know `digest`.
+
+The digest is scoped by transcript path, with no search. Claude Code keeps a project's
+transcripts in `~/.claude/projects/<the directory, every non-alphanumeric character a dash>/`
+(under `$CLAUDE_CONFIG_DIR` when that is set), so only sessions from that directory count.
+Inside a git repository the project is the whole repository: the primary checkout and every
+live linked worktree, read from git's own files. The block lists the most recent sessions
+(`-k`, default 5) and the currently valid beliefs whose subject shares a whole word with the
+directory name, the repository name, or the package name in `pyproject.toml` or
+`package.json`, up to `--max-chars` (default 1,200). The session that is starting is left out.
+Nothing the digest reads counts as a recall.
+
+Two limits:
+
+- **Claude Code transcripts only.** Other harnesses have no per-project transcript layout, so
+  sessions indexed from Hermes or with `--harness generic` never appear in the digest. They
+  remain searchable through `recall`.
+- **Removed worktrees drop out.** Git stops listing a worktree once it is removed, so sessions
+  held only in a torn-down worktree leave the digest. `recall` still finds them.
 
 ## Hermes Agent
 

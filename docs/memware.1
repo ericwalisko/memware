@@ -67,6 +67,18 @@ prints Claude Code hook JSON with a
 .BR systemMessage ,
 which the plugin shows at session start.
 .TP
+.B digest
+Print what memware holds for the project in the current directory: a line pointing at
+.BR recall ,
+the most recent sessions (date and first prompt) and the currently valid beliefs whose subject
+names the project. A git repository's checkouts and live worktrees count as one project.
+Prints nothing for a project with no indexed session. Flags:
+.BR \-k ", "
+.BR \-\-max\-chars ", "
+.BR \-\-cwd ", "
+.B \-\-from\-hook
+(SessionStart hook JSON).
+.TP
 .BI "assert " "SUBJECT RELATION VALUE"
 Assert a fact; a new value supersedes the prior value for the same key. Flags:
 .BR \-\-source ", "

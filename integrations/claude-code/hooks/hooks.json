@@ -12,6 +12,11 @@
             "type": "command",
             "command": "memware notice --from-hook 2>/dev/null || true",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "memware digest --from-hook 2>/dev/null || true",
+            "timeout": 5
           }
         ]
       }
