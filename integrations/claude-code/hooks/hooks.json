@@ -7,6 +7,11 @@
             "type": "command",
             "command": "nohup sh -c 'memware sync --harness claude-code; memware backup --if-stale 20 --quiet; memware derive --apply --auto --if-stale 24 --quiet' >/dev/null 2>&1 & true",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "memware notice --from-hook 2>/dev/null || true",
+            "timeout": 5
           }
         ]
       }

@@ -645,14 +645,25 @@ def _older(version: str, than: str) -> bool:
     return a + (0,) * (width - len(a)) < b + (0,) * (width - len(b))
 
 
+def _consent_hints(done: object) -> list[str]:
+    """The hint for each CONSENT feature setup has not asked about — setup never ran (``done`` is
+    empty), or last ran on an older version — and whose switch was never written."""
+    from memware.config import has_key
+
+    return [
+        _CONSENT_HINTS[feature].format(version=version)
+        for version, feature in CONSENT.items()
+        if (not done or _older(str(done), version)) and not has_key(f"{feature}.auto")
+    ]
+
+
 def _maybe_setup_hint(a: argparse.Namespace) -> None:
     """One-line nudges to `memware setup`, on stderr; silent from hooks and in --json mode.
 
     Backups: for anyone who has never configured them — new installs and upgrades from a
     pre-backup (pre-0.2) version alike; stops once setup has run or a destination is set.
-    Consent: for each CONSENT feature setup has not asked about — setup never ran, or last ran
-    on an older version — and whose switch was never written; stops at either."""
-    from memware.config import get_dotted, has_key, load_config
+    Consent: see ``_consent_hints``; `memware notice` carries the same lines to plugin users."""
+    from memware.config import get_dotted, load_config
 
     if getattr(a, "from_hook", False) or getattr(a, "json", False):
         return
@@ -663,9 +674,36 @@ def _maybe_setup_hint(a: argparse.Namespace) -> None:
             "Tip: run `memware setup` to configure backups (one time; this hint then stops).",
             file=sys.stderr,
         )
-    for version, feature in CONSENT.items():
-        if (not done or _older(str(done), version)) and not has_key(f"{feature}.auto"):
-            print(_CONSENT_HINTS[feature].format(version=version), file=sys.stderr)
+    for hint in _consent_hints(done):
+        print(hint, file=sys.stderr)
+
+
+def cmd_notice(a: argparse.Namespace) -> int:
+    """The consent hints, for someone who only uses the plugin: they never type a memware command,
+    so they never see what `stats` prints. The plugin runs this in the foreground at session start,
+    and Claude Code shows the ``systemMessage`` to them. It reads the config file and nothing else
+    (never the store), so it is quick, and it cannot fail a session start: whatever goes wrong, it
+    prints nothing and exits 0."""
+    try:
+        from memware.config import config_path, get_dotted
+
+        if a.from_hook and _hook_payload().get("source") == "compact":
+            return 0  # a compaction mid-session, not a session the person just opened
+        # No file means nobody has answered. A file that will not parse is not an answer either,
+        # but it may hold one: stay quiet rather than ask at every session start.
+        path = config_path()
+        user = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(user, dict):
+            return 0
+        hints = _consent_hints(get_dotted(user, "setup.completed_version"))
+        if a.from_hook:
+            if hints:
+                print(json.dumps({"systemMessage": "\n".join(hints)}))
+        else:
+            _out(hints, a.json)
+    except Exception:
+        pass
+    return 0
 
 
 def _derive_destination(cfg: dict[str, Any]) -> str:
@@ -1046,6 +1084,22 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-k", type=int, default=6)
     s.add_argument("--from-hook", action="store_true")
     s.set_defaults(fn=cmd_context)
+
+    s = add(
+        "notice",
+        "print what `memware setup` has not asked about yet (the plugin shows it at session start)",
+        epilog=(
+            "Examples:\n"
+            "  memware notice               one line per pending question; nothing when none\n"
+            "  memware notice --from-hook   the same as Claude Code hook JSON (systemMessage)"
+        ),
+    )
+    s.add_argument(
+        "--from-hook",
+        action="store_true",
+        help="print hook JSON with a systemMessage, and nothing after a compaction",
+    )
+    s.set_defaults(fn=cmd_notice)
 
     s = add(
         "assert",

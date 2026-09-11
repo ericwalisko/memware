@@ -166,15 +166,15 @@ def test_derive_consent_hint_after_an_upgrade_until_setup_asks(tmp_path, capsys,
     assert "memware setup" not in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    "settings",
-    [
-        {"setup.completed_version": "0.2.5", "derive.auto": "false"},  # declined without setup
-        {"setup.completed_version": "0.2.5", "derive.auto": "true"},  # switched on by hand
-        {"setup.completed_version": "0.4.0"},  # setup already asked
-        {"setup.completed_version": "0.10.0"},  # a string compare would call this older
-    ],
-)
+ANSWERED_OR_ASKED = [
+    {"setup.completed_version": "0.2.5", "derive.auto": "false"},  # declined without setup
+    {"setup.completed_version": "0.2.5", "derive.auto": "true"},  # switched on by hand
+    {"setup.completed_version": "0.4.0"},  # setup already asked
+    {"setup.completed_version": "0.10.0"},  # a string compare would call this older
+]
+
+
+@pytest.mark.parametrize("settings", ANSWERED_OR_ASKED)
 def test_derive_consent_hint_stops_once_answered_or_asked(tmp_path, capsys, settings):
     db = str(tmp_path / "m.db")
     for k, v in settings.items():
@@ -182,6 +182,74 @@ def test_derive_consent_hint_stops_once_answered_or_asked(tmp_path, capsys, sett
     capsys.readouterr()
     main(["--db", db, "stats"])
     assert DERIVE_HINT not in capsys.readouterr().err
+
+
+def _notice(monkeypatch, capsys, db, source="startup"):
+    """Run the plugin's session-start notice as Claude Code does: the hook payload on stdin."""
+    payload = {"hook_event_name": "SessionStart", "source": source}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert main(["--db", db, "notice", "--from-hook"]) == 0
+    return capsys.readouterr()
+
+
+def test_notice_tells_a_plugin_user_what_setup_has_not_asked(tmp_path, capsys, monkeypatch):
+    """The reported install, seen from the plugin: setup last ran on 0.2.5 and derive.auto was
+    never written. The session-start hook prints the hint `stats` prints as a systemMessage, and
+    reads only the config: the store is never opened."""
+    db = tmp_path / "never-opened.db"
+    main(["--db", str(db), "config", "setup.completed_version", "0.2.5"])
+    capsys.readouterr()
+
+    got = _notice(monkeypatch, capsys, str(db))
+    assert set(json.loads(got.out)) == {"systemMessage"}
+    msg = json.loads(got.out)["systemMessage"]
+    assert msg.count(DERIVE_HINT) == 1 and "memware derive --plan" in msg
+    assert got.err == ""
+    assert not db.exists()
+
+    assert main(["--db", str(db), "notice"]) == 0  # by hand: the same line, plain
+    assert capsys.readouterr().out == msg + "\n"
+    assert main(["--db", str(db), "notice", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == [msg]
+
+    main(["--db", str(db), "stats"])  # one table behind both channels
+    assert msg in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("settings", ANSWERED_OR_ASKED)
+def test_notice_is_silent_once_answered_or_asked(tmp_path, capsys, monkeypatch, settings):
+    db = str(tmp_path / "m.db")
+    for k, v in settings.items():
+        main(["--db", db, "config", k, v])
+    capsys.readouterr()
+    assert _notice(monkeypatch, capsys, db).out == ""
+    assert main(["--db", db, "notice"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_notice_asks_with_no_config_but_not_with_a_broken_one(tmp_path, capsys, monkeypatch):
+    """A plugin-only user who never ran a memware command has no config file: nobody has asked
+    them. A config that will not parse may still hold an answer, so it prints nothing."""
+    from memware.config import config_path
+
+    db = str(tmp_path / "m.db")
+    assert DERIVE_HINT in _notice(monkeypatch, capsys, db).out
+
+    config_path().parent.mkdir(parents=True)
+    for broken in ('{"derive": {"auto": false},', "[]", '"0.4.0"'):
+        config_path().write_text(broken)
+        got = _notice(monkeypatch, capsys, db)
+        assert (got.out, got.err) == ("", "")
+
+
+def test_notice_skips_a_compaction(tmp_path, capsys, monkeypatch):
+    db = str(tmp_path / "m.db")
+    main(["--db", db, "config", "setup.completed_version", "0.2.5"])
+    capsys.readouterr()
+    for source in ("startup", "resume", "clear"):
+        got = _notice(monkeypatch, capsys, db, source)
+        assert DERIVE_HINT in json.loads(got.out)["systemMessage"]
+    assert _notice(monkeypatch, capsys, db, "compact").out == ""
 
 
 @pytest.mark.parametrize("closed_stdin", [False, True], ids=["--yes", "closed-stdin"])
