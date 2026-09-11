@@ -13,8 +13,9 @@ nothing to disable, and nothing that could regress it.
 
 ## Screen-reader-friendly default output
 
-The default human output for the record listers (`recall`, `beliefs`, `read`) is **labeled**:
-one `field : value` per line, a blank line between records, and empty fields skipped. Nothing
+The default human output for the record listers (`recall`, `beliefs`, `read`) and for `stats`
+is **labeled**: one `field : value` per line, a blank line between records (or sections), and
+empty fields skipped. Nothing
 is aligned into columns by eye. A screen reader reads it linearly and unambiguously — there is
 no spatial layout to get lost in.
 

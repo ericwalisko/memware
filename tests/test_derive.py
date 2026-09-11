@@ -452,6 +452,22 @@ def test_a_live_lock_skips_and_a_stale_lock_is_taken_over(db, tmp_path, monkeypa
     assert prov.usage.calls == 1 and state.exists() and not lock.exists()
 
 
+def test_last_run_age_is_utc_whatever_the_local_zone(monkeypatch):
+    """A run that just finished is ~0 hours old. The old ``mktime - timezone`` arithmetic read
+    an hour too old whenever the local zone was on daylight time — and on any given day one of
+    these two zones is."""
+    just_now = {"last_run": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        for tz in ("America/New_York", "Australia/Sydney"):
+            with monkeypatch.context() as m:
+                m.setenv("TZ", tz)
+                time.tzset()
+                age = md.last_run_age_hours(just_now)
+                assert age is not None and abs(age) < 0.05, (tz, age)
+    finally:
+        time.tzset()
+
+
 # ── --plan: what would leave the machine, without it leaving ───────────
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = "The engine is pinned at 0.11.0."

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS belief (
@@ -141,6 +142,20 @@ def now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def age_hours(ts: str | None, now: datetime | None = None) -> float | None:
+    """Hours from an ISO-8601 timestamp (naive means UTC) to ``now``; None when absent or
+    unparseable. UTC arithmetic throughout, so the local zone and daylight time never enter."""
+    if not ts:
+        return None
+    try:
+        t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=UTC)
+    return ((now or datetime.now(UTC)) - t).total_seconds() / 3600.0
+
+
 class Store:
     """One SQLite database holding turns, beliefs, cursors and reviews.
 
@@ -260,4 +275,33 @@ class Store:
             "reviews_open": int(
                 q("SELECT count(*) FROM review WHERE decision IS NULL").fetchone()[0]
             ),
+        }
+
+    def utilization(self, now: datetime | None = None) -> dict[str, Any]:
+        """How much of the store is actually retrieved, read from the ``use_count`` and
+        ``last_used`` columns that recall writes. A belief or turn counts once a search returned
+        it; ``memware context`` (the prompt hook) injects without recording a use."""
+        now = now or datetime.now(UTC)
+        d7 = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        d30 = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        recent = (
+            "count(CASE WHEN last_used >= ? THEN 1 END), "
+            "count(CASE WHEN last_used >= ? THEN 1 END), max(last_used)"
+        )
+        b7, b30, b_last = self.conn.execute(f"SELECT {recent} FROM belief", (d7, d30)).fetchone()
+        t7, t30, t_last, turns, ever = self.conn.execute(
+            f"SELECT {recent}, count(*), count(CASE WHEN use_count > 0 THEN 1 END) FROM turn",
+            (d7, d30),
+        ).fetchone()
+        last = max((x for x in (b_last, t_last) if x), default=None)
+        age = age_hours(last, now)
+        return {
+            "beliefs_recalled_7d": int(b7),
+            "beliefs_recalled_30d": int(b30),
+            "turns_recalled_7d": int(t7),
+            "turns_recalled_30d": int(t30),
+            "turns_ever_recalled": int(ever),
+            "turns_ever_recalled_share": round(ever / turns, 4) if turns else None,
+            "last_recalled": last,
+            "last_recalled_age_hours": None if age is None else round(age, 1),
         }

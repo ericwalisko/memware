@@ -19,6 +19,12 @@ All notable changes to this project are documented here. The format follows
   as side-effect free. A dry run sends every excerpt to the provider and skips only the write.
   `--plan` is the view that sends nothing. `--apply` and `--plan` are mutually exclusive.
 - `memware derive --chunk` rejects values below 1 instead of silently treating 0 as the default.
+- `memware stats` human output is labeled `field : value`, one per line, like the record
+  listers (it was one line of JSON). `stats --json` is a superset: the existing keys are
+  unchanged, and the new sections are nested under `derive` and `utilization`.
+- Belief activation no longer grows from hook injection: `memware context` (the
+  `UserPromptSubmit` hook) no longer records a use for the beliefs it injects, so `use_count`
+  and `last_used` mean an agent or a person retrieved the belief.
 
 ### Added
 - **`memware derive --plan`** — the no-network view of a run. It gathers the excerpts exactly as
@@ -28,6 +34,21 @@ All notable changes to this project are documented here. The format follows
   provider exists. No model call, no writes, no run lock. It works with no `claude` on PATH and
   no `OPENAI_*` and says what a real run would still need. Honours `--since`, `--max-sessions`,
   `--provider`, `--model` and `--chunk`; `--quiet` keeps only the summary.
+- **`memware stats` says whether memory is doing anything.** Two new sections beside the six
+  counts. *derive*: whether `derive.auto` is on, runs, the last run and its age, the watermark
+  against the latest turn id, and how many turns are not yet derived — "never run" when there
+  is no state file. *utilization*, from the `use_count`/`last_used` columns recall already
+  writes: beliefs and turns recalled in the last 7 and 30 days, how many turns were ever
+  recalled (and what share of the store that is), and when anything was last recalled.
+- A plain-language `verdict` line in the human output when the store is inert: turns but an
+  empty ledger because derive has never run; `derive.auto` off with the last run over 30 days
+  old and turns waiting; or nothing recalled in 30 days. A derive that ran and found nothing
+  no longer looks the same as one that never ran. `--json` carries the same facts as fields
+  and prints no verdict.
+
+### Fixed
+- `derive --if-stale` read the last run as an hour older than it was whenever the local zone
+  was on daylight time; the age is now UTC arithmetic.
 
 ## [0.4.0] - 2026-09-09
 
