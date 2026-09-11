@@ -204,10 +204,15 @@ for ASCII output (same as
 .B MEMWARE_NO_CAPTURE
 Set to
 .B 1
-to never index the current session.
+in a session's environment to keep it out of the index and the backup mirror. Each memware hook
+that runs in the session adds its transcript to
+.IR <home>/no-capture.txt ,
+which every sync and backup honours; a session that runs no memware hook cannot be recognised.
 .TP
 .B MEMWARE_IGNORE_MARKERS
-Path to a file of content signatures; a transcript whose head contains one is never indexed.
+Content signatures, separated by newlines or
+.BR : ;
+a transcript whose head contains one is never indexed or mirrored.
 .TP
 .B NO_COLOR
 Honoured by construction \(em memware emits no colour at all.
@@ -217,7 +222,12 @@ Honoured by construction \(em memware emits no colour at all.
 Configuration.
 .TP
 .I <home>/ignore-markers.txt
-Content signatures for transcripts that must never be indexed.
+Content signatures for transcripts that must never be indexed or mirrored.
+.TP
+.I <home>/no-capture.txt
+Transcripts of sessions run under
+.BR MEMWARE_NO_CAPTURE ,
+one path per line; never indexed or mirrored.
 .PP
 .I <home>
 is resolved as described for

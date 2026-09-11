@@ -87,6 +87,7 @@ def test_setup_yes_backfills_and_makes_first_backup(tmp_path, capsys, monkeypatc
     assert main(["--db", db, "setup", "--yes"]) == 0
     out = capsys.readouterr().out
     assert "indexed 1 turns" in out
+    assert ", 1 transcripts mirrored" in out  # the count, not the mirror's result object
 
     assert main(["--db", db, "stats", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["turns"] == 1  # backfill happened

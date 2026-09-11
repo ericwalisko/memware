@@ -20,4 +20,7 @@ hermes memory setup                                   # select "memware"; accept
 Config (`hermes memory setup` → `<hermes_home>/memware.json`): `db_path` (default
 `~/.memware/memware.db`, shared with Claude Code and the CLI), `prefetch_k`, `auto_sync`.
 
+Set `MEMWARE_NO_CAPTURE=1` in Hermes's environment and the provider captures nothing: no session
+file, no indexed turn, no mirrored memory write. The tools still work.
+
 Only one external provider can be active at a time in Hermes.

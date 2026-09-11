@@ -14,6 +14,8 @@ Design:
   JSONL file under ``<hermes_home>/memware/sessions/`` (which doubles as an
   archive) and indexed from a byte-offset cursor in a daemon thread.
 * Built-in memory writes are mirrored into the ledger as human-stated beliefs.
+* ``MEMWARE_NO_CAPTURE=1`` in Hermes's environment turns capture off: no session file, no
+  indexed turn, no mirrored memory write. Tool calls still work.
 """
 
 from __future__ import annotations
@@ -251,7 +253,9 @@ class MemwareProvider(MemoryProvider):
         messages: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> None:
-        if not self._auto_sync:
+        from memware.ingest import capture_disabled
+
+        if not self._auto_sync or capture_disabled():
             return
         pairs = [("user", _text(user_content)), ("assistant", _text(assistant_content))]
 
@@ -295,11 +299,11 @@ class MemwareProvider(MemoryProvider):
         self.shutdown()
         # turns were captured incrementally; re-sync the file once for anything missed
         try:
-            from memware.ingest import sync_file
+            from memware.ingest import capture_disabled, sync_file
             from memware.store import Store
 
             path = self._session_file(kwargs.get("session_id", "") or self._session_id)
-            if path.exists():
+            if path.exists() and not capture_disabled():
                 with Store(self._db) as s:
                     sync_file(s, path, harness="generic")
         except Exception as e:
@@ -314,9 +318,12 @@ class MemwareProvider(MemoryProvider):
         if action not in ("add", "append", "create") or not content or not content.strip():
             return
         try:
+            from memware.ingest import capture_disabled
             from memware.ledger import assert_belief
             from memware.store import Store
 
+            if capture_disabled():
+                return
             with Store(self._db) as s:
                 assert_belief(
                     s,

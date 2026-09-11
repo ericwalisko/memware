@@ -4,6 +4,7 @@ pass ``--from-hook`` to read the harness's JSON payload on stdin."""
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -22,7 +23,14 @@ from memware.index import (
     search_beliefs_multi,
     search_turns_multi,
 )
-from memware.ingest import capture_disabled, prune_sources, prune_turns, sync_file, sync_tree
+from memware.ingest import (
+    capture_disabled,
+    prune_sources,
+    prune_turns,
+    record_no_capture,
+    sync_file,
+    sync_tree,
+)
 from memware.ledger import Policy, approve, assert_belief, current, history, reject
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.store import Store
@@ -103,11 +111,23 @@ def _emit(a: argparse.Namespace, rows: object, columns: list[tuple[str, str]]) -
 
 
 def _hook_payload() -> dict[str, object]:
+    """The harness's JSON payload on stdin, or {} when there is none or it will not parse.
+
+    Every hook command reads its payload here, so this is also where a session run under
+    MEMWARE_NO_CAPTURE puts its transcript on the no-capture list. The catch-up sync and the
+    backup mirror run without the variable, and the list is how they learn to leave the
+    transcript out. Recording prints nothing, and a failure to record never fails the hook."""
     try:
         payload = json.load(sys.stdin) if not sys.stdin.isatty() else {}
     except (json.JSONDecodeError, ValueError):
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    transcript = payload.get("transcript_path")
+    if transcript and capture_disabled():
+        with contextlib.suppress(Exception):
+            record_no_capture(str(transcript))
+    return payload
 
 
 def _out(obj: object, as_json: bool) -> None:
@@ -128,11 +148,11 @@ def cmd_init(a: argparse.Namespace) -> int:
 
 
 def cmd_sync(a: argparse.Namespace) -> int:
-    if a.from_hook and capture_disabled():
-        return 0  # MEMWARE_NO_CAPTURE=1: this run must not enter the store
     paths = list(a.paths)
     if a.from_hook:
-        tp = _hook_payload().get("transcript_path")
+        tp = _hook_payload().get("transcript_path")  # read first: that records it if need be
+        if capture_disabled():
+            return 0  # MEMWARE_NO_CAPTURE=1: this run must not enter the store
         if tp:
             paths.append(str(tp))
     if not paths and not a.from_hook:
@@ -263,7 +283,8 @@ def cmd_recall(a: argparse.Namespace) -> int:
 
 def cmd_context(a: argparse.Namespace) -> int:
     """Prompt-time helper: print currently valid beliefs relevant to the prompt."""
-    prompt = a.prompt or str(_hook_payload().get("prompt", ""))
+    payload = _hook_payload() if a.from_hook or not a.prompt else {}
+    prompt = a.prompt or str(payload.get("prompt", ""))
     if not prompt.strip():
         return 0
     with Store(a.db) as s:
@@ -590,6 +611,19 @@ def cmd_backup(a: argparse.Namespace) -> int:
         src = a.transcript_src or get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
         mirrored = bk.mirror_transcripts(src, dest)
         result["transcripts_mirrored"] = mirrored.copied
+        result["transcripts_skipped_no_capture"] = len(mirrored.excluded_no_capture)
+        result["transcripts_skipped_marker"] = len(mirrored.excluded_marker)
+        if mirrored.left_in_backup:
+            # Copies an earlier run made before the transcript was listed or marked. memware
+            # never deletes from a destination, so a person has to; say where, every run.
+            result["transcripts_left_in_backup"] = [str(p) for p in mirrored.left_in_backup]
+            for target in mirrored.left_in_backup[:5]:
+                print(
+                    f"excluded transcript already in the backup, remove it by hand: {target}",
+                    file=sys.stderr,
+                )
+            if len(mirrored.left_in_backup) > 5:
+                print(f"... and {len(mirrored.left_in_backup) - 5} more", file=sys.stderr)
         if mirrored.skipped:
             # Reported, not fatal: the snapshot above already succeeded and the mirror is
             # retried on every run. Silence would hide a destination that never takes
@@ -840,7 +874,9 @@ def cmd_setup(a: argparse.Namespace) -> int:
         out = bk.snapshot(a.db, dpath)
         bk.apply_retention(dpath, get_dotted(cfg, "backup.keep_days") or [1, 3, 7, 14])
         n = (
-            bk.mirror_transcripts(get_dotted(cfg, "backup.transcript_src") or src_default, dpath)
+            bk.mirror_transcripts(
+                get_dotted(cfg, "backup.transcript_src") or src_default, dpath
+            ).copied
             if get_dotted(cfg, "backup.include_transcripts")
             else 0
         )
@@ -885,7 +921,10 @@ def cmd_setup(a: argparse.Namespace) -> int:
     else:
         print("  • No destination set — recall still works, but there's no wipe-trap safety net.")
         print("    Re-run `memware setup` any time to add one.")
-    print("  • Sensitive session? Set MEMWARE_NO_CAPTURE=1 and it is never indexed.")
+    print("  • Sensitive session? Start Claude Code with MEMWARE_NO_CAPTURE=1. The plugin's hooks")
+    print("    list its transcript, so no sync indexes it and no backup mirrors it. A session no")
+    print("    memware hook ran in cannot be recognised; `claude -p --no-session-persistence`")
+    print("    writes no transcript at all. See docs/keeping-memory-clean.md.")
     print("  • After a wipe, `memware restore --latest` — never wipe-and-re-backfill (backfill")
     print("    only re-indexes transcripts still on disk). See docs/backup.md.")
     return 0
@@ -931,7 +970,13 @@ def cmd_nuke(a: argparse.Namespace) -> int:
     snaps = bk.list_snapshots(dest) if dest else []
     targets = [Path(a.db).expanduser(), Path(str(a.db) + "-wal"), Path(str(a.db) + "-shm")]
     home = memware_home()
-    for name in ("ignore-markers.txt", "review-outbox.jsonl", "review-inbox.jsonl"):
+    for name in (
+        "ignore-markers.txt",
+        "no-capture.txt",
+        "no-capture.txt.lock",
+        "review-outbox.jsonl",
+        "review-inbox.jsonl",
+    ):
         targets.append(home / name)
     targets.append(config_path())
     print("This permanently deletes:")
@@ -985,12 +1030,13 @@ Environment:
   OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY   `derive --provider openai` (or <home>/.env)
   MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
   MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
-  MEMWARE_NO_CAPTURE=1  never index the current session
+  MEMWARE_NO_CAPTURE=1  never index or mirror this session (needs a memware hook to run in it)
   NO_COLOR            honoured by construction — memware emits no colour at all
 
 Files:
   <home>/config.json          configuration (see `memware config`)
-  <home>/ignore-markers.txt   content signatures never to index
+  <home>/ignore-markers.txt   content signatures never to index or mirror
+  <home>/no-capture.txt       transcripts of MEMWARE_NO_CAPTURE sessions, never indexed or mirrored
 
 Accessibility:
   No information is ever conveyed by colour. --plain gives tab-separated records for scripts

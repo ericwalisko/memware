@@ -80,6 +80,27 @@ All notable changes to this project are documented here. The format follows
   too old to know `notice`. `memware notice` prints the same lines in a terminal.
 
 ### Fixed
+- **`MEMWARE_NO_CAPTURE` sessions were indexed and copied to the backup folder.** The variable
+  was checked only by `memware sync --from-hook`, in the one process that carried it. The
+  plugin's `SessionStart` catch-up (`memware sync`, since 0.2.6) runs in the next session without
+  it and indexed every such transcript still on disk; `memware backfill` and `memware setup` did
+  the same. The transcript mirror in `memware backup` (since 0.2.0) copied them, and it also
+  copied transcripts carrying a skip marker, into `<dest>/transcripts`, which is often a synced
+  folder. The Hermes provider never checked the variable. Now every `--from-hook` command that
+  runs under the variable (`sync`, `context`, `notice`, `digest`) adds the payload's
+  `transcript_path` to `<home>/no-capture.txt`. The start and prompt entries record it, so a
+  force-killed session is covered, and recording never changes a hook's output. Every sync skips
+  a listed transcript and the subagent transcripts Claude Code keeps beside it in
+  `<session>/subagents/`, and un-indexes any of them indexed before. The mirror skips the same
+  files and marker-tagged transcripts. `memware backup` reports `transcripts_skipped_no_capture`
+  and `transcripts_skipped_marker`, plus `transcripts_left_in_backup` for copies an earlier run
+  made, which it never deletes. The Hermes provider captures nothing under the variable. Limits: a
+  session that ran no memware hook and carries no marker still cannot be recognised, and sessions
+  indexed or mirrored before this release cannot be identified afterwards. Un-index known paths
+  with `memware prune --glob`/`--containing` and delete their copies from the backup folder by
+  hand (docs/keeping-memory-clean.md). `claude -p --no-session-persistence` writes no transcript.
+- `memware setup` printed the mirror's result object instead of the number of transcripts it
+  mirrored in its first-backup line.
 - `derive --if-stale` read the last run as an hour older than it was whenever the local zone
   was on daylight time; the age is now UTC arithmetic.
 - Upgrading to 0.4.0 never mentioned `derive`. Derive is off by default, which is right,
