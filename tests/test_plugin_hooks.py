@@ -36,11 +36,13 @@ def test_entry_runs_in_the_foreground(command):
     assert ">/dev/null" not in hook["command"].replace("2>/dev/null", "")  # stdout reaches Claude
 
 
-def _run(command: str, path: str, home: Path) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "PATH": path, "MEMWARE_HOME": str(home)}
+def _run(
+    command: str, path: str, home: Path, payload: str = PAYLOAD, **env: str
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "PATH": path, "MEMWARE_HOME": str(home), **env}
     return subprocess.run(
         ["/bin/sh", "-c", command],
-        input=PAYLOAD,
+        input=payload,
         capture_output=True,
         text=True,
         env=env,
@@ -60,6 +62,51 @@ def test_notice_hook_command_prints_hook_json(tmp_path):
     out = _run(_hook("notice")["command"], f"{bindir}{os.pathsep}{os.environ['PATH']}", home)
     assert out.returncode == 0, out.stderr
     assert "memware setup" in json.loads(out.stdout)["systemMessage"]
+
+
+@pytest.mark.parametrize(
+    ("event", "command"),
+    [
+        ("SessionStart", "memware notice"),
+        ("SessionStart", "memware digest"),
+        ("UserPromptSubmit", "memware context"),
+        ("PreCompact", "memware sync"),
+    ],
+)
+def test_foreground_hooks_list_a_no_capture_session(tmp_path, event, command):
+    """Under MEMWARE_NO_CAPTURE every foreground entry puts the session's transcript on the
+    no-capture list, through the command string exactly as Claude Code runs it. The start
+    entries cover a session that is later force-killed; the backgrounded catch-up and backup
+    never see the variable and learn it from the list."""
+    bindir = Path(sys.executable).parent
+    if not (bindir / "memware").exists():
+        pytest.skip("the memware script is not installed beside this interpreter")
+    groups = json.loads(HOOKS.read_text())["hooks"][event]
+    entries = [h for g in groups for h in g["hooks"] if f"{command} " in h["command"]]
+    assert len(entries) == 1, entries
+    home = tmp_path / "home"
+    transcript = tmp_path / "projects" / "p" / "s.jsonl"  # Claude Code writes it later
+    payload = json.dumps(
+        {
+            "session_id": "s",
+            "transcript_path": str(transcript),
+            "cwd": str(tmp_path),
+            "hook_event_name": event,
+            "source": "startup",
+            "prompt": "hi",
+        }
+    )
+
+    out = _run(
+        entries[0]["command"],
+        f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        home,
+        payload,
+        MEMWARE_NO_CAPTURE="1",
+    )
+
+    assert out.returncode == 0, out.stderr
+    assert (home / "no-capture.txt").read_text() == f"{transcript.resolve()}\n"
 
 
 @pytest.mark.parametrize("command", FOREGROUND)

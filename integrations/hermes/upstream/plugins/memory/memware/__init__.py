@@ -315,9 +315,11 @@ class MemwareMemoryProvider(MemoryProvider):
 
     def _append_and_index(self, session_id: str, pairs: list[tuple]) -> None:
         _ensure_memware()
-        from memware.ingest import sync_file
+        from memware.ingest import capture_disabled, sync_file
         from memware.store import Store, now_iso
 
+        if capture_disabled():  # MEMWARE_NO_CAPTURE=1: this run must not enter the store
+            return
         path = self._session_file(session_id)
         with self._lock:
             with path.open("a", encoding="utf-8") as fh:
@@ -341,11 +343,11 @@ class MemwareMemoryProvider(MemoryProvider):
         """Re-index the session file from its cursor. Idempotent."""
         try:
             _ensure_memware()
-            from memware.ingest import sync_file
+            from memware.ingest import capture_disabled, sync_file
             from memware.store import Store
 
             path = self._session_file(session_id)
-            if path.exists():
+            if path.exists() and not capture_disabled():
                 with self._lock, Store(self._db) as store:
                     sync_file(store, path, harness="generic")
         except Exception as e:
@@ -420,9 +422,12 @@ class MemwareMemoryProvider(MemoryProvider):
             return
         try:
             _ensure_memware()
+            from memware.ingest import capture_disabled
             from memware.ledger import assert_belief
             from memware.store import Store
 
+            if capture_disabled():
+                return
             with Store(self._db) as store:
                 assert_belief(
                     store,

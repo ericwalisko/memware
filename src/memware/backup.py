@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 
+from memware.ingest import default_skip_markers, file_contains, is_no_capture, no_capture_paths
+
 SNAPSHOT_GLOB = "memware-*.db"
 _SNAPSHOT_RE = re.compile(r"memware-(\d{8}-\d{6})\.db$")
 
@@ -98,15 +100,22 @@ def apply_retention(dest_dir: str | os.PathLike[str], keep_days: list[int]) -> l
 
 
 class MirrorResult:
-    """What ``mirror_transcripts`` did: files copied, and files it had to leave for next time.
+    """What ``mirror_transcripts`` did: files copied, files it had to leave for next time, and
+    files it must never copy.
 
-    ``skipped`` is a list of ``(target, reason)`` — the run does not abort on one bad file."""
+    ``skipped`` is a list of ``(target, reason)`` — the run does not abort on one bad file.
+    ``excluded_no_capture`` and ``excluded_marker`` are the source transcripts left out because
+    they are on the no-capture list or carry a skip marker. ``left_in_backup`` holds the copies
+    of those that an earlier run already made; the mirror reports them and never deletes them."""
 
-    __slots__ = ("copied", "skipped")
+    __slots__ = ("copied", "excluded_marker", "excluded_no_capture", "left_in_backup", "skipped")
 
     def __init__(self) -> None:
         self.copied = 0
         self.skipped: list[tuple[Path, str]] = []
+        self.excluded_no_capture: list[Path] = []
+        self.excluded_marker: list[Path] = []
+        self.left_in_backup: list[Path] = []
 
     def __int__(self) -> int:  # the pre-0.3.1 return type was the copied count
         return self.copied
@@ -130,16 +139,33 @@ def mirror_transcripts(
        best-effort and retried on every run; the snapshot that ran before it is the thing
        that must not be lost, and an exception here used to take the whole ``backup`` exit
        code (and the cron that reads it) down with it.
+
+    A transcript that sync would never index is never copied either: one on the no-capture
+    list or in a listed session's subagent directory, or one whose head carries a skip marker. The destination is often a synced folder,
+    which is further from the machine than the store is.
     """
     src = Path(src_root).expanduser()
     dest = (Path(dest_dir).expanduser()) / "transcripts"
     result = MirrorResult()
     if not src.exists():
         return result
+    listed = no_capture_paths()
+    markers = default_skip_markers()
     for f in src.rglob("*.jsonl"):
         rel = f.relative_to(src)
         target = dest / rel
         try:
+            if listed and is_no_capture(f.resolve(), listed):
+                excluded: list[Path] | None = result.excluded_no_capture
+            elif markers and file_contains(f, markers):
+                excluded = result.excluded_marker
+            else:
+                excluded = None
+            if excluded is not None:
+                excluded.append(f)
+                if target.exists():
+                    result.left_in_backup.append(target)
+                continue
             if (
                 target.exists()
                 and target.stat().st_mtime >= f.stat().st_mtime

@@ -33,7 +33,7 @@ from memware.store import DEFAULT_DB, Store
 MARKER = "[memware-eval]"
 """Put this in every prompt an evaluation sends. Runs that carry it are excluded when
 ``--corpus`` rebuilds a clean store, and ``MEMWARE_NO_CAPTURE=1`` in the run's environment
-keeps hooks from indexing them in the first place."""
+keeps them out of every sync and backup whenever a memware hook runs in the session."""
 
 
 def build_clean_store(

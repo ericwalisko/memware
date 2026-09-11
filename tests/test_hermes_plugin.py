@@ -75,6 +75,27 @@ def test_sync_turn_is_non_blocking_and_indexes(tmp_path):
     assert len(again) == len(out)
 
 
+def test_no_capture_captures_nothing(tmp_path, monkeypatch):
+    from memware.store import Store
+
+    _, p = load(tmp_path)
+    monkeypatch.setenv("MEMWARE_NO_CAPTURE", "1")
+    p.sync_turn(
+        "what does the deploy script do",
+        "the deploy script runs blue-green rollouts",
+        session_id="s9",
+    )
+    p.shutdown()
+    p.on_session_end([], session_id="s9")
+    p.on_pre_compress([], session_id="s9")
+    p.on_memory_write("add", "preferences", "always use pnpm not npm")
+
+    assert not (tmp_path / "hermes" / "memware" / "sessions" / "s9.jsonl").exists()
+    with Store(tmp_path / "m.db") as s:
+        assert (s.stats()["turns"], s.stats()["beliefs_total"]) == (0, 0)
+    assert json.loads(p.handle_tool_call("memware_beliefs", {})) == []  # tools still answer
+
+
 def test_memory_write_mirrors_as_belief_and_config_roundtrip(tmp_path):
     _, p = load(tmp_path)
     p.on_memory_write("add", "preferences", "always use pnpm not npm")

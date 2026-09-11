@@ -147,6 +147,26 @@ def test_a_session_switch_keeps_each_session_separate(provider, tmp_path):
     assert {h["session"] for h in hits} == {"sess-1", "sess-2"}
 
 
+def test_no_capture_captures_nothing(provider, tmp_path, monkeypatch):
+    from memware.store import Store
+
+    monkeypatch.setenv("MEMWARE_NO_CAPTURE", "1")
+    provider.sync_turn(
+        "what does the deploy script do",
+        "the deploy script runs blue-green rollouts",
+        session_id="s9",
+    )
+    provider.shutdown()
+    provider.on_session_end([])
+    provider.on_session_switch("sess-2")
+    assert provider.on_pre_compress([]) == ""
+    provider.on_memory_write("add", "preferences", "always use pnpm not npm")
+
+    assert not (tmp_path / "memware" / "sessions" / "s9.jsonl").exists()
+    with Store(provider._db) as store:
+        assert (store.stats()["turns"], store.stats()["beliefs_total"]) == (0, 0)
+
+
 def test_builtin_memory_writes_land_as_beliefs(provider):
     provider.on_memory_write("add", "preferences", "always use pnpm not npm")
 
