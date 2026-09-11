@@ -59,15 +59,21 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def load_user_config() -> dict[str, Any]:
+    """The config file as written, with no DEFAULTS merged in. Missing file or bad JSON reads as
+    empty. Write back through this, not ``load_config()``: saving the merged view would record
+    every default as if the user had chosen it."""
+    try:
+        user = json.loads(config_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return user if isinstance(user, dict) else {}
+
+
 def load_config() -> dict[str, Any]:
     """Config merged over DEFAULTS. Missing file or bad JSON falls back to defaults."""
     cfg: dict[str, Any] = json.loads(json.dumps(DEFAULTS))  # deep copy
-    p = config_path()
-    try:
-        user: dict[str, Any] = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return cfg
-    for k, v in user.items():
+    for k, v in load_user_config().items():
         if isinstance(v, dict) and isinstance(cfg.get(k), dict):
             cfg[k].update(v)
         else:
@@ -90,6 +96,15 @@ def get_dotted(cfg: dict[str, Any], key: str) -> Any:
             return None
         cur = cur[part]
     return cur
+
+
+def has_key(key: str) -> bool:
+    """Whether the config file itself sets ``key``. ``load_config()`` cannot say: a default of
+    False reads the same as a user who answered False."""
+    parent, _, leaf = key.rpartition(".")
+    user = load_user_config()
+    node = get_dotted(user, parent) if parent else user
+    return isinstance(node, dict) and leaf in node
 
 
 def set_dotted(cfg: dict[str, Any], key: str, value: Any) -> None:

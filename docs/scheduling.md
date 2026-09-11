@@ -27,7 +27,9 @@ Pick the option below that matches your machine. Only one is needed.
 
 The memware plugin already runs on every session start. Turn on the derive step and it
 runs in the background, at most once a day, whenever you open Claude Code — which is
-exactly when your laptop is on:
+exactly when your laptop is on. `memware setup` is where you switch it on: it says where the
+excerpts go and points at `memware derive --plan` before it asks. The same switch, set
+directly:
 
 ```bash
 memware config derive.auto true

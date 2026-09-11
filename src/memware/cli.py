@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -597,37 +598,119 @@ def _prompt(msg: str, default: str = "") -> str:
         return default
 
 
-def _yes(msg: str, *, default_yes: bool = True) -> bool:
-    ans = _prompt(f"{msg} {'[Y/n]' if default_yes else '[y/N]'}: ").lower()
+def _ask(msg: str, *, default_yes: bool) -> bool | None:
+    """A yes/no question; None on a closed stdin, for when no answer must change nothing."""
+    try:
+        ans = input(f"{msg} {'[Y/n]' if default_yes else '[y/N]'}: ").strip().lower()
+    except EOFError:
+        return None
     return default_yes if not ans else ans[0] == "y"
 
 
+def _yes(msg: str, *, default_yes: bool = True) -> bool:
+    ans = _ask(msg, default_yes=default_yes)
+    return default_yes if ans is None else ans
+
+
+# Features that send data somewhere new, by the version that added them. A setup run on an
+# older version never asked about them, so the hint re-asks until setup runs on that version or
+# later, or the feature's `<name>.auto` switch has been written either way.
+CONSENT: dict[str, str] = {"0.4.0": "derive"}
+_CONSENT_HINTS = {
+    "derive": "memware {version} added `derive`, which sends transcript excerpts to a model. "
+    "Run `memware setup` to enable or decline; `memware derive --plan` previews with no "
+    "network call.",
+}
+
+
+def _release(version: str) -> tuple[int, ...]:
+    m = re.match(r"\d+(?:\.\d+)*", version.strip())
+    return tuple(int(x) for x in m.group().split(".")) if m else ()
+
+
+def _older(version: str, than: str) -> bool:
+    """Whether ``version`` is older than ``than``, compared as versions, never as strings
+    (as strings, "0.10.0" sorts before "0.4.0")."""
+    try:
+        from packaging.version import InvalidVersion, Version
+    except ImportError:  # memware has no runtime dependencies; packaging is usually there
+        pass
+    else:
+        try:
+            return Version(version) < Version(than)
+        except InvalidVersion:
+            pass
+    a, b = _release(version), _release(than)
+    width = max(len(a), len(b))
+    return a + (0,) * (width - len(a)) < b + (0,) * (width - len(b))
+
+
 def _maybe_setup_hint(a: argparse.Namespace) -> None:
-    """A one-line nudge to `memware setup` for anyone who has never configured backups — new
-    installs and upgrades from a pre-backup (pre-0.2) version alike. Silent from hooks and in
-    --json mode; stops as soon as setup has run or a destination is configured."""
-    from memware.config import get_dotted, load_config
+    """One-line nudges to `memware setup`, on stderr; silent from hooks and in --json mode.
+
+    Backups: for anyone who has never configured them — new installs and upgrades from a
+    pre-backup (pre-0.2) version alike; stops once setup has run or a destination is set.
+    Consent: for each CONSENT feature setup has not asked about — setup never ran, or last ran
+    on an older version — and whose switch was never written; stops at either."""
+    from memware.config import get_dotted, has_key, load_config
 
     if getattr(a, "from_hook", False) or getattr(a, "json", False):
         return
     cfg = load_config()
-    if get_dotted(cfg, "setup.completed_version") or get_dotted(cfg, "backup.dest"):
-        return
-    print(
-        "Tip: run `memware setup` to configure backups (one time; this hint then stops).",
-        file=sys.stderr,
-    )
+    done = get_dotted(cfg, "setup.completed_version")
+    if not done and not get_dotted(cfg, "backup.dest"):
+        print(
+            "Tip: run `memware setup` to configure backups (one time; this hint then stops).",
+            file=sys.stderr,
+        )
+    for version, feature in CONSENT.items():
+        if (not done or _older(str(done), version)) and not has_key(f"{feature}.auto"):
+            print(_CONSENT_HINTS[feature].format(version=version), file=sys.stderr)
+
+
+def _derive_destination(cfg: dict[str, Any]) -> str:
+    """Where `memware derive` sends excerpts, resolved the way a run resolves it but without
+    building a provider (which needs `claude` on PATH or a key)."""
+    from urllib.parse import urlparse
+
+    from memware.config import get_dotted
+    from memware.derive import read_env
+
+    env = read_env()
+    provider = env.get("MEMWARE_DERIVE_PROVIDER") or get_dotted(cfg, "derive.provider")
+    model = get_dotted(cfg, "derive.model") or env.get("MEMWARE_DERIVE_MODEL")
+    if provider == "openai":
+        base = env.get("OPENAI_BASE_URL")
+        host = (urlparse(base).netloc or base) if base else "OPENAI_BASE_URL (not set)"
+        model = model or env.get("OPENAI_MODEL") or "OPENAI_MODEL (not set)"
+        return f"{model} at {host}, an OpenAI-compatible endpoint"
+    return f"{model or 'haiku'} via the Claude Code CLI (`claude -p`) on your own subscription"
 
 
 def cmd_setup(a: argparse.Namespace) -> int:
     """Guided one-time configuration: index the sessions already on disk (new installs),
-    choose a backup destination, run a first backup, and print the operating guidance. Safe to
-    re-run, and safe non-interactive — a closed stdin (or ``--yes``) keeps every current value.
-    Covers a fresh install and an upgrade from a pre-backup (pre-0.2) version alike."""
+    choose a backup destination, run a first backup, ask whether to switch on automatic derive,
+    and print the operating guidance. Safe to re-run, and safe non-interactive — a closed stdin
+    (or ``--yes``) keeps every current value, so derive is never switched on without an answer.
+    Covers a fresh install and an upgrade from a version that never asked alike."""
     from memware import backup as bk
-    from memware.config import get_dotted, load_config, save_config, set_dotted
+    from memware.config import (
+        get_dotted,
+        has_key,
+        load_config,
+        load_user_config,
+        save_config,
+        set_dotted,
+    )
 
-    cfg = load_config()
+    # Read the merged view; write only what setup decides. Saving the merged view would record
+    # every default as a choice — derive.auto false as a decline nobody made.
+    cfg, user = load_config(), load_user_config()
+
+    def put(key: str, value: object) -> None:
+        set_dotted(cfg, key, value)
+        set_dotted(user, key, value)
+
     yes = getattr(a, "yes", False)
     src_default = get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
 
@@ -667,18 +750,16 @@ def cmd_setup(a: argparse.Namespace) -> int:
         print(f"  Current: {cur}")
     dest = "" if yes else _prompt("Backup folder (blank to keep current / skip): ")
     if dest:
-        set_dotted(cfg, "backup.dest", dest)
+        put("backup.dest", dest)
     dest = get_dotted(cfg, "backup.dest")
     if dest:
-        set_dotted(
-            cfg,
+        put(
             "backup.include_transcripts",
             True if yes else _yes("Also mirror raw transcripts there (recommended)?"),
         )
 
-    # 3. Persist, and mark setup done so the discovery hint stops.
-    set_dotted(cfg, "setup.completed_version", __version__)
-    print(f"\nSaved {save_config(cfg)}.")
+    # 3. Persist the backup choices before the first backup touches the destination.
+    save_config(user)
 
     # 4. Offer a first backup right now.
     if dest and (yes or _yes("Run a first backup now?")):
@@ -692,7 +773,36 @@ def cmd_setup(a: argparse.Namespace) -> int:
         )
         print(f"  snapshot {Path(out).name}" + (f", {n} transcripts mirrored" if n else ""))
 
-    # 5. Operating guidance.
+    # 5. Derive sends transcript excerpts to a model, and a transcript can hold anything, so it
+    # stays off until a person answers yes here. --yes and a closed stdin change nothing.
+    print("\nDerive: `memware derive` sends sentences from your transcripts that look like durable")
+    print("facts, with their neighbours, to a model, and files the facts it finds as beliefs.")
+    print(f"Excerpts go to {_derive_destination(cfg)}.")
+    print("Preview what would be sent, with no network call: `memware derive --plan`.")
+    auto = bool(get_dotted(cfg, "derive.auto"))
+    if yes:
+        print(f"  Automatic derive stays {'on' if auto else 'off'}: --yes never changes it.")
+    else:
+        if has_key("derive.auto"):
+            print(f"  Current: {'on' if auto else 'off'}")
+        answer = _ask(
+            "Enable automatic derive (runs at session start, at most once a day)?",
+            default_yes=auto,
+        )
+        if answer is None:  # closed stdin: the prompt is still on the line
+            print(f"\n  Automatic derive stays {'on' if auto else 'off'}: no answer.")
+        else:
+            put("derive.auto", answer)  # a decline is written too, so the consent hint stops
+            print(
+                f"  Automatic derive {'on' if answer else 'off'}; change it any time with "
+                f"`memware config derive.auto {'false' if answer else 'true'}`."
+            )
+
+    # 6. Persist, and mark setup done so the discovery hints stop.
+    put("setup.completed_version", __version__)
+    print(f"\nSaved {save_config(user)}.")
+
+    # 7. Operating guidance.
     print("\nHow backups keep running:")
     if dest:
         print("  • The Claude Code plugin backs up at session end, at most once every ~20h — no")
@@ -709,22 +819,29 @@ def cmd_setup(a: argparse.Namespace) -> int:
 
 
 def cmd_config(a: argparse.Namespace) -> int:
-    from memware.config import config_path, get_dotted, load_config, save_config, set_dotted
+    from memware.config import (
+        config_path,
+        get_dotted,
+        load_config,
+        load_user_config,
+        save_config,
+        set_dotted,
+    )
 
-    cfg = load_config()
     if a.key and a.value is not None:
         val: object = a.value
         if a.key.endswith("keep_days"):
             val = [int(x) for x in a.value.replace(",", " ").split()]
         elif a.value.lower() in ("true", "false"):
             val = a.value.lower() == "true"
-        set_dotted(cfg, a.key, val)
-        save_config(cfg)
-        _out({a.key: get_dotted(cfg, a.key), "path": str(config_path())}, a.json)
+        user = load_user_config()  # write the one key; defaults stay defaults, not choices
+        set_dotted(user, a.key, val)
+        save_config(user)
+        _out({a.key: get_dotted(user, a.key), "path": str(config_path())}, a.json)
     elif a.key:
-        _out({a.key: get_dotted(cfg, a.key)}, a.json)
+        _out({a.key: get_dotted(load_config(), a.key)}, a.json)
     else:
-        _out({**cfg, "path": str(config_path())}, a.json)
+        _out({**load_config(), "path": str(config_path())}, a.json)
     return 0
 
 
@@ -786,7 +903,7 @@ Examples:
   memware recall "db url" --plain | fzf     scriptable, tab-separated, one hit per line
   memware beliefs api                       current beliefs about a subject
   memware assert api "listens on" 8443      record a fact (supersedes the old value)
-  memware setup                             guided backup + first-run configuration
+  memware setup                             guided backups, derive opt-in, first-run config
   memware completions zsh > ~/.zfunc/_memware      install shell completion
 
 Environment:
@@ -1064,8 +1181,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--dest", metavar="DIR", help="backup destination to pick the latest from")
     s.set_defaults(fn=cmd_restore)
 
-    s = add("setup", "guided one-time setup: index existing sessions, configure backups")
-    s.add_argument("--yes", action="store_true", help="accept defaults; non-interactive")
+    s = add(
+        "setup",
+        "guided one-time setup: index existing sessions, configure backups, choose whether "
+        "derive runs automatically",
+    )
+    s.add_argument(
+        "--yes",
+        action="store_true",
+        help="accept defaults; non-interactive (never switches derive on)",
+    )
     s.set_defaults(fn=cmd_setup)
 
     s = add("config", "show or set configuration (e.g. backup.dest, backup.keep_days)")
