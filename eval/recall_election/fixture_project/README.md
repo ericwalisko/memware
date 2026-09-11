@@ -14,12 +14,15 @@ gateway                         # listens on GATEWAY_PORT (default 8443)
 
 ## Routes
 
-- `GET /healthz` - liveness, unauthenticated, returns `{"ok": true}`
-- `POST /v1/jobs` - signed; body is forwarded to the runner
+- `GET /healthz` - liveness, returns `{"ok": true, "version": ...}`. Unauthenticated on
+  purpose: liveness probes carry no signing key, and the route reveals nothing beyond
+  liveness and the package version.
+- `POST /v1/jobs` - signed; body is forwarded to the runner. Bodies larger than
+  `gateway.config.MAX_BODY_BYTES` are refused with 413.
 - `GET /v1/jobs/{id}` - signed; forwarded to the runner, status relayed
 
-Upstream calls are retried on 5xx and connection errors up to
-`gateway.config.RETRY_LIMIT` times with a linear backoff.
+Upstream calls are attempted up to `gateway.config.RETRY_LIMIT` times, retrying on 5xx and
+connection errors with a linear backoff.
 
 ## Request signing
 

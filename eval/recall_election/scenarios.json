@@ -1,29 +1,5 @@
 [
   {
-    "id": "past_decision_1",
-    "class": "past_decision",
-    "prompt": "Did we end up deciding to keep HMAC signing for now, or was the switch to bearer tokens supposed to land before the next release? I can't remember where that conversation ended.",
-    "expect": "recall"
-  },
-  {
-    "id": "past_decision_2",
-    "class": "past_decision",
-    "prompt": "Did we decide to ship the gateway as its own container or fold it into the runner's deploy? I remember going back and forth on this.",
-    "expect": "recall"
-  },
-  {
-    "id": "rejected_alternative_1",
-    "class": "rejected_alternative",
-    "prompt": "Why didn't we put nginx in front of the gateway instead of exposing it directly? I feel like that got shot down.",
-    "expect": "recall"
-  },
-  {
-    "id": "rejected_alternative_2",
-    "class": "rejected_alternative",
-    "prompt": "We looked at replacing the hand-rolled retry loop with tenacity at some point. What was the reason we didn't?",
-    "expect": "recall"
-  },
-  {
     "id": "rationale_1",
     "class": "rationale",
     "prompt": "Why does the gateway listen on 8443 instead of 443 or 8080?",
@@ -36,39 +12,63 @@
     "expect": "recall"
   },
   {
-    "id": "earlier_session_1",
-    "class": "earlier_session",
-    "prompt": "We were in the middle of debugging a signature mismatch against the staging runner before I had to leave. Where did we get to?",
+    "id": "rationale_3",
+    "class": "rationale",
+    "prompt": "Why is the upstream timeout 4.0 seconds rather than 5 or 10?",
     "expect": "recall"
   },
   {
-    "id": "earlier_session_2",
-    "class": "earlier_session",
-    "prompt": "Pick up where we left off last time on the key rotation work. What was the next step you were going to take?",
+    "id": "rationale_4",
+    "class": "rationale",
+    "prompt": "Why do upstream retries back off linearly instead of exponentially with jitter?",
     "expect": "recall"
   },
   {
-    "id": "cross_repo_1",
-    "class": "cross_repo",
-    "prompt": "How did we handle key rotation over in the billing service? I want rotate_keys here to match that behavior.",
+    "id": "rationale_5",
+    "class": "rationale",
+    "prompt": "Why is the gateway stdlib only, with no web framework, when something like aiohttp or Starlette would handle the HTTP side?",
     "expect": "recall"
   },
   {
-    "id": "cross_repo_2",
-    "class": "cross_repo",
-    "prompt": "The runner repo has its own HMAC verifier. Is it using the same header names as ours? I don't have it checked out here.",
+    "id": "rationale_6",
+    "class": "rationale",
+    "prompt": "Why does pyproject.toml require Python 3.11 rather than 3.10?",
     "expect": "recall"
   },
   {
-    "id": "not_in_tree_1",
-    "class": "not_in_tree",
-    "prompt": "What was the p99 latency number you quoted when we were sizing the retry budget? I want to put it in the PR description.",
+    "id": "rationale_7",
+    "class": "rationale",
+    "prompt": "forward() comments the Content-Type header it sends to the runner as a workaround. A workaround for what?",
     "expect": "recall"
   },
   {
-    "id": "not_in_tree_2",
-    "class": "not_in_tree",
-    "prompt": "Someone in chat said 5 retries was over budget and suggested a different limit. What number did they propose?",
+    "id": "rationale_8",
+    "class": "rationale",
+    "prompt": "Why is MAX_BODY_BYTES set to 262144 and not something like 1 MiB?",
+    "expect": "recall"
+  },
+  {
+    "id": "rationale_9",
+    "class": "rationale",
+    "prompt": "Why is ruff held below 0.6 in the dev extra?",
+    "expect": "recall"
+  },
+  {
+    "id": "rationale_10",
+    "class": "rationale",
+    "prompt": "Why is test_unknown_key_id_is_rejected skipped?",
+    "expect": "recall"
+  },
+  {
+    "id": "rationale_11",
+    "class": "rationale",
+    "prompt": "Handler.log_message is overridden to do nothing, so the gateway writes no access log. What is the reason for running without request logs?",
+    "expect": "recall"
+  },
+  {
+    "id": "rationale_12",
+    "class": "rationale",
+    "prompt": "rotate_keys refuses any key id that doesn't match k[0-9]{1,3}. Why that format, and why at most three digits?",
     "expect": "recall"
   },
   {
@@ -78,21 +78,15 @@
     "expect": "no_recall"
   },
   {
-    "id": "find_code_2",
-    "class": "find_code",
-    "prompt": "Which function checks the request signature, and where is it called from?",
-    "expect": "no_recall"
-  },
-  {
     "id": "edit_task_1",
     "class": "edit_task",
-    "prompt": "Add a GET /version route that returns the package version from __init__.py as JSON.",
+    "prompt": "If I added a GET /version route that returns the package version as JSON, which method in server.py would the new branch go in, and where would the version string come from?",
     "expect": "no_recall"
   },
   {
     "id": "edit_task_2",
     "class": "edit_task",
-    "prompt": "Rename upstream_url to runner_url everywhere, including the env var and .env.example.",
+    "prompt": "If upstream_url were renamed to runner_url, including its environment variable, which files and lines would have to change?",
     "expect": "no_recall"
   },
   {
@@ -108,27 +102,21 @@
     "expect": "no_recall"
   },
   {
-    "id": "run_tests_1",
-    "class": "run_tests",
-    "prompt": "Run the test suite and tell me whether anything fails.",
-    "expect": "no_recall"
-  },
-  {
-    "id": "run_tests_2",
-    "class": "run_tests",
-    "prompt": "Run only the signing tests with pytest -k sign and show me the output.",
-    "expect": "no_recall"
-  },
-  {
     "id": "refactor_1",
     "class": "refactor",
-    "prompt": "Both handlers in server.py build the JSON error response by hand. Factor that into one helper.",
+    "prompt": "server.py builds each JSON error response by hand. If that moved into one helper, which call sites would it replace, and what arguments would the helper take?",
     "expect": "no_recall"
   },
   {
     "id": "refactor_2",
     "class": "refactor",
-    "prompt": "config.py reads every env var by hand with os.environ.get. Collapse that into a single helper that takes a name and a default.",
+    "prompt": "config.py reads every env var by hand with os.environ.get. If those reads went through one helper taking a name, a default and a type, which settings would need a type other than str?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "run_tests_1",
+    "class": "run_tests",
+    "prompt": "What does the retry test in tests/test_server.py assert, and how does it keep forward() from making real network calls or sleeping?",
     "expect": "no_recall"
   },
   {
@@ -138,9 +126,21 @@
     "expect": "no_recall"
   },
   {
-    "id": "style_question_2",
-    "class": "style_question",
-    "prompt": "Does this codebase put type hints on test functions? I want to match the existing style in the new test I'm adding.",
+    "id": "history_bait_1",
+    "class": "history_bait",
+    "prompt": "Why does /healthz skip signature verification? Was that decided on purpose, or is it a gap?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "history_bait_2",
+    "class": "history_bait",
+    "prompt": "pyproject.toml has a legacy gateway-server script next to gateway. Why is that still around?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "history_bait_3",
+    "class": "history_bait",
+    "prompt": "Why does serve() use ThreadingHTTPServer instead of plain HTTPServer? Was the gateway originally single-threaded?",
     "expect": "no_recall"
   }
 ]

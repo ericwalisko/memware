@@ -1,7 +1,9 @@
 """Isolation probes for the recall-election eval.
 
-Two ``claude -p`` spawns with exactly the argv run.py uses (same fixture cwd, stub server,
-isolation flag), each answering one question about its own context:
+Three ``claude -p`` spawns per model, each isolated exactly as a grid cell is (``run.run_claude``:
+a fresh copy of the fixture under /private/tmp/gateway-work as cwd, the MCP config and call log
+in a sibling directory, the same argv and environment, no marker), each answering one question
+about its own context:
 
 1. tool list   PASS iff the ``mcp__memware__`` tools the model lists are exactly recall,
                read_session and beliefs and no other ``mcp__`` name appears (the real memware
@@ -9,11 +11,17 @@ isolation flag), each answering one question about its own context:
                checked the same way as corroborating evidence.
 2. Known facts PASS iff the model answers NO to whether its context holds a block starting
                with "Known facts" (what the memware UserPromptSubmit hook injects).
+3. context     (a) PASS iff every init event of the model's three spawns exists and carries no
+               non-empty memory path field (``memory_paths.auto`` is how the first run loaded
+               the checkout's auto-memory); (b) PASS iff the one-sentence description of the
+               project it is working in names none of eval, stub, fixture, harness, scenario,
+               benchmark.
 
     uv run --extra mcp --extra dev python eval/recall_election/probe.py \
-        --variant eval/recall_election/variants/baseline.md --model opus
+        --variant eval/recall_election/variants/control.md --models opus sonnet
 
-Exit 0 on PASS/PASS, 1 otherwise. The last stdout line is a JSON summary.
+Exit 0 when every probe passes on every model, 1 otherwise. The last stdout line is a JSON
+summary.
 """
 
 from __future__ import annotations
@@ -30,8 +38,11 @@ from run import (
     DEFAULT_FIXTURE,
     DEFAULT_ISOLATION,
     ISOLATION_CHOICES,
+    add_marker_flags,
     fatal_reason,
+    out_of_copy,
     parse_stream,
+    preflight,
     run_claude,
 )
 
@@ -41,6 +52,8 @@ PROMPT_FACTS = (
     "Does your context contain a block that starts with the words Known facts? "
     "Answer only YES or NO."
 )
+PROMPT_PROJECT = "In one sentence, describe the project you are working in."
+ANSWER_BANNED = ("eval", "stub", "fixture", "harness", "scenario", "benchmark")
 _MCP_NAME = re.compile(r"mcp__[A-Za-z0-9_\-]+")
 
 
@@ -77,6 +90,26 @@ def check_known_facts(text: str) -> tuple[bool, dict[str, Any]]:
     return first == "NO", {"first_word": first}
 
 
+def check_memory_paths(spawns: list[dict[str, Any]]) -> tuple[bool, dict[str, Any]]:
+    """Probe 3a over parsed streams: every spawn has an init event and none names a memory path."""
+    found: dict[str, Any] = {}
+    for i, p in enumerate(spawns, 1):
+        for key, value in (p.get("memory_paths") or {}).items():
+            found[f"spawn {i}: {key}"] = value
+    no_init = [i for i, p in enumerate(spawns, 1) if not p.get("has_init")]
+    return bool(spawns) and not no_init and not found, {
+        "memory_paths": found,
+        "spawns_without_init": no_init,
+    }
+
+
+def check_project_answer(text: str) -> tuple[bool, dict[str, Any]]:
+    """Probe 3b: a non-empty description that names nothing about the eval."""
+    low = text.lower()
+    hits = [w for w in ANSWER_BANNED if w in low]
+    return bool(text.strip()) and not hits, {"banned_words": hits}
+
+
 def probe(
     prompt: str,
     variant: Path,
@@ -99,28 +132,17 @@ def probe(
     return raw, parsed
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+def isolation_line(raw: dict[str, Any], parsed: dict[str, Any]) -> str:
+    escaped = out_of_copy(parsed["tool_inputs"], Path(raw["copy_dir"]))
+    return (
+        f"  isolation: cwd={parsed['init_cwd']} copy={raw['copy_dir']} "
+        f"dirs_removed={raw['dirs_removed']} out_of_copy={escaped}"
     )
-    ap.add_argument(
-        "--variant", type=Path, required=True, help="a variant .md (recall description)"
-    )
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--isolation", choices=ISOLATION_CHOICES, default=DEFAULT_ISOLATION)
-    ap.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
-    ap.add_argument("--timeout", type=float, default=150.0)
-    ap.add_argument("--no-marker", action="store_true")
-    args = ap.parse_args(argv)
-    variant = args.variant.resolve()
-    fixture = args.fixture.resolve()
-    if not variant.is_file():
-        raise SystemExit(f"{variant} is not a file")
-    if not fixture.is_dir():
-        raise SystemExit(f"{fixture} is not a directory")
 
-    common = (variant, args.model, fixture, args.isolation, args.timeout, not args.no_marker)
-    print(f"isolation={args.isolation} model={args.model} fixture={fixture}", flush=True)
+
+def run_probes(model: str, args: argparse.Namespace) -> dict[str, Any]:
+    common = (args.variant, model, args.fixture, args.isolation, args.timeout, args.marker)
+    print(f"== model={model} isolation={args.isolation} marker={args.marker}", flush=True)
 
     raw1, p1 = probe(PROMPT_TOOLS, *common)
     ok1, ev1 = check_tools(p1["final_text_full"], p1["init_tools"])
@@ -130,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  init event tools:     {ev1['init_tools']} -> {'ok' if ev1['init_ok'] else 'FAIL'}")
     print(f"  mcp servers (init):   {p1['init_mcp_servers']}")
     print(f"  tools model called:   {p1['tools_called']}")
+    print(isolation_line(raw1, p1))
     print("  answer: " + p1["final_text_full"].strip().replace("\n", " | ")[:600])
 
     raw2, p2 = probe(PROMPT_FACTS, *common)
@@ -137,21 +160,67 @@ def main(argv: list[str] | None = None) -> int:
     print(f"probe 2 (Known facts): {'PASS' if ok2 else 'FAIL'}")
     print(f"  first word: {ev2['first_word']!r} (need 'NO')")
     print(f"  tools model called:   {p2['tools_called']}")
+    print(isolation_line(raw2, p2))
     print("  answer: " + p2["final_text_full"].strip().replace("\n", " | ")[:300])
 
-    verdict = ok1 and ok2
-    summary = {
-        "isolation": args.isolation,
-        "model": args.model,
+    raw3, p3 = probe(PROMPT_PROJECT, *common)
+    ok3a, ev3a = check_memory_paths([p1, p2, p3])
+    ok3b, ev3b = check_project_answer(p3["final_text_full"])
+    ok3 = ok3a and ok3b
+    print(f"probe 3 (context): {'PASS' if ok3 else 'FAIL'}")
+    print(
+        f"  (a) init memory paths: {ev3a['memory_paths'] or 'none'}; spawns without init: "
+        f"{ev3a['spawns_without_init'] or 'none'} -> {'ok' if ok3a else 'FAIL'}"
+    )
+    print(
+        f"  (b) banned words in answer: {ev3b['banned_words'] or 'none'} -> {'ok' if ok3b else 'FAIL'}"
+    )
+    print(f"  tools model called:   {p3['tools_called']}")
+    print(isolation_line(raw3, p3))
+    print("  answer: " + p3["final_text_full"].strip().replace("\n", " | ")[:400])
+
+    return {
         "probe1": "PASS" if ok1 else "FAIL",
         "probe2": "PASS" if ok2 else "FAIL",
+        "probe3": "PASS" if ok3 else "FAIL",
         "evidence": {
             "probe1": {**ev1, "answer": p1["final_text_full"][:600]},
             "probe2": {**ev2, "answer": p2["final_text_full"][:300]},
+            "probe3": {**ev3a, **ev3b, "answer": p3["final_text_full"][:400]},
             "argv_flags": [a for a in raw1["argv"][3:] if a.startswith("--")],
+            "copies": [raw1["copy_dir"], raw2["copy_dir"], raw3["copy_dir"]],
+            "dirs_removed": [raw1["dirs_removed"], raw2["dirs_removed"], raw3["dirs_removed"]],
         },
-        "elapsed_s": [raw1["elapsed_s"], raw2["elapsed_s"]],
+        "elapsed_s": [raw1["elapsed_s"], raw2["elapsed_s"], raw3["elapsed_s"]],
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--variant", type=Path, required=True, help="a variant .md (recall description)"
+    )
+    ap.add_argument("--models", "--model", dest="models", nargs="+", required=True)
+    ap.add_argument("--isolation", choices=ISOLATION_CHOICES, default=DEFAULT_ISOLATION)
+    ap.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
+    ap.add_argument("--timeout", type=float, default=150.0)
+    add_marker_flags(ap)
+    args = ap.parse_args(argv)
+    args.variant = args.variant.resolve()
+    args.fixture = args.fixture.resolve()
+    if not args.variant.is_file():
+        raise SystemExit(f"{args.variant} is not a file")
+    if not args.fixture.is_dir():
+        raise SystemExit(f"{args.fixture} is not a directory")
+    preflight(args.fixture)
+
+    per_model = {m: run_probes(m, args) for m in dict.fromkeys(args.models)}
+    verdict = all(
+        s[k] == "PASS" for s in per_model.values() for k in ("probe1", "probe2", "probe3")
+    )
+    summary = {"isolation": args.isolation, "marker": args.marker, "models": per_model}
     print(f"RESULT: {'PASS' if verdict else 'FAIL'}")
     print(json.dumps(summary, ensure_ascii=False))
     return 0 if verdict else 1

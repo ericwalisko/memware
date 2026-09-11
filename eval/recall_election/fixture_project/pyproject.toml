@@ -6,10 +6,13 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+dev = ["pytest>=8", "ruff>=0.5,<0.6"]
 
 [project.scripts]
 gateway = "gateway.server:main"
+# Legacy name, kept because the deployed systemd units still start the gateway as gateway-server;
+# dropping it would break every host that has not had its unit file updated.
+gateway-server = "gateway.server:main"
 
 [build-system]
 requires = ["hatchling"]
