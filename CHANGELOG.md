@@ -134,6 +134,18 @@ All notable changes to this project are documented here. The format follows
   `docs/scheduling.md` covers LaunchAgents (catch up after sleep), systemd timers
   (`Persistent=true`), and plain cron for those who want a clock instead.
 
+### Fixed
+- **`memware backup` no longer aborts on one unwritable transcript.** The mirror opened
+  each target with `shutil.copy2`, and a synced destination (Dropbox observed) evicts
+  already-uploaded files to dataless placeholders — opening one of those for write makes
+  the sync engine materialise it first, which failed with `OSError: [Errno 11] Resource
+  deadlock avoided` roughly half the time. That took down the whole mirror (and the
+  cron/hook exit code) even though the snapshot before it had already succeeded. The mirror
+  now copies to a temp file beside the target and `os.replace`s it in, so a target is never
+  opened for writing directly, and a file that still can't be written is skipped and
+  reported (`transcripts_skipped` in `--json`, one stderr line each) rather than raised —
+  best-effort, retried on every run.
+
 ## [0.3.0] - 2026-09-04
 
 ### Added
