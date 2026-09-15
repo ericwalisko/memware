@@ -44,6 +44,12 @@ Changelog = "https://github.com/ericwalisko/memware/blob/main/CHANGELOG.md"
 # One source of truth: `memware --version` and the published wheel cannot drift.
 path = "src/memware/__init__.py"
 
+[tool.hatch.build.targets.sdist]
+# The recall-election harness carries its own fixture project and a 370 KB results
+# file; neither belongs in a source distribution. eval/questions.example.jsonl stays
+# in (docs/eval.md points readers at it).
+exclude = ["eval/recall_election"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/memware"]
 
