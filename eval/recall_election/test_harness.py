@@ -151,8 +151,12 @@ def test_mcp_config_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert srv["args"] == [str(run.STUB_SERVER)]
     assert srv["env"]["RECALL_DESCRIPTION_FILE"].endswith("v.md")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    for name in ("CLAUDE_EFFORT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"):
+        monkeypatch.setenv(name, "1")
     env = run.child_env()
     assert "ANTHROPIC_API_KEY" not in env
+    for name in ("CLAUDE_EFFORT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"):
+        assert name not in env
     assert env["MEMWARE_NO_CAPTURE"] == "1"
     assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
 

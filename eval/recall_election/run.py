@@ -50,6 +50,9 @@ BUILTIN_TOOLS = ["Grep", "Read", "Glob"]
 ISOLATION_CHOICES = ("setting-sources", "settings", "both")
 DEFAULT_ISOLATION = "setting-sources"
 FINAL_TEXT_CHARS = 300
+STRIPPED_ENV = frozenset(
+    {"ANTHROPIC_API_KEY", "CLAUDE_EFFORT", "CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE"}
+)
 SECONDS_PER_CELL = 20  # 2026-09-10 run: opus 22.4 s, sonnet 16.4 s mean per valid cell
 
 # Per-cell isolation. The copy is the model's cwd; the meta directory (MCP config, call log) is
@@ -115,8 +118,12 @@ def child_env() -> dict[str, str]:
     Auto-memory is on by default even in a fresh directory: the init event then carries
     ``memory_paths.auto`` and the system prompt describes a memory store, which is exactly the
     kind of cue that moves a recall election. Probe 3 checks it is off.
+
+    Session variables inherited from an orchestrating Claude Code session are stripped too:
+    ``CLAUDE_EFFORT`` would change a cell's cost and behaviour, and the child-session flags
+    would make each cell run as a nested session instead of a fresh one.
     """
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env = {k: v for k, v in os.environ.items() if k not in STRIPPED_ENV}
     env["MEMWARE_NO_CAPTURE"] = "1"
     env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     return env
