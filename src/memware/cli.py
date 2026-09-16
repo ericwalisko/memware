@@ -40,6 +40,7 @@ from memware.ledger import (
     orphaned_count,
     reject,
     retract,
+    stale_turn_count,
 )
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.store import Store
@@ -838,8 +839,6 @@ def _provenance_lines(p: dict[str, Any]) -> list[tuple[str, str]]:
             "" if g["entrypoint"] else " (derive reads these as interactive)"
         )
         lines.append((label, value))
-    if p["beliefs_no_indexed_turn"]:
-        lines.append(("beliefs from no indexed turn", f"{p['beliefs_no_indexed_turn']:,}"))
     for d in p["top_projects"]:
         where = (
             "~" + d["directory"][len(home) :]
@@ -889,6 +888,7 @@ def _print_stats(r: dict[str, Any]) -> None:
             ),
             ("last recalled", _when(u["last_recalled"], u["last_recalled_age_hours"], "never")),
             ("beliefs citing an unindexed session", f"{u['beliefs_orphaned']:,}"),
+            ("beliefs with a stale turn citation", f"{u['beliefs_stale_turn']:,}"),
         ],
         _capture_lines(r["capture"]),
         [("verdict", v) for v in _stats_verdicts(r)],
@@ -935,7 +935,11 @@ def cmd_stats(a: argparse.Namespace) -> int:
         report: dict[str, Any] = {"db": str(s.path), **s.stats()}
         report["provenance"] = s.provenance()
         report["derive"] = derive_status(s.conn, s.path)
-        report["utilization"] = {**s.utilization(), "beliefs_orphaned": orphaned_count(s)}
+        report["utilization"] = {
+            **s.utilization(),
+            "beliefs_orphaned": orphaned_count(s),
+            "beliefs_stale_turn": stale_turn_count(s),
+        }
     report["capture"] = _capture_status()
     if a.json:
         _out(report, True)

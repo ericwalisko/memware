@@ -351,6 +351,13 @@ def pointer_session(source: object) -> str | None:
     return m.group(1) if m else None
 
 
+def pointer_turn(source: object) -> int | None:
+    """The turn id a derived belief cites; None for any other source, mirroring
+    :func:`pointer_session`."""
+    m = _SESSION_POINTER.match(source) if isinstance(source, str) else None
+    return int(m.group(2)) if m else None
+
+
 @dataclass(frozen=True)
 class Retraction:
     """What a retraction does, or would do. Rows are belief rows as dicts.
@@ -387,8 +394,25 @@ def _indexed(store: Store, session: str) -> bool:
 
 
 def orphaned_count(store: Store) -> int:
-    """Committed beliefs citing a session that has no turn left in the store."""
+    """Committed beliefs citing a session that has no turn left in the store. This is the
+    retractable kind: ``memware beliefs retract --orphaned`` acts on exactly these."""
     return sum(len(rows) for s, rows in _cited_sessions(store).items() if not _indexed(store, s))
+
+
+def stale_turn_count(store: Store) -> int:
+    """Committed beliefs citing a turn id that no longer exists, though the session it belongs
+    to is still indexed. This is not ``orphaned_count``: the session was re-indexed and its
+    turns renumbered, so the citation dangles while the evidence itself is still in the store.
+    Nothing retracts these yet — there is no repair command."""
+    total = 0
+    for session, rows in _cited_sessions(store).items():
+        if not _indexed(store, session):
+            continue
+        turn_ids = {
+            row[0] for row in store.conn.execute("SELECT id FROM turn WHERE session=?", (session,))
+        }
+        total += sum(1 for r in rows if pointer_turn(r["source"]) not in turn_ids)
+    return total
 
 
 def _next_surviving(store: Store, start: int | None, gone: set[int]) -> sqlite3.Row | None:

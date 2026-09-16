@@ -252,7 +252,7 @@ def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, cap
             source=md.source_pointer("s-lane-1", _turn_id(db, LANE_FACTS[0])),
         )
         assert_belief(s, "editor", "is", "helix")  # stated by a person: no turn
-        # a real turn id under the wrong session is not that turn's evidence
+        # a real turn id under the wrong, never-indexed session: retractable, not stale
         assert_belief(
             s, "stale", "is", "gone", source=md.source_pointer("s-gone", _turn_id(db, CLI_FACT))
         )
@@ -269,13 +269,15 @@ def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, cap
             {"entrypoint": "cli", "sessions": 1, "turns": 3, "beliefs": 1},
             {"entrypoint": None, "sessions": 1, "turns": 1, "beliefs": 0},
         ],
-        "beliefs_no_indexed_turn": 2,
         "top_projects": [
             {"directory": gen, "sessions": 3, "share": 0.6},
             {"directory": work, "sessions": 2, "share": 0.4},  # the subagent is s-cli's
         ],
     }
     assert r["derive"]["sources"] == "interactive" and r["derive"]["turns_pending"] == 4
+    # "editor is helix" cites nothing; "stale is gone" cites a session never indexed at all —
+    # that is the retractable kind, not a stale turn citation inside a session still indexed.
+    assert (r["utilization"]["beliefs_orphaned"], r["utilization"]["beliefs_stale_turn"]) == (1, 0)
 
     assert main(["--db", db, "stats"]) == 0
     out = capsys.readouterr().out
@@ -284,7 +286,8 @@ def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, cap
     assert (
         "no entrypoint : 1 session, 1 turn, 0 beliefs (derive reads these as interactive)\n" in out
     )
-    assert "beliefs from no indexed turn : 2\n" in out
+    assert "beliefs citing an unindexed session : 1\n" in out
+    assert "beliefs with a stale turn citation : 0\n" in out
     assert f"project directory : 3 sessions (60.0%) {gen}\n" in out
     assert f"project directory : 2 sessions (40.0%) {work}\n" in out
     assert "derive sources : interactive\n" in out
@@ -302,7 +305,6 @@ def test_stats_lists_at_most_five_project_directories_and_shortens_home(monkeypa
     monkeypatch.setenv("HOME", str(home))
     report = {
         "by_entrypoint": [],
-        "beliefs_no_indexed_turn": 0,
         "top_projects": [
             {"directory": f"{home}/.claude/projects/-a", "sessions": 1, "share": 1.0},
             {"directory": "/elsewhere/sessions", "sessions": 1, "share": 1.0},
