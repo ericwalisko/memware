@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **`memware stats` no longer conflates a retractable orphan with a stale citation.** The
+  `beliefs from no indexed turn` line merged two different counts: beliefs whose cited session
+  has no turn left at all (`memware beliefs retract --orphaned` acts on exactly these), and
+  beliefs whose cited turn id no longer exists even though the session is still indexed — a
+  citation left dangling by re-indexing, not evidence that is actually gone. It read as "cleanup
+  needed" even when the retractable count was zero. The line is gone; `stats` now prints
+  `beliefs citing an unindexed session` and `beliefs with a stale turn citation` separately, the
+  retract call-to-action fires only for the first, and `--json` exposes both under
+  `utilization.beliefs_orphaned` and `utilization.beliefs_stale_turn`.
+
 ## [0.6.0] - 2026-09-16
 
 ### Added

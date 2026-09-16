@@ -26,6 +26,7 @@ from memware.ledger import (
     plan_retraction,
     pointer_session,
     retract,
+    stale_turn_count,
 )
 from memware.store import Store
 from tests.conftest import write_claude_jsonl
@@ -263,6 +264,44 @@ def test_the_one_shot_retracts_beliefs_whose_session_is_already_gone(db, tmp_pat
     after = _dump(db)  # a second run finds nothing left to do
     _, out, _ = _run(capsys, "--db", db, "beliefs", "retract", "--orphaned", "--apply")
     assert "beliefs retracted : 0" in out and _dump(db) == after
+
+
+def test_stats_tells_a_retractable_orphan_from_a_stale_turn_citation(tmp_path, capsys):
+    """A session that has no turn left at all is retractable. A session that is still indexed,
+    whose cited turn id was renumbered by a re-index, is not — it needs a repair, not a
+    retraction, and must never be counted as the same thing (t_0a65da4b)."""
+    path = str(tmp_path / "m.db")
+    with Store(path) as s:
+        s.conn.executemany(
+            "INSERT INTO turn(id,session,seq,role,text,source,harness) "
+            "VALUES (?,'s1',?,?,?,?,'claude-code')",
+            [
+                (200, 1, "user", "current turn A", "/p/s1.jsonl"),
+                (201, 2, "assistant", "current turn B", "/p/s1.jsonl"),
+            ],
+        )
+        assert_belief(s, "stale", "is", "a dangling citation", source=source_pointer("s1", 50))
+        assert_belief(
+            s, "gone", "is", "session fully un-indexed", source=source_pointer("s-gone", 1)
+        )
+        assert orphaned_count(s) == 1
+        assert stale_turn_count(s) == 1
+
+    code, out, _ = _run(capsys, "--db", path, "stats")
+    assert code == 0
+    assert "beliefs citing an unindexed session : 1" in out
+    assert "beliefs with a stale turn citation : 1" in out
+    verdicts = [line for line in out.splitlines() if line.strip().startswith("verdict")]
+    assert sum("no longer indexed" in v for v in verdicts) == 1  # only the retractable one
+    assert not any("stale" in v for v in verdicts)  # no call to action: no repair exists yet
+
+    code, out, _ = _run(capsys, "--db", path, "--json", "stats")
+    u = json.loads(out)["utilization"]
+    assert (u["beliefs_orphaned"], u["beliefs_stale_turn"]) == (1, 1)
+
+    code, out, _ = _run(capsys, "--db", path, "beliefs", "retract", "--orphaned")
+    assert "beliefs to retract : 1" in out
+    assert "a dangling citation" not in out  # the stale-turn belief is untouched
 
 
 def test_prune_turns_containing_retracts_only_the_sessions_it_empties(db, capsys):

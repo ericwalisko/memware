@@ -339,8 +339,9 @@ class Store:
         wrote a large share of the store shows here without an audit.
 
         A belief counts under the entrypoint of the turn its source pointer names. One a person
-        stated, or one whose turn is no longer indexed, is counted apart. A session whose turns
-        carry two entrypoints counts once under each."""
+        stated, or one whose citation no longer resolves to a turn, is not attributed to any
+        entrypoint (``memware.ledger.orphaned_count`` and ``stale_turn_count`` account for the
+        latter). A session whose turns carry two entrypoints counts once under each."""
         q = self.conn.execute
         groups: dict[str | None, dict[str, Any]] = {}
         for entrypoint, sessions, turns in q(
@@ -352,7 +353,6 @@ class Store:
                 "turns": int(turns),
                 "beliefs": 0,
             }
-        attributed = 0
         # memware:session/<session>/turn/<id>, as memware.derive.source_pointer writes it
         for entrypoint, n in q(
             "SELECT t.entrypoint, count(*) FROM belief b JOIN turn t "
@@ -362,12 +362,6 @@ class Store:
             "AND b.source LIKE 'memware:session/%/turn/%' GROUP BY t.entrypoint"
         ):
             groups[entrypoint]["beliefs"] = int(n)
-            attributed += int(n)
-        current = int(
-            q(
-                "SELECT count(*) FROM belief WHERE valid_to IS NULL AND status='committed'"
-            ).fetchone()[0]
-        )
         by_dir: dict[str, set[str]] = {}
         for source, session in q("SELECT DISTINCT source, session FROM turn"):
             by_dir.setdefault(project_dir(source), set()).add(session)
@@ -378,7 +372,6 @@ class Store:
                 groups.values(),
                 key=lambda g: (-g["sessions"], -g["turns"], g["entrypoint"] is None),
             ),
-            "beliefs_no_indexed_turn": current - attributed,
             "top_projects": [
                 {
                     "directory": d,

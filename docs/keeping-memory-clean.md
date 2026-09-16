@@ -122,6 +122,14 @@ memware beliefs retract --orphaned           # dry run: what would be retracted 
 memware beliefs retract --orphaned --apply   # retract them
 ```
 
+**A dangling citation is not the same thing.** Re-indexing a transcript (a `memware sync` that
+re-reads a file whose turns were re-parsed) can renumber a session's turn ids while the session
+stays indexed. A belief still citing the old id then points at a turn that no longer exists,
+even though its evidence — the session itself — is still in the store. `memware stats` counts
+these apart, as `beliefs with a stale turn citation`, and does not offer `retract --orphaned`
+for them: retracting would discard a belief whose evidence is still present, just under a
+different turn id. There is no repair command for this yet.
+
 ## Layer 3 — path exclusions (the machine remembers)
 
 The switch lives in a run's environment, so a script that forgets to set it is captured. A marker
