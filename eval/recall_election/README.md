@@ -18,7 +18,8 @@ Nothing here is part of the package. Run from the repo root with the `mcp` and `
 | `test_harness.py` | unit tests (parser on a real captured stream, isolation and out-of-copy checks, count mismatch, shuffle, fatal detection, loaders, scoring, sign test, decision) |
 | `scenarios.json`, `scenarios.md` | the scenario set and its rationale |
 | `fixture_project/` | the tree copied into every cell's working directory |
-| `variants/` | one `<id>.md` per recall description; the stem is the variant id. `control` is the docstring in `src/memware/mcp_server.py` (PR #15), `synthesized` the grep-contrast/terse-triggers synthesis the decision may ship, `baseline` the pre-#15 how-only text, the rest authored candidates |
+| `variants/` | one `<id>.md` per recall description; the stem is the variant id. `control` is the docstring in `src/memware/mcp_server.py` (PR #15), `synthesized` the grep-contrast/terse-triggers synthesis the decision may ship, the rest authored candidates. Only top-level `*.md` files are variants, so these five are the whole default grid |
+| `variants/archive/` | descriptions retired after the first run and kept for its record: `baseline` (the pre-#15 how-only text), `cost-and-default`, `must-gate`, `question-forms`. Pass `--variants eval/recall_election/variants/archive` to run one again |
 | `gate_variants/` | `never_call` and `must_call`, the proof-of-red pair; never part of the scored grid |
 
 ## How to run

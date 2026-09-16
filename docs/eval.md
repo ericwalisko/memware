@@ -6,10 +6,13 @@ decide whether memware earns its place in your own setup.
 ## Guardrails, built in
 
 - `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`): content markers every
-  sync skips by signature — the durable defence, and the only one that covers transcripts
-  written before a marker or `MEMWARE_NO_CAPTURE` existed. Seed it with your eval marker.
-- `MEMWARE_NO_CAPTURE=1` in the environment of an evaluation run: hooks and providers
-  skip capture, so the run never enters the live store.
+  sync and the backup mirror skip by signature — the durable defence, and the only one that
+  covers a transcript no memware hook saw. Seed it with your eval marker.
+- `MEMWARE_NO_CAPTURE=1` in the environment of an evaluation run: each memware hook that runs
+  in the session puts its transcript on `<home>/no-capture.txt`, which every sync and backup
+  honours, and the Hermes provider captures nothing. A session that runs no memware hook
+  leaves no record (see [keeping-memory-clean.md](keeping-memory-clean.md#what-the-switch-cannot-do)).
+- `claude -p --no-session-persistence`: no transcript is written, so there is nothing to keep out.
 - `[memware-eval]` (``memware.eval.MARKER``) in every evaluation prompt: `memware-eval
   --corpus ROOT --db scratch.db --beliefs-from LIVE.db` rebuilds a clean store that
   skips any transcript carrying it, and `memware prune --containing '[memware-eval]'`

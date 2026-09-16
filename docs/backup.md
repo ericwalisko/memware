@@ -50,6 +50,22 @@ tier is pruned. The pile stays bounded (~5). Tune the tiers with `backup.keep_da
 that outlives the 30-day cleanup. Already back transcripts up elsewhere? Point memware at that
 location with `backup.transcript_src` and it will read from there too.
 
+The mirror never copies a transcript that sync would refuse: one on the no-capture list (a
+session run under `MEMWARE_NO_CAPTURE=1`, with its subagents' transcripts) or one whose head
+carries a skip marker (see
+[keeping-memory-clean.md](keeping-memory-clean.md)). `memware backup` reports how many it left
+out (`transcripts_skipped_no_capture`, `transcripts_skipped_marker`). A copy of one that an
+earlier run already made is listed under `transcripts_left_in_backup` and on stderr at every
+run. memware never deletes from the destination, so remove those copies by hand.
+
+A destination that is a synced folder can also refuse a write outright — Dropbox evicts
+already-uploaded files to dataless placeholders, and materialising one on write can fail
+with `OSError: [Errno 11] Resource deadlock avoided`. The mirror never opens a target
+directly: it copies to a temp file beside it and `os.replace`s it in, so a failed write
+never leaves a half-copied file. A target that still can't be written is skipped, not
+raised — the snapshot in the same run is unaffected and exits 0, the skip is counted under
+`transcripts_skipped`, and the mirror retries it on the next run.
+
 ## How it stays current on its own (no scheduler)
 
 Once a backup destination is set (`memware setup`), the Claude Code plugin and the Hermes

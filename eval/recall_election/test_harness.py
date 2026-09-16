@@ -493,6 +493,14 @@ def test_select_ids(tmp_path: Path) -> None:
     assert run.select_scenarios(scenarios, ["b"]) == [{"id": "b"}]
 
 
+def test_default_variants_exclude_archive() -> None:
+    grid = {"control", "grep-contrast", "memory-persona", "synthesized", "terse-triggers"}
+    assert set(run.load_variants(run.DEFAULT_VARIANTS)) == grid
+    archived = set(run.load_variants(run.DEFAULT_VARIANTS / "archive"))
+    assert archived == {"baseline", "cost-and-default", "must-gate", "question-forms"}
+    assert not archived & grid
+
+
 # ------------------------------------------------------------------ sign test and decision
 
 

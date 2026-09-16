@@ -105,7 +105,9 @@ Requires the `memware` CLI on your `PATH` (see [Install](#install)). Hooks:
 a `SessionStart` hook catches up any session whose `SessionEnd` was skipped (some environments force-kill Claude Code — a worktree manager may `SIGKILL` it — and a kill cannot run `SessionEnd`); a second one injects `memware digest`, a short block with this project's recent sessions and beliefs and a line pointing at `recall`; `SessionEnd`/`PreCompact` sync the transcript into the index; an optional `UserPromptSubmit`
 hook injects the handful of currently valid beliefs whose subject the prompt names (beliefs
 only — transcript search is on demand through the MCP tools). Set `MEMWARE_DB` to move the
-store, and `MEMWARE_NO_CAPTURE=1` for any session you do not want indexed. See
+store. Start a session with `MEMWARE_NO_CAPTURE=1` to keep it out of the index and the backup
+mirror: the hooks list its transcript, and every sync and backup skips what is listed. A session
+that runs no memware hook cannot be recognised that way. See
 [docs/integrations.md](docs/integrations.md) and [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
 
 ## Deriving beliefs
@@ -199,11 +201,14 @@ Full guide: [docs/backup.md](docs/backup.md).
 
 Full guide: [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
 
-Headless runs write transcripts too. Set `MEMWARE_NO_CAPTURE=1` in any run you do not want
-indexed (hooks, the Hermes provider and `memware sync --from-hook` all honour it), put
-`[memware-eval]` in evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
+Headless runs write transcripts too, unless you pass `--no-session-persistence` to `claude -p`.
+Set `MEMWARE_NO_CAPTURE=1` in any run you do not want indexed: the plugin's hooks list its
+transcript so no sync indexes it and no backup mirrors it, and the Hermes provider captures
+nothing. That needs a memware hook to run in the session, so also put `[memware-eval]` in
+evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
 --beliefs-from ~/.memware/memware.db` to judge retrieval against a store that excludes them.
-`memware prune --containing TEXT` un-indexes runs that already slipped in. For a durable filter that every sync honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed.
+`memware prune --containing TEXT` un-indexes runs that already slipped in; copies already
+mirrored to a backup folder have to be deleted there by hand. For a durable filter that every sync and backup honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed or mirrored.
 
 ## Reviewing contested supersessions
 

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-15
+
 ### Changed
 - **MCP tool descriptions say when to call them, not only how.** Recall fires only when the
   model elects to call it, and it competes with grep, so its description now opens with an
@@ -80,6 +82,27 @@ All notable changes to this project are documented here. The format follows
   too old to know `notice`. `memware notice` prints the same lines in a terminal.
 
 ### Fixed
+- **`MEMWARE_NO_CAPTURE` sessions were indexed and copied to the backup folder.** The variable
+  was checked only by `memware sync --from-hook`, in the one process that carried it. The
+  plugin's `SessionStart` catch-up (`memware sync`, since 0.2.6) runs in the next session without
+  it and indexed every such transcript still on disk; `memware backfill` and `memware setup` did
+  the same. The transcript mirror in `memware backup` (since 0.2.0) copied them, and it also
+  copied transcripts carrying a skip marker, into `<dest>/transcripts`, which is often a synced
+  folder. The Hermes provider never checked the variable. Now every `--from-hook` command that
+  runs under the variable (`sync`, `context`, `notice`, `digest`) adds the payload's
+  `transcript_path` to `<home>/no-capture.txt`. The start and prompt entries record it, so a
+  force-killed session is covered, and recording never changes a hook's output. Every sync skips
+  a listed transcript and the subagent transcripts Claude Code keeps beside it in
+  `<session>/subagents/`, and un-indexes any of them indexed before. The mirror skips the same
+  files and marker-tagged transcripts. `memware backup` reports `transcripts_skipped_no_capture`
+  and `transcripts_skipped_marker`, plus `transcripts_left_in_backup` for copies an earlier run
+  made, which it never deletes. The Hermes provider captures nothing under the variable. Limits: a
+  session that ran no memware hook and carries no marker still cannot be recognised, and sessions
+  indexed or mirrored before this release cannot be identified afterwards. Un-index known paths
+  with `memware prune --glob`/`--containing` and delete their copies from the backup folder by
+  hand (docs/keeping-memory-clean.md). `claude -p --no-session-persistence` writes no transcript.
+- `memware setup` printed the mirror's result object instead of the number of transcripts it
+  mirrored in its first-backup line.
 - `derive --if-stale` read the last run as an hour older than it was whenever the local zone
   was on daylight time; the age is now UTC arithmetic.
 - Upgrading to 0.4.0 never mentioned `derive`. Derive is off by default, which is right,
@@ -112,6 +135,18 @@ All notable changes to this project are documented here. The format follows
   run `derive` in the background, at most once a day — no cron, no always-on machine.
   `docs/scheduling.md` covers LaunchAgents (catch up after sleep), systemd timers
   (`Persistent=true`), and plain cron for those who want a clock instead.
+
+### Fixed
+- **`memware backup` no longer aborts on one unwritable transcript.** The mirror opened
+  each target with `shutil.copy2`, and a synced destination (Dropbox observed) evicts
+  already-uploaded files to dataless placeholders — opening one of those for write makes
+  the sync engine materialise it first, which failed with `OSError: [Errno 11] Resource
+  deadlock avoided` roughly half the time. That took down the whole mirror (and the
+  cron/hook exit code) even though the snapshot before it had already succeeded. The mirror
+  now copies to a temp file beside the target and `os.replace`s it in, so a target is never
+  opened for writing directly, and a file that still can't be written is skipped and
+  reported (`transcripts_skipped` in `--json`, one stderr line each) rather than raised —
+  best-effort, retried on every run.
 
 ## [0.3.0] - 2026-09-04
 

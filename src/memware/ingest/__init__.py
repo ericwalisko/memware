@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,11 +76,90 @@ def default_skip_markers() -> list[str]:
 
 NO_CAPTURE_ENV = "MEMWARE_NO_CAPTURE"
 """Set to 1 in the environment of an agent run you do not want indexed (evaluations,
-benchmarks, throwaway experiments). Hooks and providers honour it; so does ``sync``."""
+benchmarks, throwaway experiments). The variable reaches only the processes that session
+starts, so every ``--from-hook`` command that sees it puts the session's transcript on the
+no-capture list (:func:`record_no_capture`), and every sync and backup honours the list
+whatever environment it runs in. The Hermes provider captures nothing under it."""
 
 
 def capture_disabled() -> bool:
     return os.environ.get(NO_CAPTURE_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def no_capture_file() -> Path:
+    """``<memware home>/no-capture.txt``: one resolved transcript path per line."""
+    from memware.config import memware_home
+
+    return memware_home() / "no-capture.txt"
+
+
+def no_capture_paths() -> set[str]:
+    """Transcripts put on the no-capture list. No sync indexes them and no backup mirrors them."""
+    try:
+        text = no_capture_file().read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def is_no_capture(source: str | os.PathLike[str], listed: set[str] | None = None) -> bool:
+    """Whether a resolved transcript path is on the no-capture list, or inside the directory
+    Claude Code keeps beside a listed transcript. A session's subagents write their own
+    transcripts under ``<session>/subagents/``, next to ``<session>.jsonl``, and their turns
+    carry the session's id."""
+    listed = no_capture_paths() if listed is None else listed
+    if not listed:
+        return False
+    p = Path(source)
+    return str(p) in listed or any(f"{d}.jsonl" in listed for d in p.parents)
+
+
+@contextmanager
+def _exclusive(lock: Path) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``lock`` for the block; unlocked where there is no flock."""
+    try:
+        import fcntl
+    except ImportError:  # Windows
+        yield
+        return
+    with lock.open("a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def record_no_capture(path: str | os.PathLike[str]) -> bool:
+    """Put a transcript on the no-capture list. Returns False if it was already there.
+
+    ``MEMWARE_NO_CAPTURE`` lives in one session's environment, and the catch-up sync and the
+    backup mirror run in other processes that never see it. The list carries the decision to
+    them. The path is resolved the way :func:`sync_file` resolves a source, and it need not
+    exist yet: a session-start hook records a transcript before its first line is written.
+    Writers take a lock beside the file and replace the file whole, so sessions that start
+    together all land and a reader never sees half a line."""
+    source = str(Path(path).expanduser().resolve())
+    target = no_capture_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive(target.with_name(target.name + ".lock")):
+        try:
+            listed = [
+                line.strip()
+                for line in target.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except FileNotFoundError:
+            listed = []
+        if source in listed:
+            return False
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text("".join(f"{p}\n" for p in [*listed, source]), encoding="utf-8")
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)
+    return True
 
 
 def file_contains(path: Path, marker: str | list[str], *, head_bytes: int = 200_000) -> bool:
@@ -104,7 +184,9 @@ def sync_file(
     ``skip_if_contains`` skips (and un-indexes, if previously indexed) any file whose
     head contains the marker — the way to keep an evaluation's own sessions out of the
     evidence it is evaluated against. The persistent markers from
-    :func:`default_skip_markers` always apply on top of it.
+    :func:`default_skip_markers` always apply on top of it, and a file on the no-capture
+    list (:func:`record_no_capture`), or one of its subagents' transcripts, is skipped and
+    un-indexed the same way.
     """
     p = Path(path)
     source = str(p.resolve())
@@ -113,7 +195,7 @@ def sync_file(
         markers += (
             [skip_if_contains] if isinstance(skip_if_contains, str) else list(skip_if_contains)
         )
-    if markers and file_contains(p, markers):
+    if is_no_capture(source) or (markers and file_contains(p, markers)):
         prune_source(store, source)
         return 0
     parse = parser_for(harness)
@@ -224,9 +306,13 @@ __all__ = [
     "default_skip_markers",
     "file_contains",
     "ignore_markers_file",
+    "is_no_capture",
+    "no_capture_file",
+    "no_capture_paths",
     "parser_for",
     "prune_source",
     "prune_sources",
+    "record_no_capture",
     "register",
     "sync_file",
     "sync_tree",

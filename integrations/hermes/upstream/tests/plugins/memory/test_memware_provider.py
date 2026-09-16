@@ -60,7 +60,7 @@ class _Hit:
 @pytest.fixture()
 def backend(monkeypatch):
     """Install fake ``memware.*`` modules and record every call made to them."""
-    calls: dict = {"beliefs": [], "synced": [], "ensure": [], "hits": []}
+    calls: dict = {"beliefs": [], "synced": [], "ensure": [], "hits": [], "no_capture": False}
 
     store_mod = types.ModuleType("memware.store")
     store_mod.Store = _FakeStore
@@ -89,6 +89,7 @@ def backend(monkeypatch):
 
     ingest_mod = types.ModuleType("memware.ingest")
     ingest_mod.sync_file = _sync_file
+    ingest_mod.capture_disabled = lambda: calls["no_capture"]
 
     root = types.ModuleType("memware")
     for name, mod in {
@@ -320,6 +321,17 @@ def test_session_switch_flushes_then_rebinds(provider, tmp_path, backend):
     provider.sync_turn("q2", "a2")
     provider.shutdown()
     assert (tmp_path / "memware" / "sessions" / "sess-2.jsonl").exists()
+
+
+def test_no_capture_writes_and_indexes_nothing(provider, tmp_path, backend):
+    backend["no_capture"] = True  # MEMWARE_NO_CAPTURE=1
+    provider.sync_turn("q", "a", session_id="s3")
+    provider.shutdown()
+    provider.on_session_end([])
+    provider.on_memory_write("add", "preferences", "always use pnpm not npm")
+
+    assert not (tmp_path / "memware" / "sessions" / "s3.jsonl").exists()
+    assert backend["synced"] == [] and backend["beliefs"] == []
 
 
 # ---------------------------------------------------------------------------
