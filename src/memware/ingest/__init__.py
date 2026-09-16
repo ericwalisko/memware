@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from memware.ledger import Retraction, apply_retraction, plan_retraction
 from memware.passage import index_turn
 from memware.store import Store, now_iso
 
@@ -294,11 +295,105 @@ def sync_tree(
 
 
 def prune_source(store: Store, source: str) -> int:
-    """Remove every turn and the cursor for one indexed source path. Returns turns removed."""
+    """Remove every turn and the cursor for one indexed source path. Returns turns removed.
+
+    Beliefs are left alone. ``sync_file`` calls this for every listed or marked transcript, from
+    hooks, and a belief changes only after someone has read a dry run: ``memware stats`` counts
+    the beliefs this can leave citing a missing session, and ``memware beliefs retract
+    --orphaned`` retracts them. :func:`prune` is the un-index that cascades."""
     n = int(store.conn.execute("SELECT count(*) FROM turn WHERE source=?", (source,)).fetchone()[0])
     store.conn.execute("DELETE FROM turn WHERE source=?", (source,))
     store.conn.execute("DELETE FROM cursor WHERE source=?", (source,))
     return n
+
+
+@dataclass(frozen=True)
+class Pruned:
+    """What :func:`prune` removed, or would remove without ``apply``."""
+
+    sources: dict[str, int]
+    """Source path -> turns, for a whole-source prune; empty for a turn-level one."""
+    turns: int
+    beliefs: Retraction
+    """The retraction it cascades into: beliefs from every session it leaves with no turn."""
+    applied: bool
+
+
+def _matching_sources(store: Store, glob: str | None, containing: str | None) -> list[str]:
+    import fnmatch
+
+    out: list[str] = []
+    for (source,) in store.conn.execute("SELECT source FROM cursor").fetchall():
+        if glob and not fnmatch.fnmatch(source, glob):
+            continue
+        if containing:
+            p = Path(source)
+            if not (p.exists() and file_contains(p, containing)):
+                continue
+        out.append(source)
+    return out
+
+
+def prune(
+    store: Store,
+    *,
+    glob: str | None = None,
+    containing: str | None = None,
+    turns_containing: str | None = None,
+    apply: bool = False,
+    reason: str = "memware prune",
+) -> Pruned:
+    """Un-index whole sources (``glob`` and/or ``containing``) or single turns
+    (``turns_containing``), and retract the beliefs derived from every session that leaves with
+    no turn indexed (see :func:`memware.ledger.plan_retraction`).
+
+    Without ``apply`` nothing is written and the result is what would happen. With it, the
+    deletes and the retraction commit together. Sessions are read before the delete: a deleted
+    turn no longer says which session it came from."""
+    if turns_containing is not None:
+        sources: list[str] = []
+        doomed, args = "text LIKE ?", [turns_containing + "%"]
+    else:
+        sources = _matching_sources(store, glob, containing)
+        if not sources:
+            return Pruned({}, 0, plan_retraction(store, []), apply)
+        doomed, args = f"source IN ({','.join('?' * len(sources))})", sources
+    conn = store.conn
+    conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
+    try:
+        counts = dict.fromkeys(sources, 0)
+        for source, n in conn.execute(
+            f"SELECT source, count(*) FROM turn WHERE {doomed} GROUP BY source", args
+        ):
+            counts[source] = int(n)
+        turns = int(conn.execute(f"SELECT count(*) FROM turn WHERE {doomed}", args).fetchone()[0])
+        touched = [
+            r[0] for r in conn.execute(f"SELECT DISTINCT session FROM turn WHERE {doomed}", args)
+        ]
+        if apply:
+            conn.execute(f"DELETE FROM turn WHERE {doomed}", args)
+            if sources:
+                conn.execute(f"DELETE FROM cursor WHERE {doomed}", args)
+        # Once applied no doomed turn is left, so one test serves both modes: a session is
+        # emptied when no turn the prune spares remains in it.
+        emptied = [
+            s
+            for s in touched
+            if conn.execute(
+                f"SELECT 1 FROM turn WHERE session=? AND NOT ({doomed}) LIMIT 1", [s, *args]
+            ).fetchone()
+            is None
+        ]
+        plan = plan_retraction(store, emptied)
+        if apply:
+            apply_retraction(store, plan, reason=reason)
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        if conn.in_transaction:
+            conn.execute("COMMIT")
+    return Pruned(counts if sources else {}, turns, plan, apply)
 
 
 def prune_turns(store: Store, *, containing: str) -> int:
@@ -307,27 +402,18 @@ def prune_turns(store: Store, *, containing: str) -> int:
 
     Unlike :func:`prune_sources` (which drops whole transcripts), this is turn-level — the
     right tool for harness boilerplate that recurs inside otherwise-real sessions, such as a
-    skill preamble already indexed before the parser learned to skip it."""
-    cur = store.conn.execute("DELETE FROM turn WHERE text LIKE ?", (containing + "%",))
-    return int(cur.rowcount)
+    skill preamble already indexed before the parser learned to skip it. A session left with
+    no turn has its derived beliefs retracted, as :func:`prune` does with ``apply``."""
+    return prune(store, turns_containing=containing, apply=True).turns
 
 
 def prune_sources(
     store: Store, *, glob: str | None = None, containing: str | None = None
 ) -> dict[str, int]:
-    """Un-index sources whose path matches ``glob`` and/or whose file contains ``containing``."""
-    import fnmatch
-
-    out: dict[str, int] = {}
-    for (source,) in store.conn.execute("SELECT source FROM cursor").fetchall():
-        if glob and not fnmatch.fnmatch(source, glob):
-            continue
-        if containing:
-            p = Path(source)
-            if not (p.exists() and file_contains(p, containing)):
-                continue
-        out[source] = prune_source(store, source)
-    return out
+    """Un-index sources whose path matches ``glob`` and/or whose file contains ``containing``,
+    and retract the beliefs derived from the sessions that leaves with no turn: :func:`prune`
+    with ``apply``."""
+    return prune(store, glob=glob, containing=containing, apply=True).sources
 
 
 from memware.ingest import claude_code as _cc  # noqa: E402
@@ -336,6 +422,7 @@ from memware.ingest import generic as _generic  # noqa: E402
 __all__ = [
     "NO_CAPTURE_ENV",
     "Parser",
+    "Pruned",
     "Turn",
     "capture_disabled",
     "capture_exclude_patterns",
@@ -348,8 +435,10 @@ __all__ = [
     "no_capture_file",
     "no_capture_paths",
     "parser_for",
+    "prune",
     "prune_source",
     "prune_sources",
+    "prune_turns",
     "record_no_capture",
     "register",
     "sync_file",

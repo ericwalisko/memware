@@ -16,7 +16,8 @@ decide whether memware earns its place in your own setup.
 - `[memware-eval]` (``memware.eval.MARKER``) in every evaluation prompt: `memware-eval
   --corpus ROOT --db scratch.db --beliefs-from LIVE.db` rebuilds a clean store that
   skips any transcript carrying it, and `memware prune --containing '[memware-eval]'`
-  removes stragglers from a live store.
+  lists stragglers in a live store and the beliefs derived from them; `--apply` removes the
+  stragglers and retracts those beliefs.
 - Negative questions: generate them from words you have never typed in an indexed
   session (a dictionary and a random seed), and do not print them into a session
   that gets indexed.

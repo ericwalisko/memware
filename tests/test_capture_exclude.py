@@ -23,6 +23,7 @@ from memware.ingest import (
     record_no_capture,
     sync_file,
 )
+from memware.ledger import assert_belief, current
 from memware.store import Store
 from tests.conftest import write_claude_jsonl
 
@@ -236,11 +237,34 @@ def test_exclude_add_apply_un_indexes_sources_no_sync_would_visit_again(machine,
     assert capture_exclude_patterns() == [GLOB]
     assert json.loads(config_path().read_text())["backup"]["transcript_src"]  # the rest is kept
     assert (out["applied"], out["unindex_sources"], out["transcripts"]) == (True, 3, 4)
+    assert out["beliefs_orphaned"] == 0  # nothing was derived from them
     assert [_turns_from(db, p) for p in _excluded(machine)] == [0, 0, 0]
     assert _turns_from(db, machine["wiki"]) == 1
 
     assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 0  # idempotent
     assert capture_exclude_patterns() == [GLOB]
+
+
+def test_exclude_apply_retracts_no_belief_and_counts_the_orphans(machine, capsys):
+    """Like a sync skip, un-indexing by pattern leaves derived beliefs for the orphan one-shot."""
+    db = machine["db"]
+    assert main(["--db", db, "sync"]) == 0
+    with Store(db) as s:
+        assert_belief(
+            s, "skill factory", "drafts", "three steps", source="memware:session/g1/turn/2"
+        )
+        assert_belief(s, "linkifier", "skips", "code fences", source="memware:session/w1/turn/1")
+    capsys.readouterr()
+
+    assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 0
+    human = capsys.readouterr().out
+    assert main(["--db", db, "--json", "stats"]) == 0
+    stats = json.loads(capsys.readouterr().out)
+
+    assert "1 belief cites a session that is no longer indexed" in human
+    assert stats["utilization"]["beliefs_orphaned"] == 1
+    with Store(db) as s:
+        assert {b["subject"] for b in current(s)} == {"skill factory", "linkifier"}
 
 
 def test_exclude_lists_each_pattern_and_the_union(machine, capsys):

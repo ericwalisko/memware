@@ -7,6 +7,30 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Beliefs whose evidence was un-indexed are retracted.** A derived belief cites
+  `memware:session/<id>/turn/<n>`. When that session left the index, the belief stayed
+  committed and went on reaching prompts as a known fact. A new status, `retracted`, closes a
+  belief at its own start (`valid_to` = `valid_from`, as a rejected candidate is closed). The
+  belief leaves `recall`, the prompt hook, the digest, `memware beliefs` and the
+  `beliefs_current` count. It stays in the history of its key with when and why it was
+  retracted, kept in a new `retraction` table beside `belief`, which an existing store gains on
+  open with no migration. No belief row is deleted. If the retracted belief had superseded a
+  committed value, that value becomes current again. If a later belief had already superseded
+  the retracted one, the older value closes where that later one starts. A belief whose source
+  is not a session pointer (anything a person passed to `remember` or `assert`) is never
+  retracted. Beliefs whose source names the session in free text are listed as kept. A value
+  that arrives late, dated before the current one, skips retracted beliefs when it takes its
+  place in the timeline, as it skips rejected ones, so it never reinforces a retracted row.
+- **`memware prune` cascades into the ledger.** It retracts the beliefs derived from every
+  session it leaves with no turn, in the same transaction as the delete. That covers whole
+  sources and `--turns-containing` alike, and the library's `prune_sources` and `prune_turns`
+  do it too. The new `memware.ingest.prune` takes `apply=False` for a plan.
+- **`memware beliefs retract --orphaned`**: the one-shot for beliefs whose cited session is
+  already gone, from an earlier prune or from a sync that skipped a listed or marked
+  transcript. A sync never changes a belief. The command has the same dry-run and `--apply`
+  shape as `prune`.
+- **`memware stats` counts beliefs citing an unindexed session**
+  (`utilization.beliefs_orphaned`), with a verdict line naming the one-shot when there are any.
 - **`capture.exclude`: path globs that no sync indexes and no backup mirrors.** `MEMWARE_NO_CAPTURE`
   reaches only the processes a run starts, and a marker needs its text inside the transcript, so a
   generator whose author forgot both was captured. A pattern lives in the machine's config and
@@ -24,14 +48,26 @@ All notable changes to this project are documented here. The format follows
   `--remove GLOB` print what would change and write nothing without `--apply`; the dry run opens
   the store read-only and never creates one. `--apply` writes `capture.exclude` and un-indexes
   every indexed source the patterns match, including sources whose transcript has left the disk,
-  which no sync would visit again. Removing a pattern re-indexes nothing by itself; the next sync
-  does.
+  which no sync would visit again. Like a sync, it retracts no belief; it reports how many beliefs
+  now cite an unindexed session, for `memware beliefs retract --orphaned`. Removing a pattern
+  re-indexes nothing by itself; the next sync does.
 - `memware stats` shows the patterns and how many transcripts on disk they hide (`capture` in
   `--json`; the tree is walked only when a pattern is set). `stats`, `exclude` and `backup` warn
   when the patterns hide half or more of the transcripts on disk.
 - `docs/keeping-memory-clean.md` gains Layer 3 and a table of how the no-capture list, path
   exclusions and skip markers relate, with the guidance that a generator should run from a
   working directory of its own so a pattern can name it without excluding interactive sessions.
+
+### Changed
+- **`memware prune` is a dry run unless `--apply` is given.** It prints the sources and turns
+  it would remove, the beliefs it would retract, the predecessors it would reopen or relink, and
+  the stated beliefs it keeps, and writes nothing. Scripts that ran `memware prune` to delete
+  must add `--apply`. `--json` keeps `sources_pruned` and `turns_removed` and adds `applied`,
+  `sessions_emptied`, `retract`, `reopen`, `relink` and `keep`.
+- `memware prune` needs one of `--glob`, `--containing` or `--turns-containing` and exits 2
+  without one. With none, it used to un-index every source.
+- `memware beliefs retract` with no relation is now the retract command. A key whose subject is
+  `retract` still reads as history with `memware beliefs retract RELATION`.
 
 ## [0.5.0] - 2026-09-15
 

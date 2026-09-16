@@ -22,6 +22,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from memware.store import Store, now_iso
 
@@ -144,12 +145,12 @@ def assert_belief(
         if incumbent is not None and vf < incumbent["valid_from"]:
             successor = conn.execute(
                 "SELECT id, valid_from FROM belief WHERE key=? AND valid_from>? "
-                "AND status!='rejected' ORDER BY valid_from ASC LIMIT 1",
+                "AND status NOT IN ('rejected','retracted') ORDER BY valid_from ASC LIMIT 1",
                 (key, vf),
             ).fetchone()
             predecessor = conn.execute(
                 "SELECT id, value, valid_to FROM belief WHERE key=? AND valid_from<=? "
-                "AND status!='rejected' ORDER BY valid_from DESC LIMIT 1",
+                "AND status NOT IN ('rejected','retracted') ORDER BY valid_from DESC LIMIT 1",
                 (key, vf),
             ).fetchone()
             if predecessor is not None and normalize(predecessor["value"]) == nv:
@@ -328,12 +329,171 @@ def current(store: Store, subject: str | None = None) -> list[dict[str, object]]
 
 
 def history(store: Store, subject: str, relation: str) -> list[dict[str, object]]:
-    """The full timeline for one key, oldest first, rejected candidates excluded."""
+    """The full timeline for one key, oldest first, rejected candidates excluded. A retracted
+    belief stays in it, with when and why it was retracted."""
     rows = store.conn.execute(
-        "SELECT * FROM belief WHERE key=? AND status!='rejected' ORDER BY valid_from, id",
+        "SELECT b.*, r.retracted_at, r.reason AS retracted_reason FROM belief b "
+        "LEFT JOIN retraction r ON r.belief_id = b.id "
+        "WHERE b.key=? AND b.status!='rejected' ORDER BY b.valid_from, b.id",
         (make_key(subject, relation),),
     )
     return [dict(r) for r in rows]
+
+
+_SESSION_POINTER = re.compile(r"^memware:session/(.+)/turn/(\d+)$")
+
+
+def pointer_session(source: object) -> str | None:
+    """The session a derived belief cites, from a source written by
+    :func:`memware.derive.source_pointer`; None for any other source, such as the free text a
+    person passes to ``remember`` or ``assert``."""
+    m = _SESSION_POINTER.match(source) if isinstance(source, str) else None
+    return m.group(1) if m else None
+
+
+@dataclass(frozen=True)
+class Retraction:
+    """What a retraction does, or would do. Rows are belief rows as dicts.
+
+    ``reopen`` and ``relink`` repair supersessions a retracted belief made. A reopened
+    predecessor becomes current again. A relinked one stays closed, now at the next belief
+    that survives, because the retracted belief had itself been superseded. ``kept`` lists
+    beliefs whose source names one of the sessions but is not a session pointer: a person
+    stated them, so they are never retracted."""
+
+    sessions: list[str]
+    retract: list[dict[str, Any]]
+    reopen: list[dict[str, Any]]
+    relink: list[dict[str, Any]]
+    kept: list[dict[str, Any]]
+
+
+def _cited_sessions(store: Store) -> dict[str, list[dict[str, Any]]]:
+    """Committed beliefs whose source is a session pointer, by the session it names."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in store.conn.execute(
+        "SELECT * FROM belief WHERE status='committed' AND source LIKE 'memware:session/%' "
+        "ORDER BY id"
+    ):
+        session = pointer_session(r["source"])
+        if session is not None:
+            out.setdefault(session, []).append(dict(r))
+    return out
+
+
+def _indexed(store: Store, session: str) -> bool:
+    row = store.conn.execute("SELECT 1 FROM turn WHERE session=? LIMIT 1", (session,)).fetchone()
+    return row is not None
+
+
+def orphaned_count(store: Store) -> int:
+    """Committed beliefs citing a session that has no turn left in the store."""
+    return sum(len(rows) for s, rows in _cited_sessions(store).items() if not _indexed(store, s))
+
+
+def _next_surviving(store: Store, start: int | None, gone: set[int]) -> sqlite3.Row | None:
+    """The first belief along the ``superseded_by`` chain from ``start`` that is committed
+    and not in ``gone``."""
+    seen: set[int] = set()
+    nxt = start
+    while nxt is not None and nxt not in seen:
+        seen.add(nxt)
+        row = store.conn.execute(
+            "SELECT id, valid_from, status, superseded_by FROM belief WHERE id=?", (nxt,)
+        ).fetchone()
+        if row is None:
+            return None
+        if row["id"] not in gone and row["status"] == "committed":
+            return row  # type: ignore[no-any-return]
+        nxt = row["superseded_by"]
+    return None
+
+
+def plan_retraction(store: Store, sessions: list[str] | None = None) -> Retraction:
+    """Read-only: the committed beliefs derived from ``sessions``, and the supersession repairs
+    retracting them needs. ``None`` means every session a belief cites that has no turn left in
+    the store. Explicit sessions are taken as given, so a prune can plan before it deletes."""
+    cited = _cited_sessions(store)
+    targets = sorted(
+        (s for s in cited if not _indexed(store, s)) if sessions is None else set(sessions)
+    )
+    retract = sorted((r for s in targets for r in cited.get(s, [])), key=lambda r: r["id"])
+    gone = {r["id"] for r in retract}
+
+    reopen: list[dict[str, Any]] = []
+    relink: list[dict[str, Any]] = []
+    for r in retract:
+        for p in store.conn.execute(
+            "SELECT * FROM belief WHERE superseded_by=? AND status='committed' ORDER BY id",
+            (r["id"],),
+        ):
+            if p["id"] in gone:
+                continue  # retracted too: its own predecessor is repaired past it
+            repair = {**dict(p), "was_superseded_by": r["id"]}
+            nxt = _next_surviving(store, r["superseded_by"], gone)
+            if nxt is None:
+                reopen.append({**repair, "valid_to": None, "superseded_by": None})
+            else:
+                relink.append({**repair, "valid_to": nxt["valid_from"], "superseded_by": nxt["id"]})
+
+    kept: list[dict[str, Any]] = []
+    if targets:
+        for b in store.conn.execute(
+            "SELECT * FROM belief WHERE status='committed' AND source IS NOT NULL ORDER BY id"
+        ):
+            if pointer_session(b["source"]) is None and any(s in b["source"] for s in targets):
+                kept.append(dict(b))
+    return Retraction(targets, retract, reopen, relink, kept)
+
+
+def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
+    """Carry out ``plan``. The caller holds the write transaction and planned inside it.
+
+    A retracted belief is closed at its own start, as a rejected candidate is, and keeps its
+    row, so ``history`` still shows it. No belief row is deleted."""
+    conn, ts = store.conn, now_iso()
+    notes: dict[int, list[str]] = {}
+    for p in plan.reopen:
+        conn.execute("UPDATE belief SET valid_to=NULL, superseded_by=NULL WHERE id=?", (p["id"],))
+        notes.setdefault(p["was_superseded_by"], []).append(f"reopened #{p['id']}")
+    for p in plan.relink:
+        conn.execute(
+            "UPDATE belief SET valid_to=?, superseded_by=? WHERE id=?",
+            (p["valid_to"], p["superseded_by"], p["id"]),
+        )
+        notes.setdefault(p["was_superseded_by"], []).append(
+            f"relinked #{p['id']} to #{p['superseded_by']}"
+        )
+    for r in plan.retract:
+        conn.execute(
+            "UPDATE belief SET status='retracted', valid_to=valid_from WHERE id=?", (r["id"],)
+        )
+        why = f"session {pointer_session(r['source'])} is no longer indexed ({reason})"
+        conn.execute(
+            "INSERT OR REPLACE INTO retraction(belief_id, retracted_at, reason) VALUES (?,?,?)",
+            (r["id"], ts, "; ".join([why, *notes.get(r["id"], [])])),
+        )
+
+
+def retract(
+    store: Store, sessions: list[str] | None = None, *, reason: str, apply: bool = False
+) -> Retraction:
+    """Retract the committed beliefs derived from ``sessions`` (``None``: every session no
+    longer indexed) and repair the supersessions they made. Without ``apply`` nothing is
+    written, and the result says what would be done."""
+    conn = store.conn
+    conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
+    try:
+        plan = plan_retraction(store, sessions)
+        if apply:
+            apply_retraction(store, plan, reason=reason)
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        if conn.in_transaction:
+            conn.execute("COMMIT")
+    return plan
 
 
 def touch(store: Store, belief_ids: list[int]) -> None:

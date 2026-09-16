@@ -25,13 +25,22 @@ from memware.index import (
 )
 from memware.ingest import (
     capture_disabled,
-    prune_sources,
-    prune_turns,
+    prune,
     record_no_capture,
     sync_file,
     sync_tree,
 )
-from memware.ledger import Policy, approve, assert_belief, current, history, reject
+from memware.ledger import (
+    Policy,
+    Retraction,
+    approve,
+    assert_belief,
+    current,
+    history,
+    orphaned_count,
+    reject,
+    retract,
+)
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.store import Store
 
@@ -375,17 +384,16 @@ def cmd_exclude(a: argparse.Namespace) -> int:
             set_dotted(user, "capture.exclude", after)
             save_config(user)
         if unindex:
-            from memware.store import Store
-
             with Store(db) as s:
                 s.conn.execute("BEGIN IMMEDIATE")
                 try:
                     for source in unindex:
-                        prune_source(s, source)
+                        prune_source(s, source)  # as a sync does: beliefs are left alone
                 except BaseException:
                     s.conn.execute("ROLLBACK")
                     raise
                 s.conn.execute("COMMIT")
+                report["beliefs_orphaned"] = orphaned_count(s)
 
     if a.json:
         _out(report, True)
@@ -431,6 +439,13 @@ def cmd_exclude(a: argparse.Namespace) -> int:
         verdicts.append(hiding)
     if action == "remove" and report["reindexable"]:
         verdicts.append("the next sync indexes the transcripts it no longer excludes")
+    orphaned = report.get("beliefs_orphaned")
+    if orphaned:
+        verdicts.append(
+            f"{orphaned:,} {'belief cites' if orphaned == 1 else 'beliefs cite'} a session that is "
+            "no longer indexed. `memware beliefs retract --orphaned` lists them; add --apply to "
+            "retract."
+        )
     if not a.apply:
         steps = []
         if action == "add" and after != before:
@@ -620,6 +635,11 @@ def _assert_stdin(a: argparse.Namespace) -> int:
 
 
 def cmd_beliefs(a: argparse.Namespace) -> int:
+    if a.subject == "retract" and a.relation is None:
+        return _beliefs_retract(a)
+    if a.orphaned or a.apply:
+        print("--orphaned and --apply belong to `memware beliefs retract`", file=sys.stderr)
+        return 2
     with Store(a.db) as s:
         rows = history(s, a.subject, a.relation) if a.relation else current(s, a.subject)
         _emit(a, rows, _BELIEF_COLS)
@@ -650,14 +670,107 @@ def cmd_review(a: argparse.Namespace) -> int:
     return 0
 
 
+_CASCADE_COLS = [
+    ("action", "action"),
+    ("id", "id"),
+    ("subject", "subject"),
+    ("relation", "relation"),
+    ("value", "value"),
+    ("valid_from", "valid from"),
+    ("valid_to", "valid to"),
+    ("was_superseded_by", "was superseded by"),
+    ("superseded_by", "superseded by"),
+    ("source", "source"),
+]
+
+
+# JSON key -> (label once applied, label in a dry run), for the counts a prune leads with.
+_PRUNE_COUNTS = {
+    "sources_pruned": ("sources un-indexed", "sources to un-index"),
+    "turns_removed": ("turns removed", "turns to remove"),
+}
+
+
+def _cascade(
+    a: argparse.Namespace, plan: Retraction, applied: bool, head: dict[str, int] | None = None
+) -> None:
+    """Print a belief retraction, done or planned: counts, then one record per belief it touches.
+
+    Counts are labeled ``field : value`` lines like ``stats``, and records follow in the
+    ``beliefs`` layout, each led by its action. The dry-run notice goes to stderr, so stdout stays
+    data. --json carries the counts and the full lists; --plain prints only the records."""
+    head = head or {}
+    lists = {
+        "retract": plan.retract,
+        "reopen": plan.reopen,
+        "relink": plan.relink,
+        "keep": plan.kept,
+    }
+    records = [{"action": act, **row} for act, rows in lists.items() for row in rows]
+    if not applied:
+        print("dry run: nothing written; add --apply to write it", file=sys.stderr)
+    if a.json:
+        body = {"applied": applied, **head, "sessions_emptied": plan.sessions, **lists}
+        print(json.dumps(body, indent=2, default=str))
+        return
+    if a.plain:
+        _emit(a, records, _CASCADE_COLS)
+        return
+    n = 0 if applied else 1
+    counts = [(_PRUNE_COUNTS[k][n], v) for k, v in head.items()]
+    counts += [
+        ("sessions with no turn left", len(plan.sessions)),
+        (("beliefs retracted", "beliefs to retract")[n], len(plan.retract)),
+        (("predecessors reopened", "predecessors to reopen")[n], len(plan.reopen)),
+        (("predecessors relinked", "predecessors to relink")[n], len(plan.relink)),
+        ("human-stated beliefs kept", len(plan.kept)),
+    ]
+    width = max(len(label) for label, _ in counts)
+    print("\n".join(f"{label.rjust(width)} : {value:,}" for label, value in counts))
+    if records:
+        print()
+        _emit(a, records, _CASCADE_COLS)
+
+
 def cmd_prune(a: argparse.Namespace) -> int:
+    if not (a.glob or a.containing or a.turns_containing):
+        print(
+            "prune needs --glob, --containing or --turns-containing; with none it would "
+            "un-index every source",
+            file=sys.stderr,
+        )
+        return 2
+    selector = " ".join(
+        f"--{flag.replace('_', '-')} {getattr(a, flag)!r}"
+        for flag in ("glob", "containing", "turns_containing")
+        if getattr(a, flag)
+    )
     with Store(a.db) as s:
-        if a.turns_containing:
-            removed = prune_turns(s, containing=a.turns_containing)
-            _out({"turns_removed": removed}, a.json)
-        else:
-            rep = prune_sources(s, glob=a.glob, containing=a.containing)
-            _out({"sources_pruned": len(rep), "turns_removed": sum(rep.values())}, a.json)
+        r = prune(
+            s,
+            glob=a.glob,
+            containing=a.containing,
+            turns_containing=a.turns_containing,
+            apply=a.apply,
+            reason=f"memware prune {selector}",
+        )
+    head = {"turns_removed": r.turns}
+    if not a.turns_containing:
+        head = {"sources_pruned": len(r.sources), **head}
+    _cascade(a, r.beliefs, r.applied, head)
+    return 0
+
+
+def _beliefs_retract(a: argparse.Namespace) -> int:
+    if not a.orphaned:
+        print(
+            "beliefs retract needs --orphaned: beliefs whose cited session is no longer indexed",
+            file=sys.stderr,
+        )
+        return 2
+    with Store(a.db) as s:
+        plan = retract(s, reason="memware beliefs retract --orphaned", apply=a.apply)
+    _cascade(a, plan, a.apply)
     return 0
 
 
@@ -687,6 +800,13 @@ def _stats_verdicts(r: dict[str, Any]) -> list[str]:
         )
     if r["turns"] and not u["beliefs_recalled_30d"] and not u["turns_recalled_30d"]:
         out.append("nothing has been recalled in 30 days")
+    orphaned = u["beliefs_orphaned"]
+    if orphaned:
+        out.append(
+            f"{orphaned:,} {'belief cites' if orphaned == 1 else 'beliefs cite'} a session that is "
+            "no longer indexed. `memware beliefs retract --orphaned` lists them; add --apply to "
+            "retract."
+        )
     c = r["capture"]
     hiding = c["exclude"] and _hiding_verdict(c["transcripts_excluded"], c["transcripts"])
     if hiding:
@@ -737,6 +857,7 @@ def _print_stats(r: dict[str, Any]) -> None:
                 + ("" if share is None else f" ({share:.1%})"),
             ),
             ("last recalled", _when(u["last_recalled"], u["last_recalled_age_hours"], "never")),
+            ("beliefs citing an unindexed session", f"{u['beliefs_orphaned']:,}"),
         ],
         _capture_lines(r["capture"]),
         [("verdict", v) for v in _stats_verdicts(r)],
@@ -782,7 +903,7 @@ def cmd_stats(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         report: dict[str, Any] = {"db": str(s.path), **s.stats()}
         report["derive"] = derive_status(s.conn, s.path)
-        report["utilization"] = s.utilization()
+        report["utilization"] = {**s.utilization(), "beliefs_orphaned": orphaned_count(s)}
     report["capture"] = _capture_status()
     if a.json:
         _out(report, True)
@@ -1493,11 +1614,23 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  memware beliefs                        all current beliefs\n"
             "  memware beliefs api                    current beliefs about a subject\n"
-            '  memware beliefs api "listens on port"  full history of one key'
+            '  memware beliefs api "listens on port"  full history of one key\n'
+            "  memware beliefs retract --orphaned     dry run: beliefs whose session is gone\n"
+            "  memware beliefs retract --orphaned --apply   retract them (rows are kept)"
         ),
     )
-    s.add_argument("subject", nargs="?")
+    s.add_argument("subject", nargs="?", help="a subject, or `retract` (with --orphaned)")
     s.add_argument("relation", nargs="?")
+    s.add_argument(
+        "--orphaned",
+        action="store_true",
+        help="with `retract`: committed beliefs citing a session that is no longer indexed",
+    )
+    s.add_argument(
+        "--apply",
+        action="store_true",
+        help="with `retract`: write the retraction; without it nothing is written",
+    )
     s.set_defaults(fn=cmd_beliefs)
 
     s = add(
@@ -1537,7 +1670,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = add(
         "prune",
-        "un-index whole sources (--glob/--containing) or individual boilerplate turns (--turns-containing)",
+        "un-index whole sources (--glob/--containing) or individual boilerplate turns "
+        "(--turns-containing), and retract beliefs from the sessions left with no turn",
+        epilog=(
+            "Examples:\n"
+            '  memware prune --containing "[memware-eval]"          dry run: what would go\n'
+            '  memware prune --containing "[memware-eval]" --apply  un-index and retract\n'
+            "Without --apply nothing is written. A retracted belief keeps its row: it leaves\n"
+            "recall, context and `beliefs`, and stays in the history of its key."
+        ),
     )
     s.add_argument("--glob", metavar="GLOB", help="un-index sources whose path matches this glob")
     s.add_argument(
@@ -1547,6 +1688,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--turns-containing",
         metavar="TEXT",
         help="delete individual turns starting with TEXT (keeps the rest of each session)",
+    )
+    s.add_argument(
+        "--apply",
+        action="store_true",
+        help="delete the turns and retract the beliefs; without it nothing is written",
     )
     s.set_defaults(fn=cmd_prune)
 

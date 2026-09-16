@@ -43,7 +43,7 @@ indexed turn, no mirrored memory write. Its tools still answer.
 - **It is not retroactive.** In memware 0.4.0 and earlier the variable left no trace outside its
   own session: the catch-up indexed such sessions (since 0.2.6), `backfill` indexed them, and the
   mirror copied them (since 0.2.0). Those sessions cannot be identified now. If you know which
-  they were, un-index them with `memware prune --glob` or `--containing`, and delete their copies
+  they were, un-index them with `memware prune --glob` or `--containing` and `--apply`, and delete their copies
   from `<dest>/transcripts` by hand. memware never deletes from a backup destination; `memware
   backup` lists the copies it does recognise (listed or marked transcripts still on disk) under
   `transcripts_left_in_backup`.
@@ -81,14 +81,46 @@ including if a backfill re-scans the whole transcript tree.
 If eval runs were indexed before you set any of this up:
 
 ```bash
-memware prune --containing "[memware-eval]"          # by content marker
-memware prune --containing "Answer briefly using only what you know"
-memware prune --glob "*/eval-runs/*"                 # or by path
+memware prune --containing "[memware-eval]"          # dry run: what would go, nothing written
+memware prune --containing "[memware-eval]" --apply  # by content marker
+memware prune --containing "Answer briefly using only what you know" --apply
+memware prune --glob "*/eval-runs/*" --apply         # or by path
 memware stats                                        # confirm
 ```
 
 `prune` un-indexes matching sources (turns and their cursor). A later sync will
-not bring them back as long as the marker is in the ignore list.
+not bring them back as long as the marker is in the ignore list. Without `--apply` it
+writes nothing and prints what it would do, beliefs included (below).
+
+### Retract the beliefs those runs left behind
+
+A run that was indexed may also have been derived: `memware derive` files the facts it finds
+as beliefs, each citing its evidence as `memware:session/<id>/turn/<n>`. Un-indexing the run
+removes the evidence, not the belief, and the belief would go on reaching prompts as a known
+fact. So `prune` also retracts every committed belief whose cited session it leaves with no
+turn. The dry run lists, before anything is written:
+
+- **retract**: the beliefs derived from those sessions;
+- **reopen**: a value one of them had superseded, which becomes current again (or **relink**,
+  when a later belief had already superseded the retracted one: the older value then closes
+  where that later one starts);
+- **keep**: beliefs whose source names one of the sessions but is not a session pointer. A
+  person stated those through `remember` or `assert`, and memware never retracts them.
+
+A retracted belief is closed at its own start (`status` `retracted`, `valid_to` equal to
+`valid_from`). It leaves `recall`, the prompt hook, the digest, `memware beliefs` and the
+`beliefs current` count, and it stays in the history of its key (`memware beliefs SUBJECT
+RELATION`) with when and why it was retracted. No belief row is deleted.
+
+Runs un-indexed some other way leave their beliefs behind: an earlier `memware prune`, a sync
+that skipped a transcript it had indexed before (because of a marker, the no-capture list or a
+`capture.exclude` pattern), or `memware exclude --apply`. A sync never changes a belief. `memware stats` counts these beliefs
+(`beliefs citing an unindexed session`), and the one-shot has the same dry-run shape:
+
+```bash
+memware beliefs retract --orphaned           # dry run: what would be retracted and reopened
+memware beliefs retract --orphaned --apply   # retract them
+```
 
 ## Layer 3 — path exclusions (the machine remembers)
 
@@ -118,7 +150,9 @@ and the Hermes provider. `memware backup` never mirrors it and counts it under
 `transcripts_skipped_glob`. A copy an earlier run already made is listed under
 `transcripts_left_in_backup`; memware never deletes from the destination, so remove it by hand.
 `memware exclude --add … --apply` also un-indexes matching sources whose transcript is no longer on
-disk, which no sync would walk to again. An edit to `config.json` by hand, or through `memware
+disk, which no sync would walk to again. Like a sync, it leaves the beliefs derived from those
+sessions in place and says how many beliefs now cite an unindexed session; `memware beliefs
+retract --orphaned` retracts them (see [Layer 2](#retract-the-beliefs-those-runs-left-behind)). An edit to `config.json` by hand, or through `memware
 config capture.exclude`, takes effect at the next sync, for the transcripts still on disk.
 Removing a pattern re-indexes nothing by itself: the next sync indexes the transcripts it hid,
 if they are still on disk.
@@ -179,7 +213,7 @@ content signature:
 
 ```bash
 # one-shot: drop every copy already indexed (the stable prefix matches them all, dates and all)
-memware prune --turns-containing "You are the NIGHTLY DRIFT SCAN"
+memware prune --turns-containing "You are the NIGHTLY DRIFT SCAN" --apply
 
 # ongoing: if that prompt begins its own automation sessions (a cron that opens a fresh
 # Claude session), skip the whole session at every sync:
@@ -200,7 +234,8 @@ none of this — they collapse cleanly on their own.
 | never write the transcript at all | `claude -p --no-session-persistence` |
 | never index or mirror a generator, whatever its environment | run it from its own directory; `memware exclude --add '*/<project-dir>/*'`, then again with `--apply` |
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
-| remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB` |
+| remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
+| retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
 | remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises |
-| tame a recurring/dated automation prompt | `prune --turns-containing PREFIX`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
+| tame a recurring/dated automation prompt | `prune --turns-containing PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
 | evaluate without self-contamination | `memware-eval --corpus … --beliefs-from …` |
