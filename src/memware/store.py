@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS review (
   decision     TEXT,
   external_ref TEXT
 );
+
+-- Why and when a belief was retracted (memware.ledger.retract). A table beside ``belief``
+-- rather than columns on it, so an existing store gains it on open with no migration and
+-- ``INSERT INTO belief SELECT *`` from an older store (memware.eval) still lines up.
+CREATE TABLE IF NOT EXISTS retraction (
+  belief_id    INTEGER PRIMARY KEY,
+  retracted_at TEXT NOT NULL,
+  reason       TEXT NOT NULL
+);
 """
 
 
