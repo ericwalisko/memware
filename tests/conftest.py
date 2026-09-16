@@ -27,8 +27,17 @@ def store(tmp_path: Path) -> Iterator[Store]:
     s.close()
 
 
-def write_claude_jsonl(path: Path, session: str, turns: list[tuple[str, str, str]]) -> None:
-    """turns: (role, ts, text). Writes Claude Code-shaped JSONL with a few noise rows."""
+def write_claude_jsonl(
+    path: Path,
+    session: str,
+    turns: list[tuple[str, str, str]],
+    *,
+    entrypoint: str | None = None,
+) -> None:
+    """turns: (role, ts, text). Writes Claude Code-shaped JSONL with a few noise rows. With
+    ``entrypoint``, every conversation record carries it, as Claude Code writes them; without,
+    the records have no such field, as older versions wrote them."""
+    stamp = {"entrypoint": entrypoint} if entrypoint else {}
     lines = [json.dumps({"type": "summary", "summary": "noise"})]
     for role, ts, text in turns:
         content = text if role == "user" else [{"type": "text", "text": text}]
@@ -38,6 +47,7 @@ def write_claude_jsonl(path: Path, session: str, turns: list[tuple[str, str, str
                     "type": role,
                     "sessionId": session,
                     "timestamp": ts,
+                    **stamp,
                     "message": {"role": role, "content": content},
                 }
             )
@@ -49,6 +59,7 @@ def write_claude_jsonl(path: Path, session: str, turns: list[tuple[str, str, str
                         "type": "assistant",
                         "sessionId": session,
                         "timestamp": ts,
+                        **stamp,
                         "message": {
                             "role": "assistant",
                             "content": [{"type": "tool_use", "name": "Read", "input": {}}],

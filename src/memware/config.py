@@ -60,6 +60,8 @@ DEFAULTS: dict[str, Any] = {
         "auto": False,  # let the plugin's session-start hook run it (~once/day, no cron needed)
         "provider": "claude-code",  # claude-code (the Claude Code CLI, no key) | openai
         "model": None,  # provider default (claude-code: haiku)
+        # Which sessions it reads: "interactive" skips claude -p and Agent SDK runs; "all" reads them too.
+        "sources": "interactive",
     },
 }
 

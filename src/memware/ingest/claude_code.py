@@ -3,6 +3,9 @@
 Keeps human prompts and assistant prose. Skips tool calls/results and drops
 text the harness injected rather than a person wrote (blocks that start with
 ``<``, e.g. system reminders). Nothing here calls a model.
+
+Each turn keeps the ``entrypoint`` of its record: Claude Code writes ``cli`` on every
+conversation record of an interactive session and ``sdk-cli`` on those of ``claude -p``.
 """
 
 from __future__ import annotations
@@ -34,6 +37,30 @@ def _texts(content: object) -> list[str]:
     return out
 
 
+def _entrypoint(record: dict[str, object]) -> str | None:
+    value = record.get("entrypoint")
+    return str(value) if value else None
+
+
+def transcript_entrypoint(path: Path) -> str | None:
+    """The ``entrypoint`` on a transcript's first user or assistant record; None when the file
+    is gone or that record carries none (Claude Code versions before the field)."""
+    try:
+        with path.open("rb") as fh:
+            for raw in fh:
+                if not any(m in raw for m in _MARKERS):
+                    continue
+                try:
+                    d = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(d, dict) and d.get("type") in ("user", "assistant"):
+                    return _entrypoint(d)
+    except OSError:
+        return None
+    return None
+
+
 def parse(path: Path, start: int = 0) -> Iterator[tuple[int, Turn]]:
     fallback_session = path.stem
     with path.open("rb") as fh:
@@ -52,11 +79,17 @@ def parse(path: Path, start: int = 0) -> Iterator[tuple[int, Turn]]:
                 continue
             session = str(d.get("sessionId") or fallback_session)
             ts = d.get("timestamp")
+            entrypoint = _entrypoint(d)
             for text in _texts((d.get("message") or {}).get("content")):
                 t = text.strip()
                 if len(t) < MIN_CHARS or (role == "user" and t.startswith(SKIP_PREFIXES)):
                     continue
-                yield pos, Turn(session=session, ts=ts, role=role, text=t[:MAX_CHARS])
+                yield (
+                    pos,
+                    Turn(
+                        session=session, ts=ts, role=role, text=t[:MAX_CHARS], entrypoint=entrypoint
+                    ),
+                )
 
 
 register("claude-code", parse)

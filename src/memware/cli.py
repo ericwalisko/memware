@@ -823,6 +823,35 @@ def _when(ts: str | None, age: float | None, never: str) -> str:
     return f"{ts} ({ago} ago)"
 
 
+def _count(n: int, noun: str) -> str:
+    return f"{n:,} {noun}{'' if n == 1 else 's'}"
+
+
+def _provenance_lines(p: dict[str, Any]) -> list[tuple[str, str]]:
+    """Sessions, turns and beliefs by entrypoint, then the project directories with the most
+    sessions: a generator that wrote much of the store is visible without an audit."""
+    home = str(Path.home())
+    lines: list[tuple[str, str]] = []
+    for g in p["by_entrypoint"]:
+        label = f"entrypoint {g['entrypoint']}" if g["entrypoint"] else "no entrypoint"
+        value = ", ".join(_count(g[k], k[:-1]) for k in ("sessions", "turns", "beliefs")) + (
+            "" if g["entrypoint"] else " (derive reads these as interactive)"
+        )
+        lines.append((label, value))
+    if p["beliefs_no_indexed_turn"]:
+        lines.append(("beliefs from no indexed turn", f"{p['beliefs_no_indexed_turn']:,}"))
+    for d in p["top_projects"]:
+        where = (
+            "~" + d["directory"][len(home) :]
+            if d["directory"].startswith(home + "/")
+            else d["directory"]
+        )
+        lines.append(
+            ("project directory", f"{_count(d['sessions'], 'session')} ({d['share']:.1%}) {where}")
+        )
+    return lines
+
+
 def _print_stats(r: dict[str, Any]) -> None:
     """Labeled ``field : value`` lines, a blank line between sections, verdicts last."""
     d, u = r["derive"], r["utilization"]
@@ -837,8 +866,10 @@ def _print_stats(r: dict[str, Any]) -> None:
             ("beliefs total", f"{r['beliefs_total']:,}"),
             ("reviews open", f"{r['reviews_open']:,}"),
         ],
+        _provenance_lines(r["provenance"]),
         [
             ("derive auto", "on" if d["auto"] else "off"),
+            ("derive sources", d["sources"]),
             ("derive state file", d["state_file"]),
             ("derive runs", f"{d['runs']:,}"),
             ("derive last run", _when(d["last_run"], d["last_run_age_hours"], "never run")),
@@ -902,6 +933,7 @@ def cmd_stats(a: argparse.Namespace) -> int:
     _maybe_setup_hint(a)
     with Store(a.db) as s:
         report: dict[str, Any] = {"db": str(s.path), **s.stats()}
+        report["provenance"] = s.provenance()
         report["derive"] = derive_status(s.conn, s.path)
         report["utilization"] = {**s.utilization(), "beliefs_orphaned": orphaned_count(s)}
     report["capture"] = _capture_status()

@@ -118,8 +118,8 @@ memware derive            # dry run: sends the excerpts to the model, prints the
 memware derive --apply    # files them; runs again later from where it stopped
 ```
 
-`derive` reads every transcript turn indexed since its last run, has a model turn the
-sentences that look like facts into `(subject, relation, value)` triples, and files only
+`derive` reads every turn from an interactive session indexed since its last run, has a model
+turn the sentences that look like facts into `(subject, relation, value)` triples, and files only
 the triples that pass a deterministic check: every word of the value must appear in the
 excerpt, so a model cannot introduce a fact the evidence does not contain. Derived beliefs
 carry reliability 0.5, below anything you stated yourself, so a contradiction lands in
@@ -128,6 +128,17 @@ carry reliability 0.5, below anything you stated yourself, so a contradiction la
 The default provider is the Claude Code CLI on your own subscription (`claude -p`, Haiku),
 so there is nothing to configure. `--provider openai` sends the extraction to any
 OpenAI-compatible endpoint instead (`OPENAI_BASE_URL` / `OPENAI_MODEL` / `OPENAI_API_KEY`).
+
+**Interactive sessions only, by default.** Claude Code records what started each session
+(`entrypoint`: `cli` interactive, `sdk-cli` for `claude -p`), and derive skips the turns of
+`claude -p` and Agent SDK runs. On a machine that runs agent lanes those are most of the
+transcripts, and the eval scaffolding among them reads like fact. They stay indexed and
+recallable; they just never become beliefs. If your headless runs hold decisions you want in
+the ledger, opt them back in with `memware config derive.sources all`. A turn with no recorded
+entrypoint (a transcript from before Claude Code wrote the field, or another harness) is read as
+interactive, so nothing the filter cannot label is dropped. `memware derive --plan` prints the
+setting and how many new turns each setting would read, and `memware stats` counts sessions,
+turns and beliefs by entrypoint and names the project directories holding the most sessions.
 
 A dry run is not offline: it sends the excerpts to that provider and skips only the write.
 `--plan` is the view that sends nothing. It lists every excerpt a run would send with its

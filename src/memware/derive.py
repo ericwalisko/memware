@@ -23,6 +23,15 @@ own subscription — no key, no endpoint, nothing to configure if ``claude`` is 
 ``OPENAI_API_KEY`` (environment, or ``<memware home>/.env``). There is no fallback chain: a
 model that was not chosen does not get to write into a ledger a human is expected to trust.
 
+It reads interactive sessions only unless ``derive.sources`` is ``all``. The Claude Code parser
+records each turn's ``entrypoint``, and a turn from ``claude -p`` or an Agent SDK run
+(:data:`HEADLESS_ENTRYPOINTS`) is passed over: those runs are most of the transcripts on a
+machine that runs agent lanes, and some are eval scaffolding whose prompts read like facts. A
+lane whose sessions hold real decisions opts back in with ``memware config derive.sources all``.
+A turn with no entrypoint is read as interactive. The watermark still advances past a skipped
+turn, so switching the setting later changes what the next run reads, not what earlier runs read
+(``--since`` re-reads older turns).
+
 The watermark (the highest turn id considered) lives beside the database in
 ``<db>.derive.json``, so a scratch database keeps its own state and can never advance the
 live one. Runs are incremental and idempotent, which is what makes ``--if-stale`` safe to call
@@ -77,7 +86,8 @@ EXIT_OK, EXIT_FAIL, EXIT_CONFIG, EXIT_UNAVAILABLE = 0, 1, 2, 4
 
 
 class ProviderConfigError(RuntimeError):
-    """Nothing to call: no credential, no endpoint, or no ``claude`` on PATH (exit 2)."""
+    """Nothing to call: no credential, no endpoint, or no ``claude`` on PATH; or a derive
+    setting it cannot read (exit 2)."""
 
 
 class ProviderUnavailable(RuntimeError):
@@ -736,20 +746,64 @@ def last_run_age_hours(state: dict[str, Any]) -> float | None:
 
 ROLES = ("user", "assistant")
 
+SOURCES = ("interactive", "all")
+"""The values of ``derive.sources``. ``interactive`` is the default."""
+
+HEADLESS_ENTRYPOINTS = ("sdk-cli", "sdk-ts", "sdk-py", "claude-code-github-action", "mcp")
+"""The entrypoints Claude Code itself treats as non-interactive: ``claude -p`` (``sdk-cli``),
+the TypeScript and Python Agent SDKs, the GitHub Action and ``claude mcp serve``. Under
+``derive.sources interactive`` a turn with one of these is skipped. Every other value is read,
+including one this list does not name (the IDE extensions and the desktop app have their own)
+and a turn with none, which a parser that cannot know leaves NULL. An allow-list of ``cli``
+would drop those without a word."""
+
+
+def sources_setting() -> str:
+    """``derive.sources`` from the config; a value other than :data:`SOURCES` refuses (exit 2)
+    rather than falling back to a guess about which sessions to read."""
+    value = get_dotted(load_config(), "derive.sources") or SOURCES[0]
+    if value not in SOURCES:
+        raise ProviderConfigError(
+            f"derive.sources is {value!r}; expected interactive or all "
+            "(`memware config derive.sources interactive`)"
+        )
+    return str(value)
+
+
+def _sources_clause(sources: str) -> tuple[str, tuple[str, ...]]:
+    """The condition a turn query ANDs on for ``sources``, and its arguments."""
+    if sources == "all":
+        return "", ()
+    marks = ",".join("?" * len(HEADLESS_ENTRYPOINTS))
+    return f" AND (entrypoint IS NULL OR entrypoint NOT IN ({marks}))", HEADLESS_ENTRYPOINTS
+
+
+def turns_since(conn: sqlite3.Connection, watermark: int, sources: str) -> int:
+    """The user and assistant turns past the watermark that ``sources`` reads."""
+    clause, args = _sources_clause(sources)
+    marks = ",".join("?" * len(ROLES))
+    row = conn.execute(
+        f"SELECT count(*) FROM turn WHERE id > ? AND role IN ({marks}){clause}",
+        (watermark, *ROLES, *args),
+    ).fetchone()
+    return int(row[0])
+
 
 def sessions_with_new_turns(
     conn: sqlite3.Connection,
     watermark: int,
     roles: tuple[str, ...] = ROLES,
     max_sessions: int = MAX_SESSIONS,
+    sources: str = "interactive",
 ) -> list[str]:
     """Sessions that gained a turn since the last run, oldest new evidence first — so a
     backlog drains in the order the work happened (``valid_from`` is event time)."""
+    clause, args = _sources_clause(sources)
     marks = ",".join("?" * len(roles))
     rows = conn.execute(
-        f"SELECT session, MIN(id) AS first_new FROM turn WHERE id > ? AND role IN ({marks}) "
-        f"GROUP BY session ORDER BY first_new LIMIT ?",
-        (watermark, *roles, max_sessions),
+        f"SELECT session, MIN(id) AS first_new FROM turn WHERE id > ? AND role IN ({marks})"
+        f"{clause} GROUP BY session ORDER BY first_new LIMIT ?",
+        (watermark, *roles, *args, max_sessions),
     ).fetchall()
     return [str(r["session"]) for r in rows]
 
@@ -760,13 +814,15 @@ def new_turns(
     watermark: int,
     roles: tuple[str, ...] = ROLES,
     limit: int = MAX_TURNS_PER_SESSION,
+    sources: str = "interactive",
 ) -> list[sqlite3.Row]:
+    clause, args = _sources_clause(sources)
     marks = ",".join("?" * len(roles))
     return list(
         conn.execute(
             f"SELECT id, session, seq, ts, role, text FROM turn "
-            f"WHERE session=? AND id > ? AND role IN ({marks}) ORDER BY seq LIMIT ?",
-            (session, watermark, *roles, limit),
+            f"WHERE session=? AND id > ? AND role IN ({marks}){clause} ORDER BY seq LIMIT ?",
+            (session, watermark, *roles, *args, limit),
         ).fetchall()
     )
 
@@ -787,13 +843,13 @@ def status(conn: sqlite3.Connection, db_path: str | os.PathLike[str]) -> dict[st
     sp = state_path(db_path)
     state = load_state(sp)
     watermark = int(state["watermark"])
-    marks = ",".join("?" * len(ROLES))
-    pending = conn.execute(
-        f"SELECT count(*) FROM turn WHERE id > ? AND role IN ({marks})", (watermark, *ROLES)
-    ).fetchone()[0]
+    cfg = load_config()
+    sources = str(get_dotted(cfg, "derive.sources") or SOURCES[0])  # a run refuses a bad value
+    pending = turns_since(conn, watermark, "all" if sources == "all" else "interactive")
     age = last_run_age_hours(state)
     return {
-        "auto": bool(get_dotted(load_config(), "derive.auto")),
+        "auto": bool(get_dotted(cfg, "derive.auto")),
+        "sources": sources,
         "state_file": str(sp),
         "runs": int(state["runs"]),
         "last_run": state["last_run"],
@@ -819,7 +875,7 @@ def valid_from_of(turn: Any) -> str | None:
 
 
 def gather_regions(
-    conn: sqlite3.Connection, sessions: list[str], watermark: int
+    conn: sqlite3.Connection, sessions: list[str], watermark: int, sources: str = "interactive"
 ) -> list[tuple[str, sqlite3.Row, str]]:
     """(session, owning turn, region) for every trigger region in the new turns of these
     sessions. Regions are built per turn so each keeps the identity of the turn it came
@@ -829,7 +885,7 @@ def gather_regions(
     for session in sessions:
         seen: set[str] = set()
         n = 0
-        for t in new_turns(conn, session, watermark):
+        for t in new_turns(conn, session, watermark, sources=sources):
             for region in regions_from_texts(
                 [str(t["text"] or "")], cap=MAX_REGIONS_PER_SESSION - n
             ):
@@ -966,14 +1022,18 @@ def plan(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any]) -> int
     name, model = chosen_provider(a, env)
     where, default_chunk, why = provider_plan(name, env, model)
     chunk = a.chunk or default_chunk
+    sources = sources_setting()
     watermark = a.since if a.since is not None else int(state["watermark"])
     say = (lambda *x, **k: None) if a.quiet else print
 
     conn = open_readonly(db)
     try:
         head = max_turn_id(conn)
-        sessions = sessions_with_new_turns(conn, watermark, max_sessions=a.max_sessions)
-        gathered = gather_regions(conn, sessions, watermark)
+        counts = {s: turns_since(conn, watermark, s) for s in SOURCES}
+        sessions = sessions_with_new_turns(
+            conn, watermark, max_sessions=a.max_sessions, sources=sources
+        )
+        gathered = gather_regions(conn, sessions, watermark, sources)
     finally:
         conn.close()
 
@@ -987,6 +1047,8 @@ def plan(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any]) -> int
         say(f"      session {session}  source {source_pointer(session, int(turn['id']))}")
     if gathered:
         say("")
+    print(f"sources     : {sources} (derive.sources)")
+    print(f"turns       : {_counts_line(counts)}")
     print(
         f"sessions    : {len(sessions)} with new turns"
         f"{' (capped)' if len(sessions) >= a.max_sessions else ''}"
@@ -1000,7 +1062,13 @@ def plan(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any]) -> int
     return EXIT_OK
 
 
+def _counts_line(counts: dict[str, int]) -> str:
+    """How many new turns each ``derive.sources`` value reads, so the cost of the choice shows."""
+    return ", ".join(f"{n:,} under {s}" for s, n in counts.items()) + " (new since the watermark)"
+
+
 def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any], say: Any) -> int:
+    sources = sources_setting()  # before the provider: a bad setting sends nothing
     env = read_env()
     provider_name, model = chosen_provider(a, env)
     provider = make_provider(provider_name, env, model=model)
@@ -1011,10 +1079,14 @@ def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any],
     conn = open_readonly(db)
     try:
         head = max_turn_id(conn)
-        sessions = sessions_with_new_turns(conn, watermark, max_sessions=a.max_sessions)
+        sessions = sessions_with_new_turns(
+            conn, watermark, max_sessions=a.max_sessions, sources=sources
+        )
         say(f"db          : {db}")
         say(f"state       : {sp}")
         say(f"watermark   : {watermark} -> {head} ({head - watermark} new turns)")
+        say(f"sources     : {sources} (derive.sources)")
+        say(f"turns       : {_counts_line({s: turns_since(conn, watermark, s) for s in SOURCES})}")
         say(
             f"sessions    : {len(sessions)} with new turns"
             f"{' (capped)' if len(sessions) >= a.max_sessions else ''}"
@@ -1033,7 +1105,7 @@ def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any],
             f"mode        : "
             f"{'APPLY (writes)' if a.apply else 'dry run (excerpts go to the model, no writes)'}\n"
         )
-        gathered = gather_regions(conn, sessions, watermark)
+        gathered = gather_regions(conn, sessions, watermark, sources)
     finally:
         conn.close()
 

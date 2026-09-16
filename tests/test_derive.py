@@ -593,7 +593,15 @@ def test_plan_honours_the_run_flags(db, tmp_path, monkeypatch, capsys):
 
     assert main([*base, "--quiet"]) == 0
     labels = [ln.split(" : ")[0].strip() for ln in capsys.readouterr().out.splitlines()]
-    assert labels == ["sessions", "excerpts", "model calls", "destination", "not ready"]
+    assert labels == [
+        "sources",
+        "turns",
+        "sessions",
+        "excerpts",
+        "model calls",
+        "destination",
+        "not ready",
+    ]
 
 
 def test_plan_lists_exactly_what_a_run_sends(db, monkeypatch, capsys):

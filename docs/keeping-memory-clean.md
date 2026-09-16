@@ -226,6 +226,28 @@ in work you otherwise keep, there is no ongoing per-turn skip yet: re-run `prune
 periodically (its stable prefix keeps catching the dated variants). Static recurring prompts need
 none of this — they collapse cleanly on their own.
 
+## What derive reads (not a capture layer)
+
+The layers above decide what enters the store. `derive.sources` decides something narrower:
+which indexed turns `memware derive` turns into beliefs. Its default, `interactive`, skips turns
+Claude Code labels as headless (`sdk-cli` for `claude -p`, `sdk-ts` and `sdk-py` for the Agent
+SDKs). Those turns are still indexed, recalled and mirrored. `memware config derive.sources all`
+lets derive read them too; [docs/scheduling.md](scheduling.md#which-sessions-it-reads) has the
+details.
+
+It does not replace the no-capture switch or a marker, and it cannot. It reads a label for *how*
+a session started, not *what* the session was: an agent launched in a terminal without `-p` is
+`cli`, and so are the subagents of an interactive session, while a lane whose `claude -p`
+sessions hold real decisions is `sdk-cli`. That is why it is a default with an opt-in rather
+than an exclusion. The layers above name a run by what it is, and they keep it out of recall and
+the backup mirror as well as the ledger. Mark an evaluation and set the switch whatever this
+setting says. A turn with no entrypoint is read as interactive, so the setting never hides
+evidence it cannot label.
+
+`memware stats` shows sessions, turns and beliefs by entrypoint and the project directories
+holding the most sessions. A generator that slipped past the layers above shows up there as a
+directory with an outsized share, which is the cue to mark it, list it or prune it.
+
 ## Quick reference
 
 | goal | do this |
@@ -239,3 +261,5 @@ none of this — they collapse cleanly on their own.
 | remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises |
 | tame a recurring/dated automation prompt | `prune --turns-containing PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
 | evaluate without self-contamination | `memware-eval --corpus … --beliefs-from …` |
+| keep headless runs out of the ledger, in recall | the default (`derive.sources interactive`); `memware config derive.sources all` reads them |
+| see which generator wrote the store | `memware stats`: sessions, turns and beliefs by entrypoint, top project directories |

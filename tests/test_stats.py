@@ -80,6 +80,7 @@ def test_json_keeps_the_six_counts_and_adds_derive_and_utilization(db, capsys):
     assert r["db"].endswith("m.db")
     assert r["derive"] == {
         "auto": False,
+        "sources": "interactive",
         "state_file": db + ".derive.json",
         "runs": 0,
         "last_run": None,
