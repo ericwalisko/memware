@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-15
+
 ### Changed
 - **MCP tool descriptions say when to call them, not only how.** Recall fires only when the
   model elects to call it, and it competes with grep, so its description now opens with an
