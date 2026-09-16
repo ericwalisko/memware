@@ -5,9 +5,11 @@ evaluation and benchmark runs above all (each contains the questions and the
 answers, so indexing them lets the system "remember" its own test), plus
 throwaway experiments and anything you simply do not want recalled later.
 
-There are two layers. Use both: the switch stops *new* runs cheaply, the filter
-catches everything else — including runs that happened *before* you added any
-marker, which the switch cannot help with retroactively.
+There are three layers. The switch stops *new* runs cheaply, the path exclusion
+stops a generator whose author forgot the switch, and the filter catches everything
+else — including runs that happened *before* you added any marker, which the switch
+cannot help with retroactively. They sit side by side; [how they fit
+together](#how-the-three-layers-fit-together) is at the end of Layer 3.
 
 ## Layer 1 — the switch (prevents capture at the source)
 
@@ -110,15 +112,78 @@ A retracted belief is closed at its own start (`status` `retracted`, `valid_to` 
 `beliefs current` count, and it stays in the history of its key (`memware beliefs SUBJECT
 RELATION`) with when and why it was retracted. No belief row is deleted.
 
-Runs un-indexed some other way leave their beliefs behind: an earlier `memware prune`, or a
-sync that skipped a transcript it had indexed before, because of a marker or the no-capture
-list. A sync never changes a belief. `memware stats` counts these beliefs
+Runs un-indexed some other way leave their beliefs behind: an earlier `memware prune`, a sync
+that skipped a transcript it had indexed before (because of a marker, the no-capture list or a
+`capture.exclude` pattern), or `memware exclude --apply`. A sync never changes a belief. `memware stats` counts these beliefs
 (`beliefs citing an unindexed session`), and the one-shot has the same dry-run shape:
 
 ```bash
 memware beliefs retract --orphaned           # dry run: what would be retracted and reopened
 memware beliefs retract --orphaned --apply   # retract them
 ```
+
+## Layer 3 — path exclusions (the machine remembers)
+
+The switch lives in a run's environment, so a script that forgets to set it is captured. A marker
+lives in the transcript, so a harness that never writes one is captured. `capture.exclude` lives
+in the machine's config: a list of path globs. A transcript whose resolved path matches one is
+never indexed and never mirrored, whoever started the run and whatever it sent.
+
+```bash
+memware exclude                                          # each pattern: matches on disk and in the index
+memware exclude --add '*/-Users-me-gen-runs/*'           # dry run: what it matches, what it would un-index
+memware exclude --add '*/-Users-me-gen-runs/*' --apply   # write it, and un-index what it matches
+memware exclude --remove '*/-Users-me-gen-runs/*' --apply
+```
+
+Nothing changes without `--apply`, and the dry run reads the store read-only. A pattern is matched
+with shell-style wildcards against the whole resolved transcript path, as `memware prune --glob`
+matches, so `*` crosses `/`, and a leading `~` is expanded. Claude Code keeps one transcript
+directory per working directory under `~/.claude/projects`, named after the path with each `/`
+turned into `-`. So `*/-Users-me-gen-runs/*` names every session started in `/Users/me/gen-runs`,
+and their subagents' transcripts in `<session>/subagents/` with them. A pattern that begins with
+`-` is passed as `--add=-Users-…`.
+
+Every sync skips a matching transcript and un-indexes it if an earlier sync indexed it, exactly as
+it does for a marker: the hooks, the `SessionStart` catch-up, `memware sync`, `backfill`, `setup`
+and the Hermes provider. `memware backup` never mirrors it and counts it under
+`transcripts_skipped_glob`. A copy an earlier run already made is listed under
+`transcripts_left_in_backup`; memware never deletes from the destination, so remove it by hand.
+`memware exclude --add … --apply` also un-indexes matching sources whose transcript is no longer on
+disk, which no sync would walk to again. Like a sync, it leaves the beliefs derived from those
+sessions in place and says how many beliefs now cite an unindexed session; `memware beliefs
+retract --orphaned` retracts them (see [Layer 2](#retract-the-beliefs-those-runs-left-behind)). An edit to `config.json` by hand, or through `memware
+config capture.exclude`, takes effect at the next sync, for the transcripts still on disk.
+Removing a pattern re-indexes nothing by itself: the next sync indexes the transcripts it hid,
+if they are still on disk.
+
+**Run a generator from a working directory of its own.** A pattern can tell sessions apart only by
+where they ran. A pipeline whose steps start Claude Code in the directory you work in yourself —
+say, distill, examiner and judge steps that all run from the root of your notes repository —
+shares that transcript directory with your interactive sessions, and a pattern for it would
+exclude your own work as well. `cd` the generator into a directory nothing else uses before it
+starts each session, and a pattern can name it alone.
+
+**Watch the share.** An over-broad pattern hides real work without a sound. `memware exclude`
+prints, for each pattern, the transcripts on disk and the indexed sources it matches, and the share
+of all transcripts on disk the patterns hide together. `memware stats` shows that share whenever a
+pattern is set. Both commands, and `memware backup`, print a warning when the patterns hide half or
+more of the transcripts on disk.
+
+### How the three layers fit together
+
+Side by side, not instead of each other: a transcript is excluded when any layer names it.
+
+| layer | lives in | names a run by | covers runs from before it was set | needs |
+|---|---|---|---|---|
+| no-capture list | `<home>/no-capture.txt`, written by the hooks | the session's own transcript path | no | `MEMWARE_NO_CAPTURE=1` and a memware hook in the session |
+| path exclusion | `capture.exclude` in `<home>/config.json` | the directory the session ran in | yes | the generator in a working directory of its own |
+| skip marker | `<home>/ignore-markers.txt` or `MEMWARE_IGNORE_MARKERS` | text in the transcript's head | yes | the text in the run's prompts |
+
+`memware backup` counts a transcript under the first layer that names it, in that order:
+`transcripts_skipped_no_capture`, `transcripts_skipped_glob`, `transcripts_skipped_marker`. The
+`--exclude GLOB` flag of `memware sync` and `backfill` is a different thing: it skips for that
+one call and un-indexes nothing.
 
 ## Writing evaluations that don't poison the store
 
@@ -167,6 +232,7 @@ none of this — they collapse cleanly on their own.
 |---|---|
 | never index or mirror this run | `MEMWARE_NO_CAPTURE=1` in its environment (a memware hook must run in the session) |
 | never write the transcript at all | `claude -p --no-session-persistence` |
+| never index or mirror a generator, whatever its environment | run it from its own directory; `memware exclude --add '*/<project-dir>/*'`, then again with `--apply` |
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |

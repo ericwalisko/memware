@@ -31,6 +31,32 @@ All notable changes to this project are documented here. The format follows
   shape as `prune`.
 - **`memware stats` counts beliefs citing an unindexed session**
   (`utilization.beliefs_orphaned`), with a verdict line naming the one-shot when there are any.
+- **`capture.exclude`: path globs that no sync indexes and no backup mirrors.** `MEMWARE_NO_CAPTURE`
+  reaches only the processes a run starts, and a marker needs its text inside the transcript, so a
+  generator whose author forgot both was captured. A pattern lives in the machine's config and
+  names a run by the directory it ran in. It is matched against the whole resolved transcript
+  path, as `memware prune --glob` matches (`*` crosses `/`, a leading `~` is expanded), so
+  `*/-Users-me-gen-runs/*` covers a Claude Code project directory's sessions and their subagents.
+  Every sync (`sync_file`, `sync_tree`, the hooks, the catch-up, `backfill`, `setup`, the Hermes
+  provider) skips a matching transcript and un-indexes it if it was indexed before, exactly as for
+  a skip marker. `memware backup` never mirrors it, counts it under `transcripts_skipped_glob`
+  beside the no-capture and marker counters, lists copies an earlier run made under
+  `transcripts_left_in_backup`, and never deletes from the destination. The three layers sit side
+  by side, and a transcript is counted under the first that names it.
+- **`memware exclude`** lists the patterns with the transcripts on disk and the indexed sources
+  each one matches, and the share of the transcripts on disk they hide together. `--add GLOB` and
+  `--remove GLOB` print what would change and write nothing without `--apply`; the dry run opens
+  the store read-only and never creates one. `--apply` writes `capture.exclude` and un-indexes
+  every indexed source the patterns match, including sources whose transcript has left the disk,
+  which no sync would visit again. Like a sync, it retracts no belief; it reports how many beliefs
+  now cite an unindexed session, for `memware beliefs retract --orphaned`. Removing a pattern
+  re-indexes nothing by itself; the next sync does.
+- `memware stats` shows the patterns and how many transcripts on disk they hide (`capture` in
+  `--json`; the tree is walked only when a pattern is set). `stats`, `exclude` and `backup` warn
+  when the patterns hide half or more of the transcripts on disk.
+- `docs/keeping-memory-clean.md` gains Layer 3 and a table of how the no-capture list, path
+  exclusions and skip markers relate, with the guidance that a generator should run from a
+  working directory of its own so a pattern can name it without excluding interactive sessions.
 
 ### Changed
 - **`memware prune` is a dry run unless `--apply` is given.** It prints the sources and turns

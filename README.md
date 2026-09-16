@@ -210,6 +210,8 @@ evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
 `memware prune --containing TEXT` shows the runs that already slipped in and the beliefs derived from them, and `--apply` un-indexes the runs and retracts those beliefs; copies already
 mirrored to a backup folder have to be deleted there by hand. For a durable filter that every sync and backup honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed or mirrored.
 
+A generator that runs from its own working directory can be excluded by path, whatever its environment: `memware exclude --add '*/<project-dir>/*'` previews a `capture.exclude` glob and `--apply` writes it ([docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#layer-3--path-exclusions-the-machine-remembers)).
+
 ## Reviewing contested supersessions
 
 memware does not ship a UI. It ships a contract — `ReviewBackend` with `publish()` and

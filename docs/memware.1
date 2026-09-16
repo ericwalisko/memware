@@ -45,6 +45,26 @@ One\-time index of the transcripts already on disk under
 .IR ~/.claude/projects .
 Idempotent.
 .TP
+.B exclude
+List, add or remove
+.B capture.exclude
+path globs. A transcript whose resolved path matches one is never indexed by any sync
+and never mirrored by
+.BR backup ,
+and a sync un\-indexes it if it was indexed before. Patterns are matched against the whole
+path, so
+.B *
+crosses
+.BR / .
+With no flag, prints each pattern with the transcripts on disk and the indexed sources it
+matches. Flags:
+.BI "\-\-add " GLOB ,
+.BI "\-\-remove " GLOB ,
+.BR \-\-apply .
+A dry run unless
+.BR \-\-apply ,
+which writes the config and un\-indexes the indexed sources the patterns match.
+.TP
 .BI "recall " QUERY " ..."
 Search turns and beliefs. Pass several phrasings, fused by reciprocal rank. Flags:
 .BR \-k " (count),"
@@ -232,7 +252,10 @@ Honoured by construction \(em memware emits no colour at all.
 .SH FILES
 .TP
 .I <home>/config.json
-Configuration.
+Configuration, including the
+.B capture.exclude
+path globs (see
+.BR exclude ).
 .TP
 .I <home>/ignore-markers.txt
 Content signatures for transcripts that must never be indexed or mirrored.
