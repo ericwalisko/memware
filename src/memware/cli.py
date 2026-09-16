@@ -24,11 +24,13 @@ from memware.index import (
     search_turns_multi,
 )
 from memware.ingest import (
+    Pruned,
     capture_disabled,
     prune,
     record_no_capture,
     sync_file,
     sync_tree,
+    turn_matches,
 )
 from memware.ledger import (
     Policy,
@@ -733,17 +735,83 @@ def _cascade(
         _emit(a, records, _CASCADE_COLS)
 
 
+def _plural(n: int, noun: str, verb: str = "") -> str:
+    """``1 turn contains``, ``2 turns contain``: a count, its noun and, if given, the verb."""
+    phrase = f"{n:,} {noun}{'' if n == 1 else 's'}"
+    return f"{phrase} {verb}{'s' if n == 1 else ''}" if verb else phrase
+
+
+_MATCHED = "matched literally and case-sensitively"
+
+
+def _turn_notes(s: Store, text: str, *, prefix: bool, removed: int) -> list[str]:
+    """Why a turn selector matched nothing, or, for a prefix, the turns it leaves holding the
+    text past their start. A bare 0 reads as a clean store, so a note names where the text is."""
+    m = turn_matches(s, text)
+    rest = m.containing - m.starting_with  # turns holding it past the start, which a prefix keeps
+    if prefix and rest and removed:
+        return [
+            f"{_plural(rest, 'more turn', 'contain')} {text!r} past the start and "
+            f"{'is' if rest == 1 else 'are'} kept: --turns-containing selects them too"
+        ]
+    if prefix and rest:
+        return [
+            f"no turn starts with {text!r} ({m.turns:,} searched, {_MATCHED}); "
+            f"{_plural(rest, 'turn', 'contain')} it past the start: try --turns-containing"
+        ]
+    if removed:
+        return []
+    note = f"no turn {'starts with or contains' if prefix else 'contains'} {text!r} "
+    note += f"({m.turns:,} searched, {_MATCHED})"
+    if m.containing_any_case:
+        note += f"; {_plural(m.containing_any_case, 'turn', 'contain')} it in another case"
+    return [note]
+
+
+def _source_notes(s: Store, a: argparse.Namespace, r: Pruned) -> list[str]:
+    """What a source selector that matched nothing searched, the transcripts ``--containing``
+    could not read, and the indexed turns that still hold the text."""
+    notes = []
+    if not r.sources and a.containing:
+        within = " matching --glob" if a.glob else ""
+        notes.append(
+            f"no indexed source contains {a.containing!r}: "
+            f"{_plural(r.scanned, 'transcript file')}{within} read whole, {_MATCHED}"
+        )
+    elif not r.sources:
+        total = int(s.conn.execute("SELECT count(*) FROM cursor").fetchone()[0])
+        notes.append(f"no path of the {_plural(total, 'indexed source')} matches {a.glob!r}")
+    if r.missing:
+        notes.append(
+            f"{_plural(len(r.missing), 'indexed source')} not read: the transcript file is gone, "
+            "and --turns-containing searches the turns still indexed from it"
+        )
+    if not r.sources and a.containing:
+        found = turn_matches(s, a.containing).containing
+        if found:
+            notes.append(f"{_plural(found, 'indexed turn', 'contain')} it: try --turns-containing")
+    return notes
+
+
 def cmd_prune(a: argparse.Namespace) -> int:
-    if not (a.glob or a.containing or a.turns_containing):
+    turn_flags = [f for f in ("turns_containing", "turns_starting_with") if getattr(a, f)]
+    if not (a.glob or a.containing or turn_flags):
         print(
-            "prune needs --glob, --containing or --turns-containing; with none it would "
-            "un-index every source",
+            "prune needs --glob, --containing, --turns-containing or --turns-starting-with; "
+            "with none it would un-index every source",
+            file=sys.stderr,
+        )
+        return 2
+    if turn_flags and (len(turn_flags) > 1 or a.glob or a.containing):
+        print(
+            "--turns-containing and --turns-starting-with select turns across the whole store "
+            "and take no other selector",
             file=sys.stderr,
         )
         return 2
     selector = " ".join(
         f"--{flag.replace('_', '-')} {getattr(a, flag)!r}"
-        for flag in ("glob", "containing", "turns_containing")
+        for flag in ("glob", "containing", "turns_containing", "turns_starting_with")
         if getattr(a, flag)
     )
     with Store(a.db) as s:
@@ -752,13 +820,23 @@ def cmd_prune(a: argparse.Namespace) -> int:
             glob=a.glob,
             containing=a.containing,
             turns_containing=a.turns_containing,
+            turns_starting_with=a.turns_starting_with,
             apply=a.apply,
             reason=f"memware prune {selector}",
         )
+        text = a.turns_containing or a.turns_starting_with
+        notes = (
+            _turn_notes(s, text, prefix=bool(a.turns_starting_with), removed=r.turns)
+            if text
+            else _source_notes(s, a, r)
+        )
     head = {"turns_removed": r.turns}
-    if not a.turns_containing:
+    if not turn_flags:
         head = {"sources_pruned": len(r.sources), **head}
     _cascade(a, r.beliefs, r.applied, head)
+    if notes:
+        sys.stdout.flush()  # the notes explain the counts, so they follow them in a merged stream
+        print("\n".join(notes), file=sys.stderr)
     return 0
 
 
@@ -1706,24 +1784,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = add(
         "prune",
-        "un-index whole sources (--glob/--containing) or individual boilerplate turns "
-        "(--turns-containing), and retract beliefs from the sessions left with no turn",
+        "un-index whole sources (--glob/--containing) or individual turns "
+        "(--turns-containing/--turns-starting-with), and retract beliefs from the sessions left "
+        "with no turn",
         epilog=(
             "Examples:\n"
             '  memware prune --containing "[memware-eval]"          dry run: what would go\n'
             '  memware prune --containing "[memware-eval]" --apply  un-index and retract\n'
-            "Without --apply nothing is written. A retracted belief keeps its row: it leaves\n"
-            "recall, context and `beliefs`, and stays in the history of its key."
+            '  memware prune --turns-containing "SECRET123"         turns holding a pasted value\n'
+            "Every TEXT is matched literally and case-sensitively. Without --apply nothing is\n"
+            "written. A retracted belief keeps its row: it leaves recall, context and `beliefs`,\n"
+            "and stays in the history of its key."
         ),
     )
     s.add_argument("--glob", metavar="GLOB", help="un-index sources whose path matches this glob")
     s.add_argument(
-        "--containing", metavar="TEXT", help="un-index whole sources whose head contains TEXT"
+        "--containing",
+        metavar="TEXT",
+        help="un-index whole sources whose transcript file contains TEXT (read whole)",
     )
     s.add_argument(
         "--turns-containing",
         metavar="TEXT",
-        help="delete individual turns starting with TEXT (keeps the rest of each session)",
+        help="delete individual turns holding TEXT anywhere (keeps the rest of each session)",
+    )
+    s.add_argument(
+        "--turns-starting-with",
+        metavar="TEXT",
+        help="delete individual turns that begin with TEXT, such as a recurring harness preamble",
     )
     s.add_argument(
         "--apply",

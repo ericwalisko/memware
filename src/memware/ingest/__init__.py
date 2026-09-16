@@ -208,6 +208,24 @@ def file_contains(path: Path, marker: str | list[str], *, head_bytes: int = 200_
     return any(m.encode("utf-8") in head for m in markers)
 
 
+def _file_holds(path: Path, marker: str, *, chunk_bytes: int = 1 << 20) -> bool:
+    """True if ``marker`` appears anywhere in the file, which is read whole, a chunk at a time.
+
+    Unlike :func:`file_contains`, a head check, this is the ground truth ``prune --containing``
+    decides by. Each chunk is searched together with the last ``len(marker) - 1`` bytes before
+    it, so a marker that spans a chunk boundary still matches."""
+    needle = marker.encode("utf-8")
+    overlap = len(needle) - 1
+    carry = b""
+    with path.open("rb") as fh:
+        while chunk := fh.read(chunk_bytes):
+            window = carry + chunk
+            if needle in window:
+                return True
+            carry = window[-overlap:] if overlap else b""
+    return False
+
+
 def sync_file(
     store: Store,
     path: str | os.PathLike[str],
@@ -329,21 +347,60 @@ class Pruned:
     beliefs: Retraction
     """The retraction it cascades into: beliefs from every session it leaves with no turn."""
     applied: bool
+    scanned: int = 0
+    """Transcript files ``containing`` read whole; 0 when it was not given."""
+    missing: tuple[str, ...] = ()
+    """Sources ``containing`` could not read because the transcript file is gone. Their turns
+    may still be indexed, and only a turn selector reaches them."""
 
 
-def _matching_sources(store: Store, glob: str | None, containing: str | None) -> list[str]:
+@dataclass(frozen=True)
+class TurnMatches:
+    """How a text occurs across every indexed turn. Matching is literal and case-sensitive, as
+    :func:`prune` matches, except ``containing_any_case`` (ASCII case only, as SQLite folds it)."""
+
+    turns: int
+    starting_with: int
+    containing: int
+    containing_any_case: int
+
+
+def turn_matches(store: Store, text: str) -> TurnMatches:
+    """Count the turns that start with ``text``, contain it and contain it in any case: what a
+    turn selector that matched nothing can say instead of a bare zero. One pass over the table."""
+    row = store.conn.execute(
+        "SELECT count(*), coalesce(sum(instr(text, ?1) = 1), 0), "
+        "coalesce(sum(instr(text, ?1) > 0), 0), "
+        "coalesce(sum(instr(lower(text), lower(?1)) > 0), 0) FROM turn",
+        (text,),
+    ).fetchone()
+    return TurnMatches(*(int(v) for v in row))
+
+
+def _matching_sources(
+    store: Store, glob: str | None, containing: str | None
+) -> tuple[list[str], int, list[str]]:
+    """The indexed sources ``glob`` and ``containing`` select, how many transcript files
+    ``containing`` read, and the selected sources whose file is gone."""
     import fnmatch
 
     out: list[str] = []
+    missing: list[str] = []
+    scanned = 0
     for (source,) in store.conn.execute("SELECT source FROM cursor").fetchall():
         if glob and not fnmatch.fnmatch(source, glob):
             continue
         if containing:
-            p = Path(source)
-            if not (p.exists() and file_contains(p, containing)):
+            try:
+                held = _file_holds(Path(source), containing)
+            except FileNotFoundError:
+                missing.append(source)
+                continue
+            scanned += 1
+            if not held:
                 continue
         out.append(source)
-    return out
+    return out, scanned, missing
 
 
 def prune(
@@ -352,23 +409,38 @@ def prune(
     glob: str | None = None,
     containing: str | None = None,
     turns_containing: str | None = None,
+    turns_starting_with: str | None = None,
     apply: bool = False,
     reason: str = "memware prune",
 ) -> Pruned:
     """Un-index whole sources (``glob`` and/or ``containing``) or single turns
-    (``turns_containing``), and retract the beliefs derived from every session that leaves with
-    no turn indexed (see :func:`memware.ledger.plan_retraction`).
+    (``turns_containing`` or ``turns_starting_with``), and retract the beliefs derived from every
+    session that leaves with no turn indexed (see :func:`memware.ledger.plan_retraction`).
+
+    ``containing`` reads every transcript file whole. ``turns_containing`` matches a turn holding
+    the text anywhere, ``turns_starting_with`` only one that begins with it. Both match
+    literally and case-sensitively, and a turn selector takes no other selector.
 
     Without ``apply`` nothing is written and the result is what would happen. With it, the
     deletes and the retraction commit together. Sessions are read before the delete: a deleted
     turn no longer says which session it came from."""
+    missing: list[str] = []
+    scanned = 0
+    turn_selectors = [t for t in (turns_containing, turns_starting_with) if t is not None]
+    if turn_selectors and (len(turn_selectors) > 1 or glob or containing):
+        raise ValueError("a turn selector takes no other selector")
+    if turn_selectors and not turn_selectors[0]:
+        raise ValueError("an empty turn selector would match every turn")
     if turns_containing is not None:
         sources: list[str] = []
-        doomed, args = "text LIKE ?", [turns_containing + "%"]
+        doomed, args = "instr(text, ?) > 0", [turns_containing]
+    elif turns_starting_with is not None:
+        sources = []
+        doomed, args = "instr(text, ?) = 1", [turns_starting_with]
     else:
-        sources = _matching_sources(store, glob, containing)
+        sources, scanned, missing = _matching_sources(store, glob, containing)
         if not sources:
-            return Pruned({}, 0, plan_retraction(store, []), apply)
+            return Pruned({}, 0, plan_retraction(store, []), apply, scanned, tuple(missing))
         doomed, args = f"source IN ({','.join('?' * len(sources))})", sources
     conn = store.conn
     conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
@@ -405,18 +477,26 @@ def prune(
     finally:
         if conn.in_transaction:
             conn.execute("COMMIT")
-    return Pruned(counts if sources else {}, turns, plan, apply)
+    return Pruned(counts if sources else {}, turns, plan, apply, scanned, tuple(missing))
 
 
-def prune_turns(store: Store, *, containing: str) -> int:
-    """Delete individual turns whose text starts with ``containing`` (a boilerplate prefix),
-    leaving the rest of each session indexed. FTS stays in sync via the delete trigger.
+def prune_turns(
+    store: Store, *, containing: str | None = None, starting_with: str | None = None
+) -> int:
+    """Delete individual turns whose text contains ``containing`` anywhere, or starts with
+    ``starting_with`` (a boilerplate prefix), leaving the rest of each session indexed. FTS
+    stays in sync via the delete trigger. Give exactly one.
 
-    Unlike :func:`prune_sources` (which drops whole transcripts), this is turn-level — the
-    right tool for harness boilerplate that recurs inside otherwise-real sessions, such as a
-    skill preamble already indexed before the parser learned to skip it. A session left with
-    no turn has its derived beliefs retracted, as :func:`prune` does with ``apply``."""
-    return prune(store, turns_containing=containing, apply=True).turns
+    Unlike :func:`prune_sources` (which drops whole transcripts), this is turn-level: the tool
+    for a value pasted mid-session, and with ``starting_with`` for harness boilerplate that
+    recurs inside otherwise-real sessions, such as a skill preamble already indexed before the
+    parser learned to skip it. A session left with no turn has its derived beliefs retracted,
+    as :func:`prune` does with ``apply``."""
+    if (containing is None) == (starting_with is None):
+        raise ValueError("prune_turns takes exactly one of containing and starting_with")
+    return prune(
+        store, turns_containing=containing, turns_starting_with=starting_with, apply=True
+    ).turns
 
 
 def prune_sources(
@@ -436,6 +516,7 @@ __all__ = [
     "Parser",
     "Pruned",
     "Turn",
+    "TurnMatches",
     "capture_disabled",
     "capture_exclude_patterns",
     "default_skip_markers",
@@ -455,5 +536,6 @@ __all__ = [
     "register",
     "sync_file",
     "sync_tree",
+    "turn_matches",
 ]
 _ = (_cc, _generic)
