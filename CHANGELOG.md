@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-16
+
 ### Added
 - **Beliefs whose evidence was un-indexed are retracted.** A derived belief cites
   `memware:session/<id>/turn/<n>`. When that session left the index, the belief stayed
@@ -59,6 +61,13 @@ All notable changes to this project are documented here. The format follows
   working directory of its own so a pattern can name it without excluding interactive sessions.
 
 ### Changed
+- **`memware prune` is a dry run unless `--apply` is given.** It prints the sources and turns
+  it would remove, the beliefs it would retract, the predecessors it would reopen or relink, and
+  the stated beliefs it keeps, and writes nothing. Scripts that ran `memware prune` to delete
+  must add `--apply`. `--json` keeps `sources_pruned` and `turns_removed` and adds `applied`,
+  `sessions_emptied`, `retract`, `reopen`, `relink` and `keep`.
+- `memware prune` needs one of `--glob`, `--containing` or `--turns-containing` and exits 2
+  without one. With none, it used to un-index every source.
 - **`memware derive` reads interactive sessions only by default.** Claude Code writes an
   `entrypoint` on every transcript record (`cli` for an interactive session, `sdk-cli` for
   `claude -p`), and a new `turn.entrypoint` column keeps it; the Claude Code parser sets it and
@@ -86,13 +95,6 @@ All notable changes to this project are documented here. The format follows
   turn, and the five project directories holding the most sessions with their share, so a
   generator that wrote much of the store is visible without an audit. `--json` adds
   `provenance` and `derive.sources`; `derive.turns_pending` counts what the setting reads.
-- **`memware prune` is a dry run unless `--apply` is given.** It prints the sources and turns
-  it would remove, the beliefs it would retract, the predecessors it would reopen or relink, and
-  the stated beliefs it keeps, and writes nothing. Scripts that ran `memware prune` to delete
-  must add `--apply`. `--json` keeps `sources_pruned` and `turns_removed` and adds `applied`,
-  `sessions_emptied`, `retract`, `reopen`, `relink` and `keep`.
-- `memware prune` needs one of `--glob`, `--containing` or `--turns-containing` and exits 2
-  without one. With none, it used to un-index every source.
 - `memware beliefs retract` with no relation is now the retract command. A key whose subject is
   `retract` still reads as history with `memware beliefs retract RELATION`.
 
