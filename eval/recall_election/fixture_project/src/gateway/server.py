@@ -14,6 +14,7 @@ from gateway import __version__
 from gateway.auth import AuthError, KeyRing, verify
 from gateway.config import (
     KEY_GRACE_SECONDS,
+    MAX_BODY_BYTES,
     RETRY_BACKOFF_SECONDS,
     RETRY_LIMIT,
     Settings,
@@ -34,6 +35,7 @@ def forward(settings: Settings, method: str, path: str, body: bytes | None) -> t
     while True:
         attempt += 1
         req = urllib.request.Request(url, data=body, method=method)
+        # workaround: set on every runner call, GETs included
         req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=settings.upstream_timeout) as resp:
@@ -53,6 +55,9 @@ def forward(settings: Settings, method: str, path: str, body: bytes | None) -> t
 class Handler(BaseHTTPRequestHandler):
     settings: Settings
     ring: KeyRing
+
+    def log_message(self, format: str, *args: object) -> None:
+        return None
 
     def _send(self, status: int, payload: bytes) -> None:
         self.send_response(status)
@@ -91,7 +96,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.BAD_GATEWAY, json.dumps({"error": str(e)}).encode())
 
     def do_POST(self) -> None:
-        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > MAX_BODY_BYTES:
+            too_large = json.dumps({"error": "body too large"}).encode()
+            self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, too_large)
+            return
+        body = self.rfile.read(length)
         if self.path != "/v1/jobs":
             self._send(HTTPStatus.NOT_FOUND, json.dumps({"error": "no such route"}).encode())
             return
@@ -111,6 +121,12 @@ def build_ring(settings: Settings) -> KeyRing:
 
 
 def serve(settings: Settings, ring: KeyRing) -> ThreadingHTTPServer:
+    """Bind the handler to ``settings`` and ``ring`` and return the server, not yet serving.
+
+    The gateway originally ran on plain HTTPServer, which handles one request at a time, so a
+    single slow runner call stalled every client queued behind it. ThreadingHTTPServer gives
+    each request its own thread.
+    """
     bound = type("BoundHandler", (Handler,), {"settings": settings, "ring": ring})
     return ThreadingHTTPServer((settings.host, settings.port), bound)
 

@@ -36,6 +36,13 @@ def test_tampered_body_fails_signature() -> None:
         verify(ring(), "POST", "/v1/jobs", headers, b'{"job": "delete"}', now=NOW)
 
 
+@pytest.mark.skip
+def test_unknown_key_id_is_rejected() -> None:
+    headers = signed_headers(b"secret-one", "k9", b"")
+    with pytest.raises(auth.AuthError, match="unknown"):
+        verify(ring(), "POST", "/v1/jobs", headers, b"", now=NOW)
+
+
 def test_stale_timestamp_is_rejected() -> None:
     headers = signed_headers(b"secret-one", "k1", b"", ts=NOW - 1000)
     with pytest.raises(auth.AuthError, match="skew"):

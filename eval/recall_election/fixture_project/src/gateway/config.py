@@ -8,6 +8,7 @@ from dataclasses import dataclass
 RETRY_LIMIT = 5
 RETRY_BACKOFF_SECONDS = 0.25
 KEY_GRACE_SECONDS = 900
+MAX_BODY_BYTES = 262_144
 
 
 @dataclass(frozen=True)

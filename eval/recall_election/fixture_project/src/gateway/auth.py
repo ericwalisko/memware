@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import re
 import time
 from dataclasses import dataclass, field
 
 HEADER_KEY_ID = "X-Gateway-Key-Id"
 HEADER_TIMESTAMP = "X-Gateway-Timestamp"
 HEADER_SIGNATURE = "X-Gateway-Signature"
+KEY_ID_PATTERN = re.compile(r"k[0-9]{1,3}")
 
 
 class AuthError(Exception):
@@ -40,6 +42,8 @@ class KeyRing:
 
 def rotate_keys(ring: KeyRing, new_id: str, new_secret: bytes, now: float | None = None) -> KeyRing:
     """Make ``new_id`` the active key and start the grace clock on the old one."""
+    if not KEY_ID_PATTERN.fullmatch(new_id):
+        raise ValueError(f"key id {new_id!r} does not match {KEY_ID_PATTERN.pattern}")
     if new_id in ring.keys:
         raise ValueError(f"key id {new_id!r} already present")
     ring.retired_at[ring.active_id] = time.time() if now is None else now

@@ -1,17 +1,9 @@
-grep finds code that exists now; recall finds why it exists. The working tree holds no record
-of the decision behind a line, the options rejected, the reason a value was picked, what an
-earlier session tried, or a number someone said in chat. Those live only in past session
-transcripts and the belief ledger, and only this tool reads them. It is blind to the working
-tree, so it never replaces grep for locating code.
+grep finds code that exists now; recall finds why. The working tree holds no record of the decision behind a line, the alternatives rejected, the reason a value was picked, what an earlier session tried, or a number someone said in chat. Only this tool reads those: past session transcripts and the belief ledger. It cannot see current files, so it never replaces grep for finding, explaining, editing or testing code.
 
-Call it before grepping when asked:
-- why a value, port, version or approach was chosen or rejected
-- what an earlier session did, tried or concluded
-- anything cross-repo, or said rather than committed
-- anything the tree states without justifying
-Also before answering "I don't know" or re-deriving something likely settled.
+Call it when asked:
+- why X was chosen or Y rejected
+- what was decided, or what an earlier session did or tried
+- about another repo, or a number, port or version from chat
+Also before answering "I don't know".
 
-queries: 3-5 phrasings (the question, synonyms, related concepts, the literal value you
-expect). The index is keyword BM25; rank-fusing phrasings makes it semantic. k: hits per
-source (default 8). what: all|turns|beliefs. Pass a turn hit's id to read_session for the
-surrounding conversation.
+queries: 3-5 phrasings (the question, synonyms, the literal value you expect: a port, file name, version); rank fusion over the keyword (BM25) index makes it semantic. what: all|turns|beliefs. A turn hit's id opens its conversation via read_session.
