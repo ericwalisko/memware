@@ -51,10 +51,11 @@ that outlives the 30-day cleanup. Already back transcripts up elsewhere? Point m
 location with `backup.transcript_src` and it will read from there too.
 
 The mirror never copies a transcript that sync would refuse: one on the no-capture list (a
-session run under `MEMWARE_NO_CAPTURE=1`, with its subagents' transcripts) or one whose head
-carries a skip marker (see
+session run under `MEMWARE_NO_CAPTURE=1`, with its subagents' transcripts), one whose resolved
+path matches a `capture.exclude` pattern, or one whose head carries a skip marker (see
 [keeping-memory-clean.md](keeping-memory-clean.md)). `memware backup` reports how many it left
-out (`transcripts_skipped_no_capture`, `transcripts_skipped_marker`). A copy of one that an
+out (`transcripts_skipped_no_capture`, `transcripts_skipped_glob`, `transcripts_skipped_marker`),
+and warns on stderr when the `capture.exclude` patterns hide half or more of the transcripts. A copy of one that an
 earlier run already made is listed under `transcripts_left_in_backup` and on stderr at every
 run. memware never deletes from the destination, so remove those copies by hand.
 

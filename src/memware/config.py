@@ -1,6 +1,6 @@
 """User configuration at ``$MEMWARE_HOME/config.json`` (default ``~/.memware``).
 
-Small and explicit: the store path, and a backup block. Everything has a safe default,
+Small and explicit: the store path, a backup block, capture exclusions, and derive. Everything has a safe default,
 so memware works with no config file at all; ``memware setup`` writes one interactively.
 """
 
@@ -49,6 +49,11 @@ DEFAULTS: dict[str, Any] = {
         "transcript_src": "~/.claude/projects",  # what to mirror / where backfill also reads
         "auto": True,  # when a dest is set, the session-end hook backs up ~once/day (no cron needed)
         "auto_interval_hours": 20,  # minimum gap between automatic backups
+    },
+    # What never enters the store or the transcript mirror (docs/keeping-memory-clean.md).
+    "capture": {
+        # Path globs matched against the resolved transcript path; `memware exclude` edits it.
+        "exclude": [],
     },
     # `memware derive`: fill the ledger from the transcripts (docs/scheduling.md).
     "derive": {

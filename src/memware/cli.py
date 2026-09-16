@@ -251,6 +251,201 @@ def cmd_backfill(a: argparse.Namespace) -> int:
     return 0
 
 
+EXCLUDE_SHARE_WARN = 0.5
+"""``capture.exclude`` hiding at least this share of the transcripts on disk is called out by
+``memware exclude``, ``memware stats`` and ``memware backup``."""
+
+
+def _transcripts_on_disk(src: str) -> list[str]:
+    """Resolved paths of the transcripts under ``src``: the files the catch-up sync and the backup
+    mirror walk, as ``capture.exclude`` patterns see them."""
+    root = Path(src).expanduser()
+    if not root.is_dir():
+        return []
+    return sorted(str(p.resolve()) for p in root.rglob("*.jsonl") if p.is_file())
+
+
+def _of(part: int, whole: int) -> str:
+    return f"{part:,} of {whole:,}" + (f" ({part / whole:.1%})" if whole else "")
+
+
+def _hiding_verdict(excluded: int, total: int, *, pointer: bool = True) -> str | None:
+    """A line when the exclusions hide a large share of the transcripts, else None."""
+    if not total or excluded / total < EXCLUDE_SHARE_WARN:
+        return None
+    line = f"capture.exclude hides {_of(excluded, total)} transcripts on disk"
+    return line + ("; `memware exclude` lists what each pattern matches" if pointer else "")
+
+
+def _print_blocks(blocks: list[list[tuple[str, str]]]) -> None:
+    """Labeled ``field : value`` lines, a blank line between blocks, as ``memware stats`` prints."""
+    blocks = [b for b in blocks if b]
+    width = max((len(label) for b in blocks for label, _ in b), default=0)
+    print(
+        "\n\n".join(
+            "\n".join(f"{label.rjust(width)} : {value}" for label, value in b) for b in blocks
+        )
+    )
+
+
+def cmd_exclude(a: argparse.Namespace) -> int:
+    """List, add or remove ``capture.exclude`` patterns. A dry run unless ``--apply``.
+
+    The dry run counts, for every pattern, the transcripts on disk it matches and the indexed
+    sources it would un-index, and reads the store read-only. ``--apply`` writes the config and
+    un-indexes every indexed source the patterns match, including sources whose transcript is
+    no longer on disk, which no sync would visit again. Removing a pattern un-indexes nothing
+    and indexes nothing: the next sync picks up the transcripts it was hiding."""
+    import sqlite3
+
+    from memware.config import (
+        config_path,
+        get_dotted,
+        load_config,
+        load_user_config,
+        save_config,
+        set_dotted,
+    )
+    from memware.ingest import capture_exclude_patterns, is_excluded, matches_exclude, prune_source
+
+    before = capture_exclude_patterns()
+    pattern = (a.add if a.add is not None else a.remove or "").strip()
+    action = "add" if a.add is not None else "remove" if a.remove is not None else "list"
+    if action != "list" and not pattern:
+        print("an empty pattern matches nothing", file=sys.stderr)
+        return 2
+    if action == "remove" and pattern not in before:
+        print(f"not in capture.exclude: {pattern}", file=sys.stderr)
+        return 2
+    if action == "add":
+        after = before if pattern in before else [*before, pattern]
+    elif action == "remove":
+        after = [p for p in before if p != pattern]
+    else:
+        after = before
+
+    src = str(get_dotted(load_config(), "backup.transcript_src") or "~/.claude/projects")
+    disk = _transcripts_on_disk(src)
+    db = Path(a.db).expanduser()
+    indexed: dict[str, int] = {}  # source -> turns, for sources some pattern of interest matches
+    watched = [*after, pattern] if action == "remove" else after
+    if db.exists() and watched:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)  # a dry run never writes
+        try:
+            for (source,) in con.execute("SELECT source FROM cursor").fetchall():
+                if is_excluded(source, watched):
+                    row = con.execute("SELECT count(*) FROM turn WHERE source=?", (source,))
+                    indexed[source] = int(row.fetchone()[0])
+        finally:
+            con.close()
+
+    def match(pat: str) -> dict[str, Any]:
+        hits = [src_ for src_ in indexed if matches_exclude(src_, pat)]
+        return {
+            "pattern": pat,
+            "transcripts": sum(matches_exclude(p, pat) for p in disk),
+            "indexed_sources": len(hits),
+            "indexed_turns": sum(indexed[h] for h in hits),
+        }
+
+    rows = [match(pat) for pat in after]
+    unindex = [] if action == "remove" else [s_ for s_ in indexed if is_excluded(s_, after)]
+    report: dict[str, Any] = {
+        "action": action,
+        "pattern": pattern or None,
+        "applied": bool(a.apply),
+        "config": str(config_path()),
+        "transcript_src": src,
+        "transcripts": len(disk),
+        "patterns": rows,
+        "excluded": sum(is_excluded(p, after) for p in disk),
+        "unindex_sources": len(unindex),
+        "unindex_turns": sum(indexed[s_] for s_ in unindex),
+    }
+    target = match(pattern) if pattern else None
+    if action == "remove":
+        report["removed"] = target
+        report["reindexable"] = sum(
+            matches_exclude(p, pattern) and not is_excluded(p, after) for p in disk
+        )
+
+    if a.apply:
+        if after != before:
+            user = load_user_config()  # write the one key; defaults stay defaults
+            set_dotted(user, "capture.exclude", after)
+            save_config(user)
+        if unindex:
+            from memware.store import Store
+
+            with Store(db) as s:
+                s.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    for source in unindex:
+                        prune_source(s, source)
+                except BaseException:
+                    s.conn.execute("ROLLBACK")
+                    raise
+                s.conn.execute("COMMIT")
+
+    if a.json:
+        _out(report, True)
+        return 0
+    state = "applied" if a.apply else "dry run, nothing written"
+    blocks: list[list[tuple[str, str]]] = [
+        [
+            ("action", f"{action} {pattern} ({state})" if pattern else f"list ({state})"),
+            ("config", str(config_path())),
+            ("transcript source", f"{src} ({len(disk):,} transcripts)"),
+        ]
+    ]
+    shown = [*rows, target] if action == "remove" and target else rows
+    for r in shown:
+        mark = ""
+        if r["pattern"] == pattern:
+            mark = " (removed)" if action == "remove" else "" if pattern in before else " (new)"
+        blocks.append(
+            [
+                ("pattern", r["pattern"] + mark),
+                ("transcripts", f"{r['transcripts']:,}"),
+                ("indexed sources", f"{r['indexed_sources']:,} ({r['indexed_turns']:,} turns)"),
+            ]
+        )
+    total = [("transcripts excluded", _of(report["excluded"], len(disk)))]
+    if action == "remove":
+        total.append(("transcripts no longer excluded", f"{report['reindexable']:,}"))
+    else:
+        label = "sources un-indexed" if a.apply else "sources to un-index"
+        total.append((label, f"{len(unindex):,} ({report['unindex_turns']:,} turns)"))
+    blocks.append(total)
+
+    verdicts: list[str] = []
+    if not after:
+        verdicts.append("capture.exclude is empty; `memware exclude --add GLOB` previews a pattern")
+    if action == "add" and target and not (target["transcripts"] or target["indexed_sources"]):
+        verdicts.append(
+            "the pattern matches no transcript on disk and no indexed source; it is matched "
+            "against the whole resolved path, so `*/name/*` names a directory"
+        )
+    hiding = _hiding_verdict(report["excluded"], len(disk), pointer=False)
+    if hiding:
+        verdicts.append(hiding)
+    if action == "remove" and report["reindexable"]:
+        verdicts.append("the next sync indexes the transcripts it no longer excludes")
+    if not a.apply:
+        steps = []
+        if action == "add" and after != before:
+            steps.append("add it to capture.exclude")
+        if action == "remove":
+            steps.append("remove it from capture.exclude")
+        if unindex:
+            steps.append("un-index what the patterns match")
+        if steps:
+            verdicts.append("run again with --apply to " + " and ".join(steps))
+    blocks.append([("verdict", v) for v in verdicts])
+    _print_blocks(blocks)
+    return 0
+
+
 def cmd_recall(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         hits = []
@@ -492,6 +687,10 @@ def _stats_verdicts(r: dict[str, Any]) -> list[str]:
         )
     if r["turns"] and not u["beliefs_recalled_30d"] and not u["turns_recalled_30d"]:
         out.append("nothing has been recalled in 30 days")
+    c = r["capture"]
+    hiding = c["exclude"] and _hiding_verdict(c["transcripts_excluded"], c["transcripts"])
+    if hiding:
+        out.append(hiding)
     return out
 
 
@@ -539,6 +738,7 @@ def _print_stats(r: dict[str, Any]) -> None:
             ),
             ("last recalled", _when(u["last_recalled"], u["last_recalled_age_hours"], "never")),
         ],
+        _capture_lines(r["capture"]),
         [("verdict", v) for v in _stats_verdicts(r)],
     ]
     blocks = [section for section in sections if section]
@@ -551,12 +751,39 @@ def _print_stats(r: dict[str, Any]) -> None:
     )
 
 
+def _capture_status() -> dict[str, Any]:
+    """``capture.exclude`` and how many transcripts on disk it hides. The transcript tree is walked
+    only when a pattern is set, so a store with no exclusions pays nothing."""
+    from memware.config import get_dotted, load_config
+    from memware.ingest import capture_exclude_patterns, is_excluded
+
+    patterns = capture_exclude_patterns()
+    out: dict[str, Any] = {"exclude": patterns, "transcripts": None, "transcripts_excluded": None}
+    if patterns:
+        src = str(get_dotted(load_config(), "backup.transcript_src") or "~/.claude/projects")
+        disk = _transcripts_on_disk(src)
+        out["transcripts"] = len(disk)
+        out["transcripts_excluded"] = sum(is_excluded(p, patterns) for p in disk)
+    return out
+
+
+def _capture_lines(c: dict[str, Any]) -> list[tuple[str, str]]:
+    if not c["exclude"]:
+        return []
+    n = len(c["exclude"])
+    return [
+        ("capture.exclude", f"{n} pattern{'' if n == 1 else 's'} (`memware exclude` lists them)"),
+        ("transcripts excluded", _of(c["transcripts_excluded"], c["transcripts"])),
+    ]
+
+
 def cmd_stats(a: argparse.Namespace) -> int:
     _maybe_setup_hint(a)
     with Store(a.db) as s:
         report: dict[str, Any] = {"db": str(s.path), **s.stats()}
         report["derive"] = derive_status(s.conn, s.path)
         report["utilization"] = s.utilization()
+    report["capture"] = _capture_status()
     if a.json:
         _out(report, True)
     else:
@@ -612,9 +839,13 @@ def cmd_backup(a: argparse.Namespace) -> int:
         mirrored = bk.mirror_transcripts(src, dest)
         result["transcripts_mirrored"] = mirrored.copied
         result["transcripts_skipped_no_capture"] = len(mirrored.excluded_no_capture)
+        result["transcripts_skipped_glob"] = len(mirrored.excluded_glob)
         result["transcripts_skipped_marker"] = len(mirrored.excluded_marker)
+        hiding = _hiding_verdict(len(mirrored.excluded_glob), mirrored.seen)
+        if hiding:
+            print(hiding, file=sys.stderr)
         if mirrored.left_in_backup:
-            # Copies an earlier run made before the transcript was listed or marked. memware
+            # Copies an earlier run made before the transcript was listed, excluded or marked. memware
             # never deletes from a destination, so a person has to; say where, every run.
             result["transcripts_left_in_backup"] = [str(p) for p in mirrored.left_in_backup]
             for target in mirrored.left_in_backup[:5]:
@@ -1135,6 +1366,30 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--harness", default="claude-code")
     s.add_argument("--exclude", action="append", default=[], metavar="GLOB")
     s.set_defaults(fn=cmd_backfill)
+
+    s = add(
+        "exclude",
+        "list, add or remove capture.exclude path globs: transcripts no sync indexes and no "
+        "backup mirrors (a dry run unless --apply)",
+        epilog=(
+            "Examples:\n"
+            "  memware exclude                                  each pattern and what it matches\n"
+            "  memware exclude --add '*/-Users-me-gen-runs/*'   preview: matches, sources to un-index\n"
+            "  memware exclude --add '*/-Users-me-gen-runs/*' --apply\n"
+            "  memware exclude --remove '*/-Users-me-gen-runs/*' --apply\n"
+            "A pattern is matched against the whole resolved transcript path, and * crosses /.\n"
+            "See docs/keeping-memory-clean.md."
+        ),
+    )
+    which = s.add_mutually_exclusive_group()
+    which.add_argument("--add", metavar="GLOB", help="add a pattern")
+    which.add_argument("--remove", metavar="GLOB", help="remove a pattern")
+    s.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the config and un-index the indexed sources the patterns match",
+    )
+    s.set_defaults(fn=cmd_exclude)
 
     s = add(
         "recall",

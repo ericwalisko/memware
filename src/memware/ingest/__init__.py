@@ -114,6 +114,38 @@ def is_no_capture(source: str | os.PathLike[str], listed: set[str] | None = None
     return str(p) in listed or any(f"{d}.jsonl" in listed for d in p.parents)
 
 
+def capture_exclude_patterns() -> list[str]:
+    """``capture.exclude`` from the config: path globs whose transcripts no sync indexes and no
+    backup mirrors. Read per call, like the skip markers, so an edit applies at the next sync.
+
+    The no-capture list needs a hook to run in the session and a marker needs the text inside
+    the transcript. A pattern needs neither: it lives in the machine's config, so a script that
+    forgets ``MEMWARE_NO_CAPTURE`` is still excluded by where its sessions run. A bare string
+    counts as one pattern, which is what ``memware config capture.exclude GLOB`` writes."""
+    from memware.config import get_dotted, load_config
+
+    raw = get_dotted(load_config(), "capture.exclude")
+    items = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    return [p.strip() for p in items if isinstance(p, str) and p.strip()]
+
+
+def matches_exclude(source: str | os.PathLike[str], pattern: str) -> bool:
+    """Whether a resolved transcript path matches one ``capture.exclude`` pattern.
+
+    The whole path is matched with :func:`fnmatch.fnmatch`, as ``memware prune --glob`` matches,
+    so ``*`` crosses ``/``: ``*/-Users-me-gen/*`` names one Claude Code project directory, every
+    session in it, and those sessions' subagents. A leading ``~`` is expanded."""
+    import fnmatch
+
+    return fnmatch.fnmatch(str(source), os.path.expanduser(pattern))
+
+
+def is_excluded(source: str | os.PathLike[str], patterns: list[str] | None = None) -> bool:
+    """Whether a resolved transcript path matches any ``capture.exclude`` pattern."""
+    patterns = capture_exclude_patterns() if patterns is None else patterns
+    return any(matches_exclude(source, pat) for pat in patterns)
+
+
 @contextmanager
 def _exclusive(lock: Path) -> Iterator[None]:
     """Hold an exclusive ``flock`` on ``lock`` for the block; unlocked where there is no flock."""
@@ -185,8 +217,9 @@ def sync_file(
     head contains the marker — the way to keep an evaluation's own sessions out of the
     evidence it is evaluated against. The persistent markers from
     :func:`default_skip_markers` always apply on top of it, and a file on the no-capture
-    list (:func:`record_no_capture`), or one of its subagents' transcripts, is skipped and
-    un-indexed the same way.
+    list (:func:`record_no_capture`), or one of its subagents' transcripts, or one whose path
+    matches a ``capture.exclude`` pattern (:func:`is_excluded`), is skipped and un-indexed the
+    same way.
     """
     p = Path(path)
     source = str(p.resolve())
@@ -195,7 +228,7 @@ def sync_file(
         markers += (
             [skip_if_contains] if isinstance(skip_if_contains, str) else list(skip_if_contains)
         )
-    if is_no_capture(source) or (markers and file_contains(p, markers)):
+    if is_no_capture(source) or is_excluded(source) or (markers and file_contains(p, markers)):
         prune_source(store, source)
         return 0
     parse = parser_for(harness)
@@ -245,7 +278,9 @@ def sync_tree(
 ) -> dict[str, int]:
     """Sync every matching file under ``root``. Returns {path: added}.
 
-    ``exclude`` is a list of glob patterns matched against the full path (fnmatch)."""
+    ``exclude`` is a list of glob patterns matched against the full path (fnmatch). It holds for
+    this call only and un-indexes nothing; the persistent ``capture.exclude`` patterns are
+    honoured by :func:`sync_file`, which also un-indexes what they match."""
     import fnmatch
 
     out: dict[str, int] = {}
@@ -303,10 +338,13 @@ __all__ = [
     "Parser",
     "Turn",
     "capture_disabled",
+    "capture_exclude_patterns",
     "default_skip_markers",
     "file_contains",
     "ignore_markers_file",
+    "is_excluded",
     "is_no_capture",
+    "matches_exclude",
     "no_capture_file",
     "no_capture_paths",
     "parser_for",

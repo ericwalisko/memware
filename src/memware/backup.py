@@ -16,7 +16,14 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 
-from memware.ingest import default_skip_markers, file_contains, is_no_capture, no_capture_paths
+from memware.ingest import (
+    capture_exclude_patterns,
+    default_skip_markers,
+    file_contains,
+    is_excluded,
+    is_no_capture,
+    no_capture_paths,
+)
 
 SNAPSHOT_GLOB = "memware-*.db"
 _SNAPSHOT_RE = re.compile(r"memware-(\d{8}-\d{6})\.db$")
@@ -104,16 +111,29 @@ class MirrorResult:
     files it must never copy.
 
     ``skipped`` is a list of ``(target, reason)`` — the run does not abort on one bad file.
-    ``excluded_no_capture`` and ``excluded_marker`` are the source transcripts left out because
-    they are on the no-capture list or carry a skip marker. ``left_in_backup`` holds the copies
-    of those that an earlier run already made; the mirror reports them and never deletes them."""
+    ``excluded_no_capture``, ``excluded_glob`` and ``excluded_marker`` are the source transcripts
+    left out because they are on the no-capture list, match a ``capture.exclude`` pattern, or
+    carry a skip marker; a transcript is counted under the first of those it meets. ``seen`` is
+    every transcript the mirror looked at, so a share can be read off it. ``left_in_backup``
+    holds the copies of excluded transcripts that an earlier run already made; the mirror
+    reports them and never deletes them."""
 
-    __slots__ = ("copied", "excluded_marker", "excluded_no_capture", "left_in_backup", "skipped")
+    __slots__ = (
+        "copied",
+        "excluded_glob",
+        "excluded_marker",
+        "excluded_no_capture",
+        "left_in_backup",
+        "seen",
+        "skipped",
+    )
 
     def __init__(self) -> None:
         self.copied = 0
+        self.seen = 0
         self.skipped: list[tuple[Path, str]] = []
         self.excluded_no_capture: list[Path] = []
+        self.excluded_glob: list[Path] = []
         self.excluded_marker: list[Path] = []
         self.left_in_backup: list[Path] = []
 
@@ -141,8 +161,9 @@ def mirror_transcripts(
        code (and the cron that reads it) down with it.
 
     A transcript that sync would never index is never copied either: one on the no-capture
-    list or in a listed session's subagent directory, or one whose head carries a skip marker. The destination is often a synced folder,
-    which is further from the machine than the store is.
+    list or in a listed session's subagent directory, one whose resolved path matches a
+    ``capture.exclude`` pattern, or one whose head carries a skip marker. The destination is
+    often a synced folder, which is further from the machine than the store is.
     """
     src = Path(src_root).expanduser()
     dest = (Path(dest_dir).expanduser()) / "transcripts"
@@ -150,13 +171,17 @@ def mirror_transcripts(
     if not src.exists():
         return result
     listed = no_capture_paths()
+    patterns = capture_exclude_patterns()
     markers = default_skip_markers()
     for f in src.rglob("*.jsonl"):
         rel = f.relative_to(src)
         target = dest / rel
+        result.seen += 1
         try:
             if listed and is_no_capture(f.resolve(), listed):
                 excluded: list[Path] | None = result.excluded_no_capture
+            elif patterns and is_excluded(f.resolve(), patterns):
+                excluded = result.excluded_glob
             elif markers and file_contains(f, markers):
                 excluded = result.excluded_marker
             else:
