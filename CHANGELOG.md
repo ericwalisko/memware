@@ -6,7 +6,40 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **`memware prune --turns-containing` matches text anywhere in a turn, and the prefix match it
+  used to be is `--turns-starting-with`** ([#32](https://github.com/ericwalisko/memware/issues/32)).
+  `--turns-containing X` removed only turns that began with X, so a value pasted
+  mid-conversation (a token, a password) could not be selected, and the dry run answered
+  `turns to remove : 0` for a store that still held it. It now selects every turn holding X. The
+  new `--turns-starting-with X` keeps the prefix match, which is still the right tool for a
+  recurring harness preamble. Both match literally and case-sensitively, as `--containing`
+  does: `_` and `%` are no longer wildcards, and `rollout` no longer matches `Rollout`. A turn
+  selector takes no other selector, and combining one with `--glob`, `--containing` or the other
+  turn selector exits 2 (`--glob` and `--containing` used to be ignored silently). The library
+  follows: `prune(turns_containing=…)` is a substring match, `prune(turns_starting_with=…)` is
+  new, and `prune_turns` takes exactly one of `containing` and `starting_with`.
+  **Migration:** a script or cron that runs `memware prune --turns-containing PREFIX` to strip a
+  boilerplate prefix should run `--turns-starting-with PREFIX` instead, because a substring
+  match also removes every turn that quotes the prefix. A library call
+  `prune_turns(store, containing=PREFIX)` becomes `prune_turns(store, starting_with=PREFIX)`.
+
 ### Fixed
+- **`memware prune --containing` reads the whole transcript**
+  ([#33](https://github.com/ericwalisko/memware/issues/33)). It decided by the first 200 KB of
+  each file, so a value past that point, which is most of a long session, was never found and
+  the dry run reported `sources to un-index : 0`. It now reads every file to the end, a megabyte
+  at a time, with an overlap so a value that spans two reads still matches. Sync's skip markers
+  and the backup mirror still check only a transcript's head, as documented.
+- **A prune that matches nothing says what it searched.** A bare `0` read the same as a clean
+  store. When a selector matches nothing, `prune` prints to stderr what it searched and how
+  (`no turn starts with 'X' (1,204 searched, matched literally and case-sensitively); 2 turns
+  contain it past the start: try --turns-containing`), and names what another selector would
+  reach: turns that hold the text past their start or in another case, and indexed turns that
+  still hold a value no transcript file on disk does. `--containing` also names the indexed
+  sources it could not read because the transcript file is gone, and `--turns-starting-with`
+  the turns it leaves holding the text past their start. Standard output, `--json` and
+  `--plain` are unchanged.
 - **`memware stats` no longer conflates a retractable orphan with a stale citation.** The
   `beliefs from no indexed turn` line merged two different counts: beliefs whose cited session
   has no turn left at all (`memware beliefs retract --orphaned` acts on exactly these), and

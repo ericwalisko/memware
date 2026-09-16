@@ -92,6 +92,24 @@ memware stats                                        # confirm
 not bring them back as long as the marker is in the ignore list. Without `--apply` it
 writes nothing and prints what it would do, beliefs included (below).
 
+`--containing` reads every transcript file to the end, so it finds a marker however deep in a
+long session it sits. It cannot read a transcript whose file is gone, and it says how many it
+skipped; their turns are still indexed, and `--turns-containing` reaches them. A selector that
+matches nothing prints what it searched, so a `0` is never silent.
+
+### Remove a value pasted into a session you keep
+
+A token or password pasted mid-conversation sits inside turns you otherwise want. Select the
+turns that hold it, not the whole transcript:
+
+```bash
+memware prune --turns-containing "the-pasted-value"          # dry run: how many turns hold it
+memware prune --turns-containing "the-pasted-value" --apply
+```
+
+`--turns-containing` matches the text anywhere in a turn, literally and case-sensitively. Copies
+already mirrored to a backup folder are not touched; delete those by hand.
+
 ### Retract the beliefs those runs left behind
 
 A run that was indexed may also have been derived: `memware derive` files the facts it finds
@@ -221,7 +239,7 @@ content signature:
 
 ```bash
 # one-shot: drop every copy already indexed (the stable prefix matches them all, dates and all)
-memware prune --turns-containing "You are the NIGHTLY DRIFT SCAN" --apply
+memware prune --turns-starting-with "You are the NIGHTLY DRIFT SCAN" --apply
 
 # ongoing: if that prompt begins its own automation sessions (a cron that opens a fresh
 # Claude session), skip the whole session at every sync:
@@ -230,9 +248,10 @@ echo "You are the NIGHTLY DRIFT SCAN" >> ~/.memware/ignore-markers.txt
 
 `ignore-markers.txt` matches the **head** of a transcript, so it skips a session whose first
 turn is the recurring prompt — the usual shape for a cron. If the prompt is embedded *mid*-session
-in work you otherwise keep, there is no ongoing per-turn skip yet: re-run `prune --turns-containing`
-periodically (its stable prefix keeps catching the dated variants). Static recurring prompts need
-none of this — they collapse cleanly on their own.
+in work you otherwise keep, there is no ongoing per-turn skip yet: re-run `prune --turns-starting-with`
+periodically (its stable prefix keeps catching the dated variants). Use `--turns-starting-with`
+rather than `--turns-containing` here: a substring match would also remove every turn that quotes
+the prompt. Static recurring prompts need none of this — they collapse cleanly on their own.
 
 ## What derive reads (not a capture layer)
 
@@ -267,7 +286,8 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
 | remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises |
-| tame a recurring/dated automation prompt | `prune --turns-containing PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
+| remove a value pasted into a session you keep | `memware prune --turns-containing VALUE`, then again with `--apply` |
+| tame a recurring/dated automation prompt | `prune --turns-starting-with PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
 | evaluate without self-contamination | `memware-eval --corpus … --beliefs-from …` |
 | keep headless runs out of the ledger, in recall | the default (`derive.sources interactive`); `memware config derive.sources all` reads them |
 | see which generator wrote the store | `memware stats`: sessions, turns and beliefs by entrypoint, top project directories |

@@ -304,12 +304,12 @@ def test_stats_tells_a_retractable_orphan_from_a_stale_turn_citation(tmp_path, c
     assert "a dangling citation" not in out  # the stale-turn belief is untouched
 
 
-def test_prune_turns_containing_retracts_only_the_sessions_it_empties(db, capsys):
+def test_a_turn_prune_retracts_only_the_sessions_it_empties(db, capsys):
     code, out, _ = _run(
-        capsys, "--db", db, "prune", "--turns-containing", "the staging api", "--apply", "--json"
+        capsys, "--db", db, "prune", "--turns-starting-with", "the staging api", "--apply", "--json"
     )
     r = json.loads(out)
-    # One turn from each session matches, and each session keeps its other turn.
+    # One turn from each session starts with it, and each session keeps its other turn.
     assert (r["turns_removed"], r["sessions_emptied"], r["retract"]) == (2, [], [])
     assert "sources_pruned" not in r
 

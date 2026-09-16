@@ -257,11 +257,15 @@ def test_prune_turns_is_turn_level_not_source_level(store, tmp_path):
     _insert_boilerplate_turn(
         store, 99, "Base directory for this skill: /x/.claude/skills/foo\n\n# stale preamble"
     )
-    assert store.stats()["turns"] == 3
-    removed = prune_turns(store, containing="Base directory for this skill:")
+    # and a real question that quotes it, which a prefix leaves alone
+    _insert_boilerplate_turn(
+        store, 100, "why does Base directory for this skill: show up in recall"
+    )
+    assert store.stats()["turns"] == 4
+    removed = prune_turns(store, starting_with="Base directory for this skill:")
     assert removed == 1
     texts = [r["text"] for r in store.conn.execute("SELECT text FROM turn ORDER BY seq")]
-    assert len(texts) == 2 and not any(x.startswith("Base directory") for x in texts)
+    assert len(texts) == 3 and not any(x.startswith("Base directory") for x in texts)
     assert search_turns(store, "deployment pipeline retry", k=3)
 
 

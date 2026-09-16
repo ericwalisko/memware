@@ -135,11 +135,17 @@ Manage contested supersessions through the review channel.
 Un\-index matching turns, and retract the beliefs derived from every session left with no
 turn. One of
 .BR \-\-glob ", "
-.BR \-\-containing " or "
+.B \-\-containing
+(whole sources, each transcript file read to the end),
 .B \-\-turns\-containing
-is required. Without
+(turns holding the text anywhere) or
+.B \-\-turns\-starting\-with
+(turns that begin with it) is required, and a turn selector takes no other selector. Text is
+matched literally and case\-sensitively. Without
 .B \-\-apply
-it is a dry run: it prints what it would remove and retract, and writes nothing.
+it is a dry run: it prints what it would remove and retract, and writes nothing. A selector
+that matches nothing says on standard error what it searched and which selector reaches the
+text instead.
 .TP
 .B stats
 Print store counts; sessions, turns and current beliefs by the entrypoint that started the
