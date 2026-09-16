@@ -24,6 +24,9 @@ class Turn:
     ts: str | None
     role: str
     text: str
+    entrypoint: str | None = None
+    """What started the session, when the transcript says (``cli``, ``sdk-cli`` …). A parser
+    that cannot know leaves it None, and derive reads such a turn as interactive."""
 
 
 Parser = Callable[[Path, int], Iterator[tuple[int, Turn]]]
@@ -212,9 +215,18 @@ def sync_file(
         for offset_after, turn in parse(p, offset):
             seq += 1
             cur = conn.execute(
-                "INSERT OR IGNORE INTO turn(session,seq,ts,role,text,source,harness) "
-                "VALUES (?,?,?,?,?,?,?)",
-                (turn.session, seq, turn.ts, turn.role, turn.text, source, harness),
+                "INSERT OR IGNORE INTO turn(session,seq,ts,role,text,source,harness,entrypoint) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    turn.session,
+                    seq,
+                    turn.ts,
+                    turn.role,
+                    turn.text,
+                    source,
+                    harness,
+                    turn.entrypoint,
+                ),
             )
             if cur.rowcount:  # ignored rows are a re-read of the same (source, seq)
                 index_turn(conn, int(cur.lastrowid or 0), turn.text)

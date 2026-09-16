@@ -33,6 +33,33 @@ All notable changes to this project are documented here. The format follows
   (`utilization.beliefs_orphaned`), with a verdict line naming the one-shot when there are any.
 
 ### Changed
+- **`memware derive` reads interactive sessions only by default.** Claude Code writes an
+  `entrypoint` on every transcript record (`cli` for an interactive session, `sdk-cli` for
+  `claude -p`), and a new `turn.entrypoint` column keeps it; the Claude Code parser sets it and
+  parsers that cannot know leave it NULL. The new setting `derive.sources` defaults to
+  `interactive`, which skips turns from `claude -p`, the Agent SDKs (`sdk-ts`, `sdk-py`), the
+  GitHub Action and `mcp serve`. Those turns stay indexed and recallable; they no longer become
+  beliefs. On one machine 1,561 of 1,719 transcripts were `claude -p` sessions, eval scaffolding
+  among them, so a store that derived from everything filed facts from prompts. Headless runs
+  that hold real decisions opt back in with `memware config derive.sources all`. A turn with no
+  entrypoint, and one with an entrypoint the list does not name (an IDE extension, the desktop
+  app), is read as interactive, so the default never drops what it cannot label. The watermark
+  still moves past skipped turns: switching the setting changes what the next run reads, and
+  `--since` re-reads older turns. A value other than `interactive` or `all` makes derive exit 2
+  before any provider is built.
+- `memware derive --plan`, and a run, print the setting and how many new turns each setting would
+  read (`turns : N under interactive, M under all`), so the cost of the choice is visible before a
+  run. The plan's `--quiet` summary gains those two lines.
+- **Schema version 3.** An existing store gains `turn.entrypoint` on first open, with no row
+  removed, and its indexed Claude Code turns take the entrypoint their transcript's first
+  conversation record carries, if the transcript is still on disk. Turns whose transcript is gone
+  stay NULL. A configured backup destination gets a safety snapshot first, as for every
+  migration. `memware read --json` rows carry the new field.
+- **`memware stats` shows where the store came from**: sessions, turns and current beliefs by
+  entrypoint (a belief counts under the turn its source pointer names), beliefs from no indexed
+  turn, and the five project directories holding the most sessions with their share, so a
+  generator that wrote much of the store is visible without an audit. `--json` adds
+  `provenance` and `derive.sources`; `derive.turns_pending` counts what the setting reads.
 - **`memware prune` is a dry run unless `--apply` is given.** It prints the sources and turns
   it would remove, the beliefs it would retract, the predecessors it would reopen or relink, and
   the stated beliefs it keeps, and writes nothing. Scripts that ran `memware prune` to delete

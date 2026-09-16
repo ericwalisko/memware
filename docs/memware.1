@@ -122,7 +122,9 @@ is required. Without
 it is a dry run: it prints what it would remove and retract, and writes nothing.
 .TP
 .B stats
-Print store counts, derive state (runs, last run, turns not yet derived) and recall
+Print store counts; sessions, turns and current beliefs by the entrypoint that started the
+session, and the five project directories holding the most sessions; derive state (sources,
+runs, last run, turns not yet derived) and recall
 utilization (beliefs and turns recalled in 7 and 30 days, and beliefs citing a session that is
 no longer indexed), with a one\-line verdict when memory is inert, such as an empty ledger
 because derive has never run, or when beliefs have lost their session.

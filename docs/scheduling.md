@@ -1,6 +1,6 @@
 # Deriving beliefs on a schedule (without an always-on computer)
 
-`memware derive` reads every transcript turn indexed since its last run, asks a model for
+`memware derive` reads every interactive transcript turn indexed since its last run, asks a model for
 the durable facts in them, and files the ones that pass a deterministic check into the
 belief ledger. It is **incremental and idempotent**: it keeps a watermark beside the
 database, so running it twice does no extra work and running it late catches up. That
@@ -20,6 +20,45 @@ memware derive --apply    # files the candidates, advances the watermark
 The dry run still sends every excerpt to the provider; it skips only the write and the
 watermark. If your transcripts must clear an egress review first, start with `--plan`: it
 calls no model and writes nothing, and it works before `claude` or `OPENAI_*` is set up.
+
+## Which sessions it reads
+
+Interactive ones, by default. Claude Code writes an `entrypoint` on every transcript record:
+`cli` for a session you started in a terminal, `sdk-cli` for `claude -p`, `sdk-ts` and
+`sdk-py` for the Agent SDKs. `memware sync` keeps it on each turn, and derive skips the
+headless ones (`sdk-cli`, `sdk-ts`, `sdk-py`, and Claude Code's GitHub Action and `mcp serve`
+entrypoints). A scheduled lane or an eval harness that drives `claude -p` can write most of
+the transcripts on a machine, and its prompts read like facts to an extractor. Those turns stay
+indexed and recallable; they just never become beliefs.
+
+If your headless runs hold real decisions (an agent lane whose sessions you want remembered),
+opt them back in:
+
+```bash
+memware config derive.sources all           # read headless sessions too
+memware config derive.sources interactive   # the default
+```
+
+`--plan` shows the cost of the choice before any run: it prints the setting and how many new
+turns each setting would read, for example
+`turns : 412 under interactive, 3,905 under all (new since the watermark)`.
+
+- A turn with **no entrypoint** is read as interactive: a transcript Claude Code wrote before
+  it recorded the field, or one from a harness whose parser cannot know (the generic JSONL
+  parser, the Hermes provider). Reading it costs a few excerpts; skipping it would drop real
+  history without a word.
+- An entrypoint the list above does not name, such as the IDE extensions' or the desktop
+  app's, is read too.
+- The watermark moves past the turns it skips. Switching to `all` changes what the next run
+  reads, not what earlier runs read; `memware derive --since 0 --plan` shows the older turns a
+  full re-read would send.
+- A store indexed before this setting existed gains the column on first open, and its Claude
+  Code turns take the entrypoint of their transcript if it is still on disk. Turns whose
+  transcript is gone stay unlabelled and are read as interactive.
+
+`memware stats` shows sessions, turns and beliefs by entrypoint and the project directories
+holding the most sessions, so a single generator that wrote much of the store is visible
+without an audit.
 
 Pick the option below that matches your machine. Only one is needed.
 

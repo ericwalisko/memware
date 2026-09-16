@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS turn (
   harness   TEXT NOT NULL,
   use_count INTEGER NOT NULL DEFAULT 0,
   last_used TEXT,
+  -- What started the session, as the harness recorded it: Claude Code writes "cli" for an
+  -- interactive session and "sdk-cli" for `claude -p`. NULL when the parser cannot know.
+  entrypoint TEXT,
   UNIQUE(source, seq)
 );
 CREATE INDEX IF NOT EXISTS turn_session_idx ON turn(session, seq);
@@ -126,7 +129,7 @@ def _default_db_path() -> Path:
 
 DEFAULT_DB = _default_db_path()
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """Bumped when an existing file needs work beyond ``CREATE ... IF NOT EXISTS``.
 
 1. Passages replace whole-turn FTS: ``turn_fts`` is dropped and every existing
@@ -136,6 +139,10 @@ SCHEMA_VERSION = 2
    recurs in every session that loaded the skill and crowds recall. New parsers
    never index it; this one-time sweep cleans stores written before the fix, so
    nobody has to run ``memware prune`` by hand.
+3. ``turn.entrypoint`` records what started a session, so ``memware derive`` can read
+   interactive sessions only. The column is added, and the Claude Code turns already indexed
+   take the entrypoint their transcript records, if the transcript is still on disk
+   (:meth:`Store.backfill_entrypoints`). No row is removed.
 """
 
 BOILERPLATE_PREFIXES: tuple[str, ...] = (
@@ -144,6 +151,16 @@ BOILERPLATE_PREFIXES: tuple[str, ...] = (
 )
 """User-role text that the harness injects, not something a person wrote. The Claude Code
 parser skips these at ingest; the version-2 migration deletes any already indexed."""
+
+
+def project_dir(source: str) -> str:
+    """The directory a transcript's session belongs to: the transcript's own directory, or for a
+    Claude Code subagent transcript (``<project>/<session>/subagents/<agent>.jsonl``) the
+    project directory above it."""
+    parent = Path(source).parent
+    if parent.name == "subagents":
+        parent = parent.parent.parent
+    return str(parent)
 
 
 def now_iso() -> str:
@@ -212,6 +229,11 @@ class Store:
                     self.conn.execute(
                         "DELETE FROM turn WHERE role='user' AND text LIKE ?", (prefix + "%",)
                     )
+            if version < 3:
+                columns = {r["name"] for r in self.conn.execute("PRAGMA table_info(turn)")}
+                if "entrypoint" not in columns:  # a store created at version 3 already has it
+                    self.conn.execute("ALTER TABLE turn ADD COLUMN entrypoint TEXT")
+                self.backfill_entrypoints()
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         except BaseException:
             self.conn.execute("ROLLBACK")
@@ -256,6 +278,31 @@ class Store:
             after = int(rows[-1]["id"])
             done += len(rows)
 
+    def backfill_entrypoints(self) -> int:
+        """Set ``entrypoint`` on Claude Code turns indexed before the column existed, from the
+        first conversation record of their transcript. Returns the number of turns set.
+
+        One read per source, stopping at that record: about a second for two thousand transcripts
+        on a laptop, once, on the first open after the upgrade. A transcript that is gone, or that predates Claude Code
+        recording the field, leaves its turns NULL, which derive reads as interactive."""
+        from memware.ingest.claude_code import transcript_entrypoint
+
+        sources = [
+            r[0]
+            for r in self.conn.execute(
+                "SELECT DISTINCT source FROM turn WHERE harness='claude-code' AND entrypoint IS NULL"
+            )
+        ]
+        done = 0
+        for source in sources:
+            entrypoint = transcript_entrypoint(Path(source))
+            if entrypoint:
+                done += self.conn.execute(
+                    "UPDATE turn SET entrypoint=? WHERE source=? AND entrypoint IS NULL",
+                    (entrypoint, source),
+                ).rowcount
+        return done
+
     def _has_fts5(self) -> bool:
         row = self.conn.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()
         return bool(row and row[0])
@@ -284,6 +331,62 @@ class Store:
             "reviews_open": int(
                 q("SELECT count(*) FROM review WHERE decision IS NULL").fetchone()[0]
             ),
+        }
+
+    def provenance(self, top: int = 5) -> dict[str, Any]:
+        """Where the store came from: sessions, turns and current beliefs by the entrypoint that
+        started the session, and the ``top`` project directories by sessions. A generator that
+        wrote a large share of the store shows here without an audit.
+
+        A belief counts under the entrypoint of the turn its source pointer names. One a person
+        stated, or one whose turn is no longer indexed, is counted apart. A session whose turns
+        carry two entrypoints counts once under each."""
+        q = self.conn.execute
+        groups: dict[str | None, dict[str, Any]] = {}
+        for entrypoint, sessions, turns in q(
+            "SELECT entrypoint, count(DISTINCT session), count(*) FROM turn GROUP BY entrypoint"
+        ):
+            groups[entrypoint] = {
+                "entrypoint": entrypoint,
+                "sessions": int(sessions),
+                "turns": int(turns),
+                "beliefs": 0,
+            }
+        attributed = 0
+        # memware:session/<session>/turn/<id>, as memware.derive.source_pointer writes it
+        for entrypoint, n in q(
+            "SELECT t.entrypoint, count(*) FROM belief b JOIN turn t "
+            "ON t.id = CAST(substr(b.source, instr(b.source, '/turn/') + 6) AS INTEGER) "
+            "AND t.session = substr(b.source, 17, instr(b.source, '/turn/') - 17) "
+            "WHERE b.valid_to IS NULL AND b.status='committed' "
+            "AND b.source LIKE 'memware:session/%/turn/%' GROUP BY t.entrypoint"
+        ):
+            groups[entrypoint]["beliefs"] = int(n)
+            attributed += int(n)
+        current = int(
+            q(
+                "SELECT count(*) FROM belief WHERE valid_to IS NULL AND status='committed'"
+            ).fetchone()[0]
+        )
+        by_dir: dict[str, set[str]] = {}
+        for source, session in q("SELECT DISTINCT source, session FROM turn"):
+            by_dir.setdefault(project_dir(source), set()).add(session)
+        total = int(q("SELECT count(DISTINCT session) FROM turn").fetchone()[0])
+        ranked = sorted(by_dir.items(), key=lambda kv: (-len(kv[1]), kv[0]))[:top]
+        return {
+            "by_entrypoint": sorted(
+                groups.values(),
+                key=lambda g: (-g["sessions"], -g["turns"], g["entrypoint"] is None),
+            ),
+            "beliefs_no_indexed_turn": current - attributed,
+            "top_projects": [
+                {
+                    "directory": d,
+                    "sessions": len(members),
+                    "share": round(len(members) / total, 4) if total else None,
+                }
+                for d, members in ranked
+            ],
         }
 
     def utilization(self, now: datetime | None = None) -> dict[str, Any]:
