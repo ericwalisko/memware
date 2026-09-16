@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-16
+
 ### Changed
 - **`memware prune --turns-containing` matches text anywhere in a turn, and the prefix match it
   used to be is `--turns-starting-with`** ([#32](https://github.com/ericwalisko/memware/issues/32)).
