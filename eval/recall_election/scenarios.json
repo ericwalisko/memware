@@ -1,29 +1,5 @@
 [
   {
-    "id": "past_decision_1",
-    "class": "past_decision",
-    "prompt": "Did we end up deciding to keep HMAC signing for now, or was the switch to bearer tokens supposed to land before the next release? I can't remember where that conversation ended.",
-    "expect": "recall"
-  },
-  {
-    "id": "past_decision_2",
-    "class": "past_decision",
-    "prompt": "Did we decide to ship the gateway as its own container or fold it into the runner's deploy? I remember going back and forth on this.",
-    "expect": "recall"
-  },
-  {
-    "id": "rejected_alternative_1",
-    "class": "rejected_alternative",
-    "prompt": "Why didn't we put nginx in front of the gateway instead of exposing it directly? I feel like that got shot down.",
-    "expect": "recall"
-  },
-  {
-    "id": "rejected_alternative_2",
-    "class": "rejected_alternative",
-    "prompt": "We looked at replacing the hand-rolled retry loop with tenacity at some point. What was the reason we didn't?",
-    "expect": "recall"
-  },
-  {
     "id": "rationale_1",
     "class": "rationale",
     "prompt": "Why does the gateway listen on 8443 instead of 443 or 8080?",
@@ -36,63 +12,69 @@
     "expect": "recall"
   },
   {
-    "id": "earlier_session_1",
-    "class": "earlier_session",
-    "prompt": "We were in the middle of debugging a signature mismatch against the staging runner before I had to leave. Where did we get to?",
+    "id": "unexplained_value_1",
+    "class": "unexplained_value",
+    "prompt": "RETRY_LIMIT is 5 in config.py. What is that 5 based on?",
     "expect": "recall"
   },
   {
-    "id": "earlier_session_2",
-    "class": "earlier_session",
-    "prompt": "Pick up where we left off last time on the key rotation work. What was the next step you were going to take?",
+    "id": "unexplained_value_2",
+    "class": "unexplained_value",
+    "prompt": "KEY_GRACE_SECONDS is 900. Where does the fifteen minutes come from?",
     "expect": "recall"
   },
   {
-    "id": "cross_repo_1",
-    "class": "cross_repo",
-    "prompt": "How did we handle key rotation over in the billing service? I want rotate_keys here to match that behavior.",
+    "id": "unexplained_value_3",
+    "class": "unexplained_value",
+    "prompt": "max_skew_seconds defaults to 300. Is that number tied to something specific or is it arbitrary?",
     "expect": "recall"
   },
   {
-    "id": "cross_repo_2",
-    "class": "cross_repo",
-    "prompt": "The runner repo has its own HMAC verifier. Is it using the same header names as ours? I don't have it checked out here.",
+    "id": "unexplained_value_4",
+    "class": "unexplained_value",
+    "prompt": "upstream_timeout is 4.0 seconds. What budget was that set against?",
     "expect": "recall"
   },
   {
-    "id": "not_in_tree_1",
-    "class": "not_in_tree",
-    "prompt": "What was the p99 latency number you quoted when we were sizing the retry budget? I want to put it in the PR description.",
+    "id": "unwritten_constraint_1",
+    "class": "unwritten_constraint",
+    "prompt": "Is there a constraint I should know about before I raise RETRY_LIMIT to 10?",
     "expect": "recall"
   },
   {
-    "id": "not_in_tree_2",
-    "class": "not_in_tree",
-    "prompt": "Someone in chat said 5 retries was over budget and suggested a different limit. What number did they propose?",
+    "id": "unwritten_constraint_2",
+    "class": "unwritten_constraint",
+    "prompt": "I want to reorder the fields in the canonical signing string. Does anything outside this repo depend on the current ordering?",
+    "expect": "recall"
+  },
+  {
+    "id": "unwritten_constraint_3",
+    "class": "unwritten_constraint",
+    "prompt": "What is the p99 latency budget this retry configuration has to fit inside?",
+    "expect": "recall"
+  },
+  {
+    "id": "intent_1",
+    "class": "intent",
+    "prompt": "Is the gateway meant to terminate TLS itself, or sit behind something that does?",
+    "expect": "recall"
+  },
+  {
+    "id": "intent_2",
+    "class": "intent",
+    "prompt": "Is the HMAC scheme staying, or is something else replacing it?",
+    "expect": "recall"
+  },
+  {
+    "id": "naming_1",
+    "class": "naming",
+    "prompt": "The active key id defaults to k1. Does that naming scheme mean anything, or is it a placeholder?",
     "expect": "recall"
   },
   {
     "id": "find_code_1",
     "class": "find_code",
     "prompt": "Where is the listen port configured?",
-    "expect": "no_recall"
-  },
-  {
-    "id": "find_code_2",
-    "class": "find_code",
-    "prompt": "Which function checks the request signature, and where is it called from?",
-    "expect": "no_recall"
-  },
-  {
-    "id": "edit_task_1",
-    "class": "edit_task",
-    "prompt": "Add a GET /version route that returns the package version from __init__.py as JSON.",
-    "expect": "no_recall"
-  },
-  {
-    "id": "edit_task_2",
-    "class": "edit_task",
-    "prompt": "Rename upstream_url to runner_url everywhere, including the env var and .env.example.",
     "expect": "no_recall"
   },
   {
@@ -108,39 +90,57 @@
     "expect": "no_recall"
   },
   {
-    "id": "run_tests_1",
-    "class": "run_tests",
-    "prompt": "Run the test suite and tell me whether anything fails.",
-    "expect": "no_recall"
-  },
-  {
-    "id": "run_tests_2",
-    "class": "run_tests",
-    "prompt": "Run only the signing tests with pytest -k sign and show me the output.",
-    "expect": "no_recall"
-  },
-  {
-    "id": "refactor_1",
-    "class": "refactor",
-    "prompt": "Both handlers in server.py build the JSON error response by hand. Factor that into one helper.",
-    "expect": "no_recall"
-  },
-  {
-    "id": "refactor_2",
-    "class": "refactor",
-    "prompt": "config.py reads every env var by hand with os.environ.get. Collapse that into a single helper that takes a name and a default.",
-    "expect": "no_recall"
-  },
-  {
     "id": "style_question_1",
     "class": "style_question",
     "prompt": "Should the header name constants in auth.py be uppercase module-level names or class attributes? What does the rest of this codebase do?",
     "expect": "no_recall"
   },
   {
-    "id": "style_question_2",
-    "class": "style_question",
-    "prompt": "Does this codebase put type hints on test functions? I want to match the existing style in the new test I'm adding.",
+    "id": "edit_task_1",
+    "class": "edit_task",
+    "prompt": "Where is the package version defined, and how do the existing routes in server.py build their JSON responses?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "edit_task_2",
+    "class": "edit_task",
+    "prompt": "Where does the name upstream_url appear in this tree, including the environment variable spelling?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "refactor_1",
+    "class": "refactor",
+    "prompt": "Do both handlers in server.py build their JSON error response the same way? Show me the two places.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "refactor_2",
+    "class": "refactor",
+    "prompt": "How many environment variables does config.py read, and what is each one's default?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "run_tests_1",
+    "class": "run_tests",
+    "prompt": "What does the test suite cover? List the test functions and what each one asserts.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "bait_why_1",
+    "class": "history_bait",
+    "prompt": "Why does verify() reject a request before it ever gets to the signature comparison? Walk me through the order of the checks as the code has them.",
+    "expect": "no_recall"
+  },
+  {
+    "id": "bait_legacy_1",
+    "class": "history_bait",
+    "prompt": "The auth.py docstring describes the legacy header names. Which header names does the code actually read today?",
+    "expect": "no_recall"
+  },
+  {
+    "id": "bait_decided_1",
+    "class": "history_bait",
+    "prompt": "Which retry limit did this codebase decide on in the end — what is RETRY_LIMIT set to, and which module reads it?",
     "expect": "no_recall"
   }
 ]

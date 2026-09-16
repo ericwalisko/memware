@@ -15,9 +15,11 @@ errors stop the whole run instead of being recorded a hundred times. See README.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -25,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
@@ -39,6 +42,16 @@ BUILTIN_TOOLS = ["Grep", "Read", "Glob"]
 ISOLATION_CHOICES = ("setting-sources", "settings", "both")
 DEFAULT_ISOLATION = "setting-sources"
 FINAL_TEXT_CHARS = 300
+DEFAULT_SEED = 1729  # cell order is shuffled across variants; same seed => same order
+
+# Every cell runs on a throwaway copy of the fixture under a NEUTRAL name: nothing in the
+# cwd, the temp prefix or the mcp-config path may say "eval", "fixture" or "recall", or the
+# model can read what it is part of off its own working directory (probe 3).
+COPY_PREFIX = "wkspc-"
+COPY_NAME = "gateway"
+BANNED_PATH_WORDS = ("eval", "fixture", "recall")
+# Tool inputs worth recording per row; the values are also what the out-of-copy check reads.
+RECORDED_INPUTS = ("path", "pattern", "file_path", "glob", "notebook_path")
 
 # Same patterns as memware.derive: these mean "stop now", not "this cell failed".
 _LIMIT = re.compile(
@@ -83,6 +96,57 @@ def child_env() -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     env["MEMWARE_NO_CAPTURE"] = "1"
     return env
+
+
+def outside_git_repo(path: Path) -> bool:
+    """True when no ancestor of ``path`` holds a .git — the copy must not be in a checkout."""
+    return not any((p / ".git").exists() for p in [path, *path.parents])
+
+
+def neutral_name(path: Path) -> bool:
+    return not any(w in str(path).lower() for w in BANNED_PATH_WORDS)
+
+
+@contextlib.contextmanager
+def neutral_copy(src: Path) -> Iterator[Path]:
+    """A fresh copy of ``src`` under a neutral name, outside any git repo, deleted after."""
+    root = Path(tempfile.mkdtemp(prefix=COPY_PREFIX)).resolve()
+    try:
+        if not outside_git_repo(root):
+            raise SystemExit(f"temp copy {root} is inside a git repo; set TMPDIR elsewhere")
+        dst = root / COPY_NAME
+        shutil.copytree(
+            src, dst, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv")
+        )
+        if not neutral_name(dst):
+            raise SystemExit(f"copy path {dst} leaks an eval word; TMPDIR must be neutral too")
+        yield dst
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def claude_project_dir(cwd: Path) -> Path:
+    """Where ``claude`` would put a transcript for this cwd (non-slash chars -> '-')."""
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+    return Path.home() / ".claude" / "projects" / slug
+
+
+def sweep_project_dir(cwd: Path) -> dict[str, Any]:
+    """Assert no transcript was written for this cwd, then remove the directory.
+
+    ``--no-session-persistence`` should mean no ``*.jsonl`` ever appears; the directory
+    itself is still created. Anything else found is reported and the directory is KEPT,
+    because a transcript is evidence of a leak and must not be destroyed before it is read.
+    """
+    d = claude_project_dir(cwd)
+    if not d.exists():
+        return {"dir": str(d), "existed": False, "jsonl": [], "removed": False}
+    jsonl = sorted(str(p) for p in d.rglob("*.jsonl"))
+    removed = False
+    if not jsonl:
+        shutil.rmtree(d, ignore_errors=True)
+        removed = not d.exists()
+    return {"dir": str(d), "existed": True, "jsonl": jsonl, "removed": removed}
 
 
 def write_mcp_config(workdir: Path, description_file: Path, call_log: Path) -> Path:
@@ -161,9 +225,16 @@ def run_claude(
     max_turns: int = MAX_TURNS,
     builtin_tools: list[str] | None = None,
     marker: bool = True,
+    isolate: bool = True,
 ) -> dict[str, Any]:
-    """Spawn one ``claude -p`` with a fresh stub server; return raw output plus the call log."""
-    with tempfile.TemporaryDirectory(prefix="recall-election-") as tmp:
+    """Spawn one ``claude -p`` with a fresh stub server; return raw output plus the call log.
+
+    With ``isolate`` (the default) the cwd is a throwaway neutral-named copy of ``cwd``
+    made outside any git repo and deleted when the cell ends.
+    """
+    with contextlib.ExitStack() as stack:
+        run_cwd = Path(stack.enter_context(neutral_copy(cwd))) if isolate else cwd.resolve()
+        tmp = stack.enter_context(tempfile.TemporaryDirectory(prefix=COPY_PREFIX))
         workdir = Path(tmp)
         call_log = workdir / "calls.jsonl"
         cfg = write_mcp_config(workdir, description_file, call_log)
@@ -186,7 +257,7 @@ def run_claude(
                 timeout=timeout,
                 env=child_env(),
                 stdin=subprocess.DEVNULL,  # else claude waits for piped stdin
-                cwd=str(cwd),
+                cwd=str(run_cwd),
                 check=False,
             )
             rc, out, err = p.returncode, p.stdout or "", p.stderr or ""
@@ -201,6 +272,7 @@ def run_claude(
             )
         elapsed = time.monotonic() - t0
         calls = read_call_log(call_log)
+        sweep = sweep_project_dir(run_cwd) if isolate else {}
     return {
         "argv": argv,
         "rc": rc,
@@ -209,6 +281,8 @@ def run_claude(
         "elapsed_s": round(elapsed, 2),
         "timed_out": timed_out,
         "calls": calls,
+        "run_cwd": str(run_cwd),
+        "project_dir_sweep": sweep,
     }
 
 
@@ -249,6 +323,7 @@ def parse_stream(stdout: str) -> dict[str, Any]:
     assistant_texts: list[str] = []
     init_tools: list[str] = []
     init_mcp: list[dict[str, Any]] = []
+    init_event: dict[str, Any] = {}
     assistant_msgs = 0
     result: dict[str, Any] | None = None
     rate_limit_status: str | None = None
@@ -257,6 +332,7 @@ def parse_stream(stdout: str) -> dict[str, Any]:
         if t == "system" and ev.get("subtype") == "init":
             init_tools = [str(x) for x in ev.get("tools") or []]
             init_mcp = list(ev.get("mcp_servers") or [])
+            init_event = ev
         elif t == "rate_limit_event":
             info = ev.get("rate_limit_info") or {}
             rate_limit_status = str(info.get("status") or "") or rate_limit_status
@@ -297,8 +373,21 @@ def parse_stream(stdout: str) -> dict[str, Any]:
     if result is not None and isinstance(result.get("num_turns"), int):
         turns = result["num_turns"]
 
+    recorded_inputs = [
+        {
+            "tool": name,
+            **{
+                k: str(v)
+                for k, v in inp.items()
+                if k in RECORDED_INPUTS and isinstance(v, (str, int, float))
+            },
+        }
+        for name, inp in zip(tools_called, tool_inputs, strict=True)
+    ]
+
     return {
         "tools_called": tools_called,
+        "tool_inputs": recorded_inputs,
         "first_tool": tools_called[0] if tools_called else None,
         "recall_called": "mcp__memware__recall" in tools_called,
         "recall_queries": recall_queries,
@@ -312,8 +401,32 @@ def parse_stream(stdout: str) -> dict[str, Any]:
         "rate_limit_status": rate_limit_status,
         "init_tools": init_tools,
         "init_mcp_servers": init_mcp,
+        "init_event": init_event,
         "n_events": len(events),
     }
+
+
+_PATH_KEYS = ("path", "file_path", "notebook_path")
+
+
+def out_of_copy(recorded_inputs: list[dict[str, Any]], run_cwd: str) -> list[str]:
+    """Absolute tool paths that fall outside the cell's own copy — the cell is then invalid.
+
+    Relative paths resolve inside the cwd by construction and are not flagged; ``..`` that
+    climbs out of the copy is, because the resolved path leaves the tree.
+    """
+    root = Path(run_cwd).resolve()
+    escaped: list[str] = []
+    for call in recorded_inputs:
+        for key in _PATH_KEYS:
+            raw = call.get(key)
+            if not raw:
+                continue
+            p = Path(str(raw))
+            resolved = (p if p.is_absolute() else root / p).resolve()
+            if resolved != root and root not in resolved.parents:
+                escaped.append(f"{call.get('tool')}:{key}={raw}")
+    return escaped
 
 
 def fatal_reason(raw: dict[str, Any], parsed: dict[str, Any]) -> str | None:
@@ -440,8 +553,11 @@ def run_cell(cell: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, 
         timeout=args.timeout,
         max_turns=args.max_turns,
         marker=not args.no_marker,
+        isolate=not args.no_isolate_copies,
     )
     parsed = parse_stream(raw["stdout"])
+    escaped = out_of_copy(parsed["tool_inputs"], raw["run_cwd"])
+    leaked = list(raw.get("project_dir_sweep", {}).get("jsonl") or [])
     if args.raw_dir:
         args.raw_dir.mkdir(parents=True, exist_ok=True)
         stem = "__".join(str(cell[k]) for k in ("variant", "scenario", "model", "repeat"))
@@ -456,6 +572,10 @@ def run_cell(cell: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, 
         error = f"rc {raw['rc']}: {(raw['stderr'] or raw['stdout'])[-300:].strip()}"
     elif parsed["is_error"]:
         error = f"is_error ({parsed['result_subtype']}): {parsed['final_text'][:200]}"
+    elif escaped:
+        error = "tool touched a path outside the cell copy: " + "; ".join(escaped[:5])
+    elif leaked:
+        error = "transcript written under ~/.claude/projects: " + "; ".join(leaked[:3])
     row = {
         "variant": cell["variant"],
         "scenario": cell["scenario"],
@@ -464,6 +584,10 @@ def run_cell(cell: dict[str, Any], args: argparse.Namespace) -> tuple[dict[str, 
         "model": cell["model"],
         "repeat": cell["repeat"],
         "tools_called": parsed["tools_called"],
+        "tool_inputs": parsed["tool_inputs"],
+        "out_of_copy": escaped,
+        "project_dir_jsonl": leaked,
+        "project_dir_removed": bool(raw.get("project_dir_sweep", {}).get("removed")),
         "first_tool": parsed["first_tool"],
         "recall_called": parsed["recall_called"],
         "recall_logged": recall_logged,
@@ -514,6 +638,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--limit", type=int, default=0, help="run at most N pending cells (smoke)")
     ap.add_argument(
+        "--seed", type=int, default=DEFAULT_SEED, help="shuffle cell order across variants"
+    )
+    ap.add_argument(
+        "--no-isolate-copies",
+        action="store_true",
+        help="run in the fixture itself instead of a throwaway neutral copy (debugging only)",
+    )
+    ap.add_argument(
         "--raw-dir", type=Path, default=None, help="also save each cell's raw stdout/stderr"
     )
     ap.add_argument("--dry-run", action="store_true", help="list pending cells and exit")
@@ -533,9 +665,6 @@ def main(argv: list[str] | None = None) -> int:
         for sc in scenarios:
             for model in args.models:
                 for rep in range(args.repeats):
-                    key = (vid, sc["id"], model, rep)
-                    if key in done:
-                        continue
                     cells.append(
                         {
                             "variant": vid,
@@ -549,6 +678,12 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     )
     total = len(variants) * len(scenarios) * len(args.models) * args.repeats
+    # Shuffle across variants with a fixed seed: a variant is never run as one contiguous
+    # block, so drift in the service over a long run cannot land on one variant. The shuffle
+    # is applied to the WHOLE grid before finished cells are dropped, so a resumed run
+    # continues the same sequence instead of reshuffling what is left.
+    random.Random(args.seed).shuffle(cells)
+    cells = [c for c in cells if (c["variant"], c["scenario"], c["model"], c["repeat"]) not in done]
     if args.limit > 0:
         cells = cells[: args.limit]
     est = len(cells) * 10 / max(1, args.parallel)

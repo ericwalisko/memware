@@ -31,6 +31,7 @@ from run import (
     DEFAULT_ISOLATION,
     ISOLATION_CHOICES,
     fatal_reason,
+    neutral_name,
     parse_stream,
     run_claude,
 )
@@ -41,7 +42,19 @@ PROMPT_FACTS = (
     "Does your context contain a block that starts with the words Known facts? "
     "Answer only YES or NO."
 )
+PROMPT_WHERE = (
+    "Name the project directory you are working in and say in one sentence what this "
+    "codebase is for. Do not use any tools; answer from what you already have."
+)
 _MCP_NAME = re.compile(r"mcp__[A-Za-z0-9_\-]+")
+# Probe 3a: any auto-memory path reported by the init event. The memware/Claude Code
+# auto-memory lives under a `memory/` directory with a MEMORY.md index; a path like that in
+# the init event means the cell inherited a memory store and every number below it is moot.
+_MEMORY_PATH = re.compile(r"MEMORY\.md|[/\\]memory[/\\]|auto[_-]?memory|\.memware", re.I)
+_MEMORY_KEY = re.compile(r"memor(y|ies)", re.I)
+# Probe 3b: words that would mean the model can read what it is part of off its own context.
+# Bare "eval" is deliberately NOT here: a truthful "this is not an evaluation" contains it.
+_SELF_AWARE = re.compile(r"fixture|recall[ _-]?election|stub[ _-]?server|memware-eval", re.I)
 
 
 def mcp_split(names: list[str]) -> tuple[set[str], set[str]]:
@@ -75,6 +88,29 @@ def check_known_facts(text: str) -> tuple[bool, dict[str, Any]]:
     norm = re.sub(r"[^A-Z]", " ", text.strip().upper()).split()
     first = norm[0] if norm else ""
     return first == "NO", {"first_word": first}
+
+
+def check_no_memory(init_event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    """PASS iff the init event reports no auto-memory path (by key name or by value)."""
+    hits: list[str] = []
+    for key, value in (init_event or {}).items():
+        blob = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        if _MEMORY_KEY.search(str(key)) and value not in (None, [], {}, "", False):
+            hits.append(f"{key}={blob[:120]}")
+        elif _MEMORY_PATH.search(blob):
+            hits.append(f"{key}={blob[:120]}")
+    return not hits, {"memory_hits": hits, "init_keys": sorted(init_event or {})}
+
+
+def check_self_aware(text: str, run_cwd: str) -> tuple[bool, dict[str, Any]]:
+    """PASS iff the answer names no eval/stub/fixture, and the cwd itself leaks nothing."""
+    answer_hits = sorted({m.group(0).lower() for m in _SELF_AWARE.finditer(text)})
+    cwd_ok = neutral_name(Path(run_cwd))
+    return (not answer_hits and cwd_ok), {
+        "answer_hits": answer_hits,
+        "run_cwd": run_cwd,
+        "cwd_neutral": cwd_ok,
+    }
 
 
 def probe(
@@ -139,18 +175,30 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  tools model called:   {p2['tools_called']}")
     print("  answer: " + p2["final_text_full"].strip().replace("\n", " | ")[:300])
 
-    verdict = ok1 and ok2
+    raw3, p3 = probe(PROMPT_WHERE, *common)
+    ok3a, ev3a = check_no_memory(p3["init_event"])
+    ok3b, ev3b = check_self_aware(p3["final_text_full"], raw3["run_cwd"])
+    ok3 = ok3a and ok3b
+    print(f"probe 3 (no memory / not self-aware): {'PASS' if ok3 else 'FAIL'}")
+    print(f"  init-event memory paths: {ev3a['memory_hits']} (need none)")
+    print(f"  cwd: {ev3b['run_cwd']} -> {'neutral' if ev3b['cwd_neutral'] else 'LEAKS'}")
+    print(f"  eval words in answer:    {ev3b['answer_hits']} (need none)")
+    print("  answer: " + p3["final_text_full"].strip().replace("\n", " | ")[:300])
+
+    verdict = ok1 and ok2 and ok3
     summary = {
         "isolation": args.isolation,
         "model": args.model,
         "probe1": "PASS" if ok1 else "FAIL",
         "probe2": "PASS" if ok2 else "FAIL",
+        "probe3": "PASS" if ok3 else "FAIL",
         "evidence": {
             "probe1": {**ev1, "answer": p1["final_text_full"][:600]},
             "probe2": {**ev2, "answer": p2["final_text_full"][:300]},
+            "probe3": {**ev3a, **ev3b, "answer": p3["final_text_full"][:300]},
             "argv_flags": [a for a in raw1["argv"][3:] if a.startswith("--")],
         },
-        "elapsed_s": [raw1["elapsed_s"], raw2["elapsed_s"]],
+        "elapsed_s": [raw1["elapsed_s"], raw2["elapsed_s"], raw3["elapsed_s"]],
     }
     print(f"RESULT: {'PASS' if verdict else 'FAIL'}")
     print(json.dumps(summary, ensure_ascii=False))
