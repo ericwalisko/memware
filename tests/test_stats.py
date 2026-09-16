@@ -97,6 +97,7 @@ def test_json_keeps_the_six_counts_and_adds_derive_and_utilization(db, capsys):
         "turns_ever_recalled_share": 0.0,
         "last_recalled": None,
         "last_recalled_age_hours": None,
+        "beliefs_orphaned": 0,
     }
     # the fields carry the facts; the verdict is for people only
     assert "verdict" not in captured.out and "ledger empty" not in captured.out

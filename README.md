@@ -207,7 +207,7 @@ transcript so no sync indexes it and no backup mirrors it, and the Hermes provid
 nothing. That needs a memware hook to run in the session, so also put `[memware-eval]` in
 evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
 --beliefs-from ~/.memware/memware.db` to judge retrieval against a store that excludes them.
-`memware prune --containing TEXT` un-indexes runs that already slipped in; copies already
+`memware prune --containing TEXT` shows the runs that already slipped in and the beliefs derived from them, and `--apply` un-indexes the runs and retracts those beliefs; copies already
 mirrored to a backup folder have to be deleted there by hand. For a durable filter that every sync and backup honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed or mirrored.
 
 ## Reviewing contested supersessions

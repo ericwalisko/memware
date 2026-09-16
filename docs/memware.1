@@ -93,7 +93,15 @@ lines from standard input, skipping blank lines and lines beginning with
 .RB \` # \(cq.
 .TP
 .BI "beliefs " "[SUBJECT [RELATION]]"
-Show current beliefs, or the full history of one key.
+Show current beliefs, or the full history of one key. The history keeps retracted beliefs.
+.TP
+.B "beliefs retract \-\-orphaned"
+List the committed beliefs whose cited session
+.RI ( memware:session/ ID /turn/ N )
+is no longer indexed, the predecessors retracting them would reopen, and the beliefs a person
+stated that name the session, which are never retracted. Nothing is written without
+.BR \-\-apply .
+A retracted belief keeps its row.
 .TP
 .BI "read " SESSION
 Read a session's turns back in context. Flags:
@@ -104,15 +112,20 @@ Read a session's turns back in context. Flags:
 Manage contested supersessions through the review channel.
 .TP
 .B prune
-Un\-index matching turns. Flags:
+Un\-index matching turns, and retract the beliefs derived from every session left with no
+turn. One of
 .BR \-\-glob ", "
-.BR \-\-containing ", "
-.BR \-\-turns\-containing .
+.BR \-\-containing " or "
+.B \-\-turns\-containing
+is required. Without
+.B \-\-apply
+it is a dry run: it prints what it would remove and retract, and writes nothing.
 .TP
 .B stats
 Print store counts, derive state (runs, last run, turns not yet derived) and recall
-utilization (beliefs and turns recalled in 7 and 30 days), with a one\-line verdict when
-memory is inert, such as an empty ledger because derive has never run.
+utilization (beliefs and turns recalled in 7 and 30 days, and beliefs citing a session that is
+no longer indexed), with a one\-line verdict when memory is inert, such as an empty ledger
+because derive has never run, or when beliefs have lost their session.
 .TP
 .B backup
 Write a tiered snapshot (1/3/7/14\-day) plus a transcript mirror. Flags:

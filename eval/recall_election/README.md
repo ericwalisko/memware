@@ -247,7 +247,7 @@ informational and not treated as a stop.
 
 From docs/eval.md: `[memware-eval]` (`memware.eval.MARKER`) in an evaluation prompt lets
 `memware-eval --corpus` rebuild a clean store that skips any transcript carrying it, and
-`memware prune --containing '[memware-eval]'` removes stragglers from a live store. The first
+`memware prune --containing '[memware-eval]' --apply` removes stragglers from a live store (without `--apply` it lists them). The first
 run sent it through `--append-system-prompt`. Grid runs and probes no longer do: the line sits
 in the model's system prompt and tells it that it is being evaluated, while
 `--no-session-persistence` means no transcript exists for it to mark and
