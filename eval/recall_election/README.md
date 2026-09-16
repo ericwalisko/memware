@@ -141,8 +141,17 @@ that checks each client request's signature, then forwards job submissions and s
 to an internal job runner and passes the runner's response back." Every spawn's init cwd was
 its copy, both directories were gone afterwards, no input left the copy. Proof of red for 3a:
 the same spawn without `CLAUDE_CODE_DISABLE_AUTO_MEMORY` (stopped right after the init event,
-before any model call) carried `memory_paths.auto`. Sonnet not yet probed with this harness.
-Re-run the probes after any Claude Code upgrade or settings change.
+before any model call) carried `memory_paths.auto`. Re-run the probes after any Claude Code
+upgrade or settings change.
+
+2026-09-16, claude 2.1.273, after merging main's variants/archive layout, `variants/control.md`:
+**opus PASS / PASS / PASS** (3.1 s, 2.5 s, 7.6 s) and **sonnet PASS / PASS / PASS** (3.0 s,
+2.7 s, 5.1 s). Both listed exactly the six expected tools, answered `NO` to Known facts, had no
+memory fields in any init event, and described the copy as a stdlib-only Python edge gateway
+without naming the harness. Every spawn's init cwd was its copy, all six copies were removed,
+no input left a copy. `~/.memware/memware.db` (opened `-readonly`) held 0 turns and 0 cursors
+whose source contains `gateway-work`, `gwmeta-` or `wkspc-` before and after, and
+`~/.claude/projects` had no directory for any copy.
 
 One isolated opus cell, same day (`control` on `rationale_1`): valid, 22.9 s, init cwd
 `/private/tmp/gateway-work/gateway-7qw08shx` = `copy_dir`, the copy held the fixture's files
@@ -199,6 +208,23 @@ are up to 120 pairs per model; the smallest splits that pass are 6-0 (p = 0.031)
 10-2 (0.039) and 12-3 (0.035), while 5-0 (0.063), 7-1 (0.070) and 9-2 (0.065) do not. The
 report also lists every other variant against control; those rows are context, only the
 candidate can ship (`--candidate` and `--control` rename the pair).
+
+## Result, 2026-09-15 grid: KEEP control
+
+`results/2026-09-15/`: the opus arm, 5 variants x 24 scenarios x 5 repeats = 600 cells, seed
+20260911, every cell on the harness at `a9e10ca`. 600 valid, 0 out of copy, 0 transcript/stub
+mismatches, 0 count mismatches, 0 memory paths, every copy removed; mean 18.9 s per cell.
+Synthesized against control: 120 matched pairs, 1 discordant pair for synthesized and 3 for
+control, p = 0.625, positives 60/60 each, so the rule fails on opus and `report.md` prints
+`KEEP control`. The sonnet arm was not run: the rule needs a win on each model, so no sonnet
+result could change the verdict.
+
+The test had little power. 22 of 24 scenarios show no variance across variants (every positive
+is elected 60/60 by every variant, the three `history_bait` negatives are failed by every variant), so
+only `explain_file_1` and `style_question_1` separate descriptions. Rebuild the scenario set
+before another head-to-head: de-saturate the positives, replace the history-bait negatives, and
+score first-tool election rather than recall called anywhere. For context, control also beats
+`memory-persona` outright (0 discordant pairs to 6, p = 0.031).
 
 ## Cost per full run
 
