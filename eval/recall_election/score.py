@@ -100,6 +100,133 @@ def table(header: list[str], body: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
+CANDIDATE = "synthesized"
+CONTROL = "control"
+ALPHA = 0.05
+
+
+def sign_test(wins: int, losses: int) -> float:
+    """Two-sided exact sign test p-value; ties are excluded before calling (1.0 when n == 0)."""
+    n = wins + losses
+    if n == 0:
+        return 1.0
+    k = min(wins, losses)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2**n)
+    return min(1.0, 2 * tail)
+
+
+def paired_cells(
+    rows: list[dict[str, Any]], model: str, a: str, b: str
+) -> list[tuple[bool, bool, str]]:
+    """Matched (scenario, repeat) cells of variant ``a`` vs ``b``: (a_correct, b_correct, id)."""
+
+    def index(variant: str) -> dict[tuple[str, int], dict[str, Any]]:
+        return {
+            (str(r.get("scenario")), int(r.get("repeat", 0))): r
+            for r in rows
+            if str(r.get("variant")) == variant and str(r.get("model")) == model
+        }
+
+    ia, ib = index(a), index(b)
+    out = []
+    for key in sorted(ia.keys() & ib.keys()):
+        ra, rb = ia[key], ib[key]
+        expect = bool(ra.get("expect"))
+        out.append(
+            (
+                bool(ra.get("recall_called")) == expect,
+                bool(rb.get("recall_called")) == expect,
+                f"{key[0]}#{key[1]}",
+            )
+        )
+    return out
+
+
+def tpr(rows: list[dict[str, Any]], variant: str, model: str) -> tuple[int, int]:
+    pos = [
+        r
+        for r in rows
+        if str(r.get("variant")) == variant and str(r.get("model")) == model and r.get("expect")
+    ]
+    return sum(1 for r in pos if r.get("recall_called")), len(pos)
+
+
+def decision_section(valid: list[dict[str, Any]]) -> list[str]:
+    """The pre-registered rule: ship the candidate only if it beats control on BOTH models.
+
+    Per model, on matched (scenario, repeat) cells: a paired two-sided sign test on which
+    variant got the cell right, and the candidate's positive election rate must not be lower
+    than control's. Ship requires p < 0.05 with the candidate ahead, and no TPR regression,
+    on EVERY model separately. Anything else keeps control.
+    """
+    models = sorted({str(r.get("model")) for r in valid})
+    present = {str(r.get("variant")) for r in valid}
+    out = [
+        "",
+        "## Decision rule",
+        "",
+        f"Ship `{CANDIDATE}` only if it beats `{CONTROL}` at p < {ALPHA} on each model "
+        "separately (paired sign test over matched (scenario, repeat) cells, correctness = "
+        "recall elected iff expected) AND its positive election rate is not lower. "
+        "Otherwise keep `{0}`.".format(CONTROL),
+        "",
+    ]
+    if not {CANDIDATE, CONTROL} <= present:
+        missing = sorted({CANDIDATE, CONTROL} - present)
+        out += [f"**VERDICT: keep `{CONTROL}`** — no result for {', '.join(missing)}.", ""]
+        return out
+
+    body, verdicts = [], []
+    for m in models:
+        pairs = paired_cells(valid, m, CANDIDATE, CONTROL)
+        wins = sum(1 for a, b, _ in pairs if a and not b)
+        losses = sum(1 for a, b, _ in pairs if b and not a)
+        ties = len(pairs) - wins - losses
+        p = sign_test(wins, losses)
+        ck, cn = tpr(valid, CANDIDATE, m)
+        bk, bn = tpr(valid, CONTROL, m)
+        tpr_ok = cn > 0 and bn > 0 and (ck / cn) >= (bk / bn)
+        ok = p < ALPHA and wins > losses and tpr_ok
+        verdicts.append(ok)
+        body.append(
+            [
+                m,
+                str(len(pairs)),
+                str(wins),
+                str(losses),
+                str(ties),
+                f"{p:.4f}",
+                f"{fmt(rate(ck, cn))} vs {fmt(rate(bk, bn))}",
+                "yes" if tpr_ok else "NO",
+                "pass" if ok else "fail",
+            ]
+        )
+    out.append(
+        table(
+            [
+                "model",
+                "paired cells",
+                f"{CANDIDATE} wins",
+                f"{CONTROL} wins",
+                "ties",
+                "sign-test p",
+                f"pos. rate {CANDIDATE} vs {CONTROL}",
+                "no TPR loss",
+                "rule",
+            ],
+            body,
+        )
+    )
+    ship = bool(verdicts) and all(verdicts)
+    out += [
+        "",
+        f"**VERDICT: {'SHIP `' + CANDIDATE + '`' if ship else 'KEEP `' + CONTROL + '`'}** "
+        f"({sum(verdicts)}/{len(verdicts)} models pass the rule).",
+        "",
+    ]
+    return out
+
+
 def build_report(rows: list[dict[str, Any]], source: Path) -> str:
     valid = [r for r in rows if is_valid(r)]
     invalid = [r for r in rows if not is_valid(r)]
@@ -118,6 +245,8 @@ def build_report(rows: list[dict[str, Any]], source: Path) -> str:
             reasons[str(r.get("error") or "unknown")[:60]] += 1
         out += ["", "Invalid cells by reason:", ""]
         out += [f"- {n} x `{why}`" for why, n in sorted(reasons.items(), key=lambda kv: -kv[1])]
+
+    out += decision_section(valid)
 
     # ---- per (variant, model)
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
