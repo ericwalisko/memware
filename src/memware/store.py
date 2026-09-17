@@ -188,13 +188,20 @@ def age_hours(ts: str | None, now: datetime | None = None) -> float | None:
 
 
 BUSY_TIMEOUT_MS = 60_000
-"""How long a statement waits for another connection's write lock before failing with "database is
-locked". A scrub holds the lock for seconds at a time on a large store (VACUUM took 2.4 s at
-150,000 turns), and so does a prune's own delete; a hook's sync or a Hermes belief write that
-arrives then must wait it out, not fail and lose the write."""
+"""How long a connection waits for another's write lock before failing with "database is locked",
+unless its caller chose otherwise. This is for writes that must land: a sync, a belief, a prune. A
+scrub holds the lock for seconds at a time on a large store (VACUUM took 2.4 s at 150,000 turns),
+and so does a prune's own delete; a hook's sync or a Hermes belief write that arrives then waits
+it out rather than fail and lose the write."""
+
+SHORT_WAIT_MS = 250
+"""The wait for a write nothing depends on, such as a use count (:meth:`Store.try_write`), and for
+a connection opened on a foreground path that only reads. Recall runs before an agent's turn, and
+a use count is not worth stalling it behind a sync or a scrub."""
 
 CHECKPOINT_WAIT_MS = 10_000
-"""How long a scrub's ``TRUNCATE`` checkpoint waits for readers to finish before it gives up."""
+"""How long a scrub keeps trying to empty the write-ahead log while readers hold it. It never
+waits inside SQLite, where a ``TRUNCATE`` checkpoint would hold the write lock the whole time."""
 
 
 @dataclass(frozen=True)
@@ -217,8 +224,14 @@ class Store:
     every writer keeps its transaction short.
     """
 
-    def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
+    def __init__(
+        self, path: str | os.PathLike[str] | None = None, *, busy_timeout_ms: int | None = None
+    ) -> None:
+        """``busy_timeout_ms`` is how long this connection waits for another's write lock:
+        :data:`BUSY_TIMEOUT_MS` by default, for writes that must land, and :data:`SHORT_WAIT_MS`
+        for a foreground path that only reads and records uses."""
         self.path = Path(path).expanduser() if path else DEFAULT_DB
+        self.busy_timeout_ms = BUSY_TIMEOUT_MS if busy_timeout_ms is None else busy_timeout_ms
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), isolation_level=None)
@@ -228,7 +241,7 @@ class Store:
         # WAL allows one writer at a time; wait-and-retry rather than failing a concurrent
         # write with "database is locked". Several memware processes can touch the store at
         # once — the SessionStart catch-up, a session-end sync, the backup cron, and a prune.
-        self.conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        self.conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
         # Overwrite deleted content with zeros instead of only unlinking it, so a removed turn
         # leaves no readable copy on a free page. SQLite builds disagree on the default
         # (Anaconda's Python turns it on, Homebrew's leaves it off), so it is set, not assumed.
@@ -342,14 +355,14 @@ class Store:
         ``'delete'`` adds a tombstone and leaves the term on its page until a merge. So each index is
         merged into one segment (``'optimize'``, which drops the tombstones), checked for any term
         no live row holds, and rebuilt from its content table if one is left. ``VACUUM`` then
-        rewrites the file without its free pages, and a ``TRUNCATE`` checkpoint empties the
-        write-ahead log, whose frames hold earlier copies of pages.
+        rewrites the file without its free pages, and the write-ahead log, whose frames hold
+        earlier copies of pages, is emptied (:meth:`_empty_log`).
 
         Each step is its own transaction, so a writer waits for one step (at most seconds), not
-        for the whole scrub. The checkpoint waits :data:`CHECKPOINT_WAIT_MS` for readers;
-        ``wal_truncated`` is False when one was still reading. At 150,000 turns (565 MB) the
-        merge takes 0.9 s and VACUUM 2.4 s. ``progress`` hears each step first. An SQLite or OS
-        error propagates, with the delete already committed."""
+        for the whole scrub, and emptying the log holds no lock while it waits for readers;
+        ``wal_truncated`` is False when one was still reading after :data:`CHECKPOINT_WAIT_MS`.
+        At 150,000 turns (565 MB) the merge takes 0.9 s and VACUUM 2.4 s. ``progress`` hears each
+        step first. An SQLite or OS error propagates, with the delete already committed."""
         say = progress or (lambda _: None)
         started = time.perf_counter()
         rebuilt = []
@@ -362,14 +375,55 @@ class Store:
                 rebuilt.append(table)
         say("compacting it (VACUUM)")
         self.conn.execute("VACUUM")
-        self.conn.execute(f"PRAGMA busy_timeout={CHECKPOINT_WAIT_MS}")
-        try:
-            busy = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
-        finally:
-            self.conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        emptied = self._empty_log()
         return Scrubbed(
-            FTS_TABLES, tuple(rebuilt), not busy, round(time.perf_counter() - started, 2)
+            FTS_TABLES, tuple(rebuilt), emptied, round(time.perf_counter() - started, 2)
         )
+
+    def _empty_log(self) -> bool:
+        """Checkpoint the write-ahead log into the file and truncate it, without ever waiting while
+        holding the write lock. A ``TRUNCATE`` checkpoint that meets a reader waits with the lock
+        held, and a foreground write stalls behind it, so each attempt is made with no busy wait:
+        a ``PASSIVE`` checkpoint copies what readers allow, and a ``TRUNCATE`` one finishes only if
+        nothing is in the way. Between attempts the lock is free. Returns whether the log was
+        emptied within :data:`CHECKPOINT_WAIT_MS`."""
+        deadline = time.monotonic() + CHECKPOINT_WAIT_MS / 1000
+        self.conn.execute("PRAGMA busy_timeout=0")
+        try:
+            while True:
+                self.conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                if not self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+                    return True
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.05)
+        finally:
+            self.conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
+
+    def try_write(self, sql: str, rows: list[tuple[Any, ...]], wait_ms: int | None = None) -> bool:
+        """Run a write nothing depends on, a use count or a timestamp, for each of ``rows``, if the
+        write lock comes within ``wait_ms`` (:data:`SHORT_WAIT_MS`); skip it and return False if
+        it does not. All the rows commit together or none do. Inside a transaction the caller
+        already holds, the write just runs."""
+        if self.conn.in_transaction:
+            self.conn.executemany(sql, rows)
+            return True
+        self.conn.execute(f"PRAGMA busy_timeout={SHORT_WAIT_MS if wait_ms is None else wait_ms}")
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e) or "busy" in str(e):
+                return False
+            raise
+        finally:
+            self.conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
+        try:
+            self.conn.executemany(sql, rows)
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        self.conn.execute("COMMIT")
+        return True
 
     def _has_fts5(self) -> bool:
         row = self.conn.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()

@@ -70,17 +70,16 @@ def file_occurrences(
     return found + len(pending)
 
 
-def beliefs_holding(conn: sqlite3.Connection, text: str) -> int:
+def beliefs_holding(conn: sqlite3.Connection, text: str, *, any_case: bool = False) -> int:
     """Beliefs, in any status, whose subject, relation or value holds ``text``, matched literally
-    and case-sensitively. Retracting a belief keeps its row, so this is what still carries the text
-    in the store once every turn holding it is gone."""
-    return int(
-        conn.execute(
-            "SELECT count(*) FROM belief "
-            "WHERE instr(subject, ?1) > 0 OR instr(relation, ?1) > 0 OR instr(value, ?1) > 0",
-            (text,),
-        ).fetchone()[0]
+    and case-sensitively, or with ASCII case folded as SQLite folds it. Retracting a belief keeps its
+    row, so this is what still carries the text in the store once every turn holding it is gone."""
+    col = "lower({})" if any_case else "{}"
+    arg = "lower(?1)" if any_case else "?1"
+    where = " OR ".join(
+        f"instr({col.format(c)}, {arg}) > 0" for c in ("subject", "relation", "value")
     )
+    return int(conn.execute(f"SELECT count(*) FROM belief WHERE {where}", (text,)).fetchone()[0])
 
 
 def other_rows_holding(conn: sqlite3.Connection, text: str) -> dict[str, int]:
@@ -181,17 +180,19 @@ def index_holds(conn: sqlite3.Connection, table: str, terms: list[str]) -> set[s
     return held
 
 
-def _live_terms(conn: sqlite3.Connection, table: str, terms: list[str] | None) -> set[str]:
-    """The terms the index holds for a live row, from ``fts5vocab`` in the connection's own temp
-    schema, which never touches the store file. With ``terms``, only those are looked up."""
+def live_rows(conn: sqlite3.Connection, table: str, terms: list[str] | None) -> dict[str, int]:
+    """Term -> how many live rows the index holds it for, from ``fts5vocab`` in the connection's own
+    temp schema, which never touches the store file. With ``terms``, only those are looked up, and
+    a term no live row holds is left out."""
     vocab = f"temp.memware_vocab_{table}"
     conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {vocab} USING fts5vocab(main, {table}, row)")
     try:
         if terms is None:
-            return {str(r[0]) for r in conn.execute(f"SELECT term FROM {vocab}")}
-        return {
-            t for t in terms if conn.execute(f"SELECT 1 FROM {vocab} WHERE term=?", (t,)).fetchone()
-        }
+            return {str(t): int(n) for t, n in conn.execute(f"SELECT term, doc FROM {vocab}")}
+        found = (
+            conn.execute(f"SELECT doc FROM {vocab} WHERE term=?", (t,)).fetchone() for t in terms
+        )
+        return {t: int(row[0]) for t, row in zip(terms, found, strict=True) if row}
     finally:
         conn.execute(f"DROP TABLE IF EXISTS {vocab}")
 
@@ -210,7 +211,9 @@ def deleted_terms(conn: sqlite3.Connection, table: str, terms: list[str] | None 
         on_pages = index_holds(conn, table, terms)
     if not on_pages:
         return 0
-    return len(on_pages - _live_terms(conn, table, sorted(on_pages) if terms is not None else None))
+    return len(
+        on_pages - live_rows(conn, table, sorted(on_pages) if terms is not None else None).keys()
+    )
 
 
 @dataclass(frozen=True)
@@ -227,8 +230,12 @@ class FileCheck:
     wal_occurrences_any_case: int | None = None
     turns: int | None = None
     """Turns whose text holds the value; None when the file could not be queried."""
+    turns_any_case: int | None = None
+    """Turns whose text holds it with ASCII case folded, those above included."""
     beliefs: int | None = None
     """Beliefs, in any status, whose subject, relation or value holds it."""
+    beliefs_any_case: int | None = None
+    """Beliefs holding it with ASCII case folded, those above included."""
     other_rows: dict[str, int] = field(default_factory=dict)
     """``table.column`` -> rows of any other table holding it (see :func:`other_rows_holding`)."""
     tokens: int = 0
@@ -237,6 +244,12 @@ class FileCheck:
     """FTS table -> how many of those terms its index pages hold, deleted entries included."""
     deleted_tokens: dict[str, int] = field(default_factory=dict)
     """FTS table -> how many of those terms are on its pages only for a deleted row."""
+    live_term_rows: dict[str, int] = field(default_factory=dict)
+    """FTS table -> how many live rows its index holds every one of those terms for: a turn or a
+    belief that holds the value in another case, or a word it shares a stem with."""
+    term_is_value: bool = False
+    """Whether the value is its own single search term, so an index page holding the term for a
+    live row holds the value's bytes too."""
     free_pages: int | None = None
     """Pages the file holds and no table uses. Not searched as index pages; VACUUM drops them."""
     error: str | None = None
@@ -263,11 +276,18 @@ class FileCheck:
     @property
     def leftover(self) -> bool:
         """Copies no live row accounts for: index terms of deleted rows, or the value's bytes in
-        the file or its log while no row holds it. A scrub removes these; it cannot remove a row.
-        A file that could not be queried counts as holding them when its bytes do."""
+        the file or its log while no row holds them. A scrub removes these; it cannot remove a row.
+
+        A live row accounts for the bytes when it holds the value, or when the value is its own
+        search term and the index keeps that term for a live row: pruning ``hunter2`` leaves the
+        term ``hunter2`` on an index page for a turn that says ``Hunter2``, and that is not a copy
+        of what was removed. A file that could not be queried counts as holding copies when its
+        bytes hold the value."""
         stray_bytes = bool(self.occurrences or self.wal_occurrences)
+        indexed_live = self.term_is_value and any(self.live_term_rows.values())
+        accounted = bool(self.rows) or indexed_live
         return any(self.deleted_tokens.values()) or (
-            stray_bytes and (self.error is not None or not self.rows)
+            stray_bytes and (self.error is not None or not accounted)
         )
 
 
@@ -315,20 +335,31 @@ def check_file(
         con = conn or _open_readonly(p)
         try:
             q = con.execute
+            exact, folded = q(
+                "SELECT coalesce(sum(instr(text, ?1) > 0), 0), "
+                "coalesce(sum(instr(lower(text), lower(?1)) > 0), 0) FROM turn",
+                (value,),
+            ).fetchone()
+            live = {t: live_rows(con, t, tokens) for t in FTS_TABLES}
             return FileCheck(
                 base.path,
                 base.occurrences,
                 base.occurrences_any_case,
                 base.wal_occurrences,
                 base.wal_occurrences_any_case,
-                turns=int(
-                    q("SELECT count(*) FROM turn WHERE instr(text, ?) > 0", (value,)).fetchone()[0]
-                ),
+                turns=int(exact),
+                turns_any_case=int(folded),
                 beliefs=beliefs_holding(con, value),
+                beliefs_any_case=beliefs_holding(con, value, any_case=True),
                 other_rows=other_rows_holding(con, value),
                 tokens=len(tokens),
                 index_tokens={t: len(index_holds(con, t, tokens)) for t in FTS_TABLES},
                 deleted_tokens={t: deleted_terms(con, t, tokens) for t in FTS_TABLES},
+                live_term_rows={
+                    t: min(docs.values()) if tokens and len(docs) == len(tokens) else 0
+                    for t, docs in live.items()
+                },
+                term_is_value=tokens == [value],
                 free_pages=int(q("PRAGMA freelist_count").fetchone()[0]),
             )
         finally:

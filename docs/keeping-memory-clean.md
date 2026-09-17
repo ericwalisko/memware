@@ -218,7 +218,9 @@ and `scan` never reaches zero. On a command line the value is also visible to ot
 (`ps`) and kept in shell history. So leave the text out: `prune`'s text selectors and `scan` then
 ask for it at a prompt that does not echo it. `--value-file FILE` reads it from a file instead
 (keep the file out of synced folders and delete it afterwards), and `-` reads one line of
-standard input.
+standard input. The value is one line: trailing line breaks are dropped, and a value that still
+holds one, as from a file that starts with a blank line, is refused rather than searched for and
+reported clean.
 
 **1. Dry run.**
 
@@ -247,27 +249,32 @@ The turns are deleted, and the value leaves the store file, not only every query
   leaves it off. That is not enough on its own: a full-text index keeps a deleted row's words on
   its pages, lowercased, until the index merges. So the prune merges both search indexes, checks
   that no term of a deleted row is left on their pages (and rebuilds an index if one is), rewrites
-  the file with `VACUUM`, and empties the write-ahead log (the `-wal` file beside the store) with a
-  `TRUNCATE` checkpoint. Standard error names each step as it starts.
+  the file with `VACUUM`, and empties the write-ahead log (the `-wal` file beside the store). It
+  never waits for a reader while holding the store's lock: it retries for up to 10 seconds, and
+  other writers get the lock in between. Standard error names each step as it starts.
 - Then it checks the file and prints `text left in the store`: the value's bytes in the file and
-  its `-wal`, the rows that still hold it (beliefs, and turns a `--turns-starting-with` keeps), and
-  search terms of deleted rows.
+  its `-wal`, the rows that still hold it (beliefs, and turns a `--turns-starting-with` keeps),
+  turns and beliefs that hold it in another case, and search terms of deleted rows. Pruning
+  `hunter2` keeps a turn that says `Hunter2`, since text is matched case-sensitively, and the search
+  index keeps the lowercase term for that turn; the prune reports it and does not count it as a
+  copy it failed to remove.
 
 The scrub runs when the prune removed something, or when the file still holds copies of the text
 that no row accounts for, as a prune in memware 0.6.1 and earlier left them. So on a store pruned
 before, run the same prune again: it removes nothing and scrubs what is left. `memware prune
 --scrub` rewrites the file whether or not anything is left.
 
-The prune exits 1 when the store file still holds copies no row accounts for, or the scrub did not
-finish. It says which files hold how many, and why: most often another process was reading the
-store, so the rewritten pages are still waiting in the write-ahead log. Close other memware and
-Claude Code sessions, then run the command it prints (`memware --db … prune --scrub`).
+The prune exits 1 when the scrub did not finish, when another process was reading the store so the
+write-ahead log could not be emptied, or when the file still holds copies no row accounts for. It
+says which files hold how many. Close other memware and Claude Code sessions, then run the command
+it prints (`memware --db … prune --scrub`).
 
 On a large store this takes seconds: at 50,000 turns (190 MB) about 3–4 seconds when the prune
 removes something and 1 second when it removes nothing, and at 150,000 turns about 11 seconds.
 `VACUUM` briefly needs free disk of up to twice the file's size. Other memware processes that
 write meanwhile, a hook's sync or a Hermes memory write, wait for the store's lock for up to a
-minute rather than fail.
+minute rather than fail. Recall does not wait: Hermes prefetch, MCP recall and `memware recall`
+skip recording a use when the lock is not free within a quarter of a second.
 
 **3. Verify.**
 

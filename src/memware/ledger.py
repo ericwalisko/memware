@@ -520,12 +520,14 @@ def retract(
     return plan
 
 
-def touch(store: Store, belief_ids: list[int]) -> None:
-    """Record a retrieval (the testing effect): used beliefs rank higher later."""
+def touch(store: Store, belief_ids: list[int]) -> bool:
+    """Record a retrieval (the testing effect): used beliefs rank higher later. Recall runs in the
+    foreground, so the count is skipped, and False returned, when another writer holds the lock
+    past :data:`memware.store.SHORT_WAIT_MS` (:meth:`memware.store.Store.try_write`)."""
     if not belief_ids:
-        return
+        return True
     ts = now_iso()
-    store.conn.executemany(
+    return store.try_write(
         "UPDATE belief SET use_count=use_count+1, last_used=? WHERE id=?",
         [(ts, i) for i in belief_ids],
     )

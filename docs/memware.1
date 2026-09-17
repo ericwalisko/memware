@@ -168,7 +168,9 @@ now, and the transcript files, which memware never changes.
 takes no selector, removes nothing, and rewrites the store file. Exit status is 0 when done, 1
 when the store file still holds copies of the text no row accounts for or the scrub did not
 finish (it prints the command that finishes it), and 2 on bad usage. Other memware processes
-wait up to a minute for the store's lock while a prune holds it.
+that write wait up to a minute for the store's lock while a prune holds it; recording a recall's
+uses waits at most 250 ms and is skipped. A text is one line: trailing line breaks are dropped
+and one that still holds a line break is refused.
 .TP
 .BI "scan " [VALUE]
 Count where a value is still stored, read\-only: every transcript under

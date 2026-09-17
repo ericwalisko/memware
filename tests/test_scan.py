@@ -475,3 +475,19 @@ def test_leaf_pages_decode_to_exactly_the_terms_fts5vocab_lists(tmp_path):
 def test_scan_rejects_an_empty_value(tmp_path):
     with pytest.raises(ValueError):
         scan("", db=tmp_path / "m.db", transcript_src=tmp_path)
+
+
+def test_a_value_file_with_stray_line_breaks_never_reads_as_clean(tmp_path, capsys):
+    """Second review of #40: a file ending in two newlines searched for the value plus a newline,
+    found nothing, and exited 0 while the transcript held the value."""
+    _, db = _setup(tmp_path)
+    trailing = tmp_path / "trailing.txt"
+    trailing.write_text(VALUE + "\r\n\n\n")
+    code, r = _json(capsys, db, "--value-file", str(trailing))
+    assert code == 1 and len(r["transcripts"]) == 1
+
+    for text in ("\n" + VALUE + "\n", VALUE + "\nsecond line\n"):
+        leading = tmp_path / "leading.txt"
+        leading.write_text(text)
+        code, out, err = _scan(capsys, db, "--value-file", str(leading))
+        assert code == 2 and out == "" and "holds a line break" in err and VALUE not in err

@@ -246,7 +246,7 @@ def search_turns(
         )
     if record_use and hits:
         ts = now_iso()
-        store.conn.executemany(
+        store.try_write(  # a use count waits a moment for the lock, never a scrub
             "UPDATE turn SET use_count=use_count+1, last_used=? WHERE id=?",
             [(ts, h.id) for h in hits],
         )
@@ -376,7 +376,7 @@ def search_turns_multi(
     fused = _collapse_identical(fused, k) if collapse else fused[:k]
     if record_use and fused:
         ts = now_iso()
-        store.conn.executemany(
+        store.try_write(
             "UPDATE turn SET use_count=use_count+1, last_used=? WHERE id=?",
             [(ts, h.id) for h in fused],
         )

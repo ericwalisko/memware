@@ -272,7 +272,7 @@ def test_a_reader_mid_read_leaves_copies_in_the_file_and_the_prune_names_them(
         assert code == 1 and r["store_scrubbed"]["wal_truncated"] is False
         left = r["left_in_store"]
         assert left["leftover"] and left["occurrences"] == _counts(db)[0] > 0
-        assert "still waiting in the write-ahead log" in err and "prune --scrub" in err
+        assert "could not empty the write-ahead log" in err and "prune --scrub" in err
     finally:
         reader.execute("COMMIT")
         reader.close()
@@ -481,3 +481,155 @@ def test_an_index_a_merge_leaves_holding_deleted_terms_is_rebuilt(tmp_path, monk
     assert r.scrubbed is not None and r.scrubbed.rebuilt == ("passage_fts",)
     assert any(step.startswith("rebuilding the passage_fts search index") for step in steps)
     assert _counts(db) == (0, 0)
+
+
+def _hermes_provider(tmp_path: Path, db: Path):
+    """The in-tree Hermes provider, loaded as its own tests load it, on ``db``."""
+    import importlib.util
+
+    plugin = Path(__file__).resolve().parents[1] / "integrations" / "hermes" / "memware"
+    spec = importlib.util.spec_from_file_location("memware_hermes_plugin", plugin / "__init__.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    home = tmp_path / "hermes"
+    home.mkdir()
+    (home / "memware.json").write_text(json.dumps({"db_path": str(db)}))
+    provider = mod.MemwareProvider()
+    provider.initialize("sess-scrub", hermes_home=str(home))
+    return provider
+
+
+def test_prefetch_during_a_scrub_with_a_reader_held_stays_fast_and_a_belief_still_lands(
+    tmp_path, monkeypatch
+):
+    """Second review of #40: emptying the log waited for a reader while holding the write lock,
+    and Hermes prefetch, which records uses before every turn, waited behind it (14 s at 150,000
+    turns). The scrub now holds no lock while it waits, and a use count never waits long."""
+    import threading
+    import time
+
+    monkeypatch.setattr(store_module, "CHECKPOINT_WAIT_MS", 1500)
+    db = _db(tmp_path)
+    with Store(db) as s:
+        assert_belief(s, "deploy", "region", "us-east-1")
+    provider = _hermes_provider(tmp_path, db)
+    reader = sqlite3.connect(db, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM turn").fetchall()
+    compacting, pruned = threading.Event(), {}
+
+    def run_prune():
+        with Store(db) as s:
+            pruned["r"] = prune(
+                s,
+                turns_containing=VALUE,
+                apply=True,
+                progress=lambda step: "VACUUM" in step and compacting.set(),
+            )
+
+    worker = threading.Thread(target=run_prune)
+    worker.start()
+    try:
+        assert compacting.wait(30)
+        time.sleep(0.2)  # VACUUM of a small store is done: the scrub is emptying the log
+        slowest, calls, wrote = 0.0, 0, False
+        while worker.is_alive():
+            started = time.perf_counter()
+            assert "us-east-1" in provider.prefetch("deploy region")
+            slowest, calls = max(slowest, time.perf_counter() - started), calls + 1
+            if not wrote:
+                with Store(db) as w:
+                    assert_belief(w, "hermes memory", "note", "written while the log waits")
+                wrote = True
+            time.sleep(0.05)
+    finally:
+        worker.join()
+        reader.execute("COMMIT")
+        reader.close()
+    assert calls >= 5 and slowest < 1.0, (calls, slowest)
+    assert pruned["r"].scrubbed is not None and not pruned["r"].scrubbed.wal_truncated
+    with Store(db) as s:
+        assert (
+            s.conn.execute(
+                "SELECT count(*) FROM belief WHERE value='written while the log waits'"
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_a_use_count_is_skipped_rather_than_waited_for(tmp_path):
+    db = _db(tmp_path)
+    with Store(db) as s:
+        assert_belief(s, "deploy", "region", "us-east-1")
+    locker = sqlite3.connect(db, isolation_level=None)
+    locker.execute("BEGIN IMMEDIATE")
+    try:
+        import time
+
+        from memware.index import search_beliefs
+
+        with Store(db, busy_timeout_ms=store_module.SHORT_WAIT_MS) as s:
+            started = time.perf_counter()
+            hits = search_beliefs(s, "deploy region", k=3)  # records a use: the lock is held
+            took = time.perf_counter() - started
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+    assert [h.text for h in hits] == ["deploy region us-east-1"] and took < 1.0
+    with Store(db) as s:
+        assert s.conn.execute("SELECT use_count FROM belief").fetchone()[0] == 0  # skipped
+
+
+@pytest.mark.parametrize("flag", ["--turns-containing", "--turns-starting-with", "--containing"])
+def test_a_selector_value_file_is_one_line(tmp_path, capsys, flag):
+    db = _db(tmp_path)
+    text = "the api token is" if flag == "--turns-starting-with" else VALUE
+    value = tmp_path / "value.txt"
+    value.write_text(text + "\n\n")
+    code, out, _ = _run(
+        capsys, "--db", str(db), "prune", flag, "--value-file", str(value), "--json"
+    )
+    key = "sources_pruned" if flag == "--containing" else "turns_removed"
+    assert code == 0 and json.loads(out)[key] == 1
+
+    value.write_text("\n" + text + "\n")
+    code, out, err = _run(
+        capsys, "--db", str(db), "prune", flag, "--value-file", str(value), "--apply"
+    )
+    assert code == 2 and out == "" and "holds a line break" in err
+    assert _counts(db)[0] > 0  # nothing was removed
+
+
+def test_pruning_a_value_another_live_turn_holds_in_another_case_is_not_a_leftover(
+    tmp_path, capsys
+):
+    """Second review of #40: pruning ``hunter2`` while a live turn says ``Hunter2`` left the term
+    ``hunter2`` on an index page for that turn. The check counted it as a copy, exited 1, and
+    every later prune scrubbed again."""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    lines = [
+        {"role": "user", "content": "the wifi password is hunter2 for the guest network"},
+        {"role": "user", "content": "Hunter2 was the password of the old router"},
+    ]
+    (root / "c.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    db = tmp_path / "case.db"
+    with Store(db) as s:
+        sync_tree(s, root, harness="generic")
+
+    code, out, err = _run(
+        capsys, "--db", str(db), "prune", "--turns-containing", "hunter2", "--apply"
+    )
+    assert code == 0 and "turns removed : 1" in out
+    assert "text left in the store : " in out and "1 turn in another case" in out
+    assert "1 turn or belief holds the text in another case" in err and "prune --scrub" not in err
+
+    code, out, err = _run(
+        capsys, "--db", str(db), "prune", "--turns-containing", "hunter2", "--apply", "--json"
+    )
+    r = json.loads(out)
+    assert code == 0 and r["store_scrubbed"] is None and "scrubbing" not in err  # not again
+    left = r["left_in_store"]
+    assert left["leftover"] is False and left["occurrences"] > 0  # the live turn's index term
+    assert (left["turns"], left["turns_any_case"]) == (0, 1)
+    assert left["live_term_rows"]["passage_fts"] == 1 and left["term_is_value"] is True

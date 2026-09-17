@@ -198,10 +198,11 @@ class MemwareProvider(MemoryProvider):
         if not query or not query.strip():
             return ""
         from memware.index import search_beliefs
-        from memware.store import Store
+        from memware.store import SHORT_WAIT_MS, Store
 
         try:
-            with Store(self._db) as s:
+            # before every turn: reads, and use counts it skips rather than wait for a writer
+            with Store(self._db, busy_timeout_ms=SHORT_WAIT_MS) as s:
                 hits = search_beliefs(s, query, k=self._prefetch_k, require_subject=True)
         except Exception as e:  # never break a turn over memory
             logger.warning("memware prefetch failed: %s", e)

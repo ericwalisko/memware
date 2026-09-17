@@ -8,7 +8,7 @@ from typing import Any
 from memware.index import read_turns, search_beliefs_multi, search_turns_multi
 from memware.ledger import Policy, assert_belief, current
 from memware.review import open_reviews
-from memware.store import Store
+from memware.store import SHORT_WAIT_MS, Store
 
 
 def build() -> Any:
@@ -41,7 +41,7 @@ def build() -> Any:
         is keyword-based; fusing your phrasings makes it semantic. what: all|turns|beliefs.
         Pass a turn hit's ``id`` to read_session's ``around`` for the full turn.
         """
-        with Store(db) as s:
+        with Store(db, busy_timeout_ms=SHORT_WAIT_MS) as s:  # reads, and use counts it may skip
             hits = []
             if what in ("all", "beliefs"):
                 hits += search_beliefs_multi(s, queries, k=k)
@@ -57,7 +57,7 @@ def build() -> Any:
 
         Reads a session's turns whole, or a window around one turn id from recall.
         """
-        with Store(db) as s:
+        with Store(db, busy_timeout_ms=SHORT_WAIT_MS) as s:
             return read_turns(s, session, around=around, window=window)
 
     @app.tool()
@@ -66,7 +66,7 @@ def build() -> Any:
 
         Returns currently valid beliefs, optionally filtered by subject.
         """
-        with Store(db) as s:
+        with Store(db, busy_timeout_ms=SHORT_WAIT_MS) as s:
             return current(s, subject)
 
     @app.tool()
@@ -95,7 +95,7 @@ def build() -> Any:
     @app.tool()
     def pending_reviews() -> list[dict[str, Any]]:
         """Contested supersessions awaiting a human decision."""
-        with Store(db) as s:
+        with Store(db, busy_timeout_ms=SHORT_WAIT_MS) as s:
             return [r.__dict__ for r in open_reviews(s)]
 
     return app

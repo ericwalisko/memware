@@ -53,11 +53,21 @@ All notable changes to this project are documented here. The format follows
   `store_scrubbed`, `scrub_error`, `left_in_store` and `backup_dest`.
 - **A prune never prints or records its text.** The notes a selector that matched nothing prints
   said `no turn contains 'VALUE'`; they now say `the text`. A text selector written without its
-  text asks for it without echoing it, or reads `--value-file` or stdin.
-- **Writers wait out a long write instead of failing.** Every store connection waits up to 60 s
-  for another's write lock (was 5 s). On a 150,000-turn store the prune and its scrub held the
-  lock past 5 s, so a hook's sync failed with `database is locked` and a Hermes memory write was
-  lost; both now wait and land.
+  text asks for it without echoing it, or reads `--value-file` or stdin. A value is one line:
+  trailing line breaks are dropped and one that still holds a line break is refused, so a value
+  file with a stray blank line cannot make `scan` report a clean store.
+- **Writes that must land wait out a long write; recall never does.** A store connection waits
+  up to 60 s for another's write lock by default (was 5 s), and its caller can choose a shorter
+  wait. On a 150,000-turn store the prune and its scrub held the lock past 5 s, so a hook's sync
+  failed with `database is locked` and a Hermes memory write was lost; both now wait and land.
+  Recording a use (Hermes prefetch, MCP recall, `memware recall`) waits at most 250 ms and is
+  skipped when the lock is not free, and the scrub never waits for a reader while holding the
+  lock: with a reader held during a 150,000-turn prune, Hermes prefetch took at most 0.33 s
+  (10.6 s before).
+- **A prune does not report a live row's search term as a copy it failed to remove.** Pruning
+  `hunter2` while a turn says `Hunter2` left the term `hunter2` on an index page for that turn;
+  the check now counts turns and beliefs that hold the text in another case and reports them,
+  exits 0, and does not scrub again on later prunes.
 
 ## [0.6.1] - 2026-09-16
 

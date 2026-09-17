@@ -846,6 +846,15 @@ def _left_line(left: FileCheck) -> str:
         parts.append(_plural(left.turns, "turn"))
     if left.beliefs:
         parts.append(_plural(left.beliefs, "belief"))
+    other_case = (left.turns_any_case or 0) - (left.turns or 0)
+    if other_case:
+        parts.append(_plural(other_case, "turn") + " in another case")
+    other_case = (left.beliefs_any_case or 0) - (left.beliefs or 0)
+    if other_case:
+        parts.append(_plural(other_case, "belief") + " in another case")
+    live = max(left.live_term_rows.values(), default=0)
+    if live and not left.leftover:
+        parts.append(f"its search term, indexed for {_plural(live, 'live row')}")
     parts += [f"{n:,} {where}" for where, n in left.other_rows.items()]
     deleted = sum(left.deleted_tokens.values())
     if deleted:
@@ -871,25 +880,19 @@ def _scrub_notes(a: argparse.Namespace, r: Pruned, dest: str | None) -> tuple[li
             "out of every query, but the store file may still hold it. To finish, "
             f"{close}: {_finish_command(a)}"
         )
-    elif left is not None and left.leftover:
-        failed = True
-        blocked = r.scrubbed is not None and not r.scrubbed.wal_truncated
-        why = (
-            "another process was reading the store, so the rewritten pages are still waiting in "
-            "the write-ahead log"
-            if blocked
-            else "no row accounts for them"
-        )
-        notes.append(
-            f"the store file still holds copies of the text ({_left_line(left)}): {why}. "
-            f"To finish, {close}: {_finish_command(a)}"
-        )
-    elif left is None and r.scrubbed is not None and not r.scrubbed.wal_truncated:
-        failed = True
+    elif r.scrubbed is not None and not r.scrubbed.wal_truncated:
+        failed = True  # rewritten pages still wait in the log: the file may hold old ones
+        found = f" It holds: {_left_line(left)}." if left is not None else ""
         notes.append(
             "another process was reading the store, so the scrub could not empty the write-ahead "
-            f"log, and the store file may still hold removed text. To finish, {close}: "
-            f"{_finish_command(a)}"
+            "log, and the rewritten pages are still waiting in it; until they reach the file, the "
+            f"file may hold removed text.{found} To finish, {close}: {_finish_command(a)}"
+        )
+    elif left is not None and left.leftover:
+        failed = True
+        notes.append(
+            f"the store file still holds copies of the text no row accounts for "
+            f"({_left_line(left)}). To finish, {close}: {_finish_command(a)}"
         )
     if r.beliefs_holding:
         notes.append(
@@ -899,6 +902,20 @@ def _scrub_notes(a: argparse.Namespace, r: Pruned, dest: str | None) -> tuple[li
     if left is not None and left.other_rows:
         where = ", ".join(f"{n:,} {w}" for w, n in left.other_rows.items())
         notes.append(f"other rows still hold the text: {where}")
+    if left is not None and not left.leftover and not left.rows:
+        other = (left.turns_any_case or 0) + (left.beliefs_any_case or 0)
+        held = max(left.live_term_rows.values(), default=0)
+        if other:
+            notes.append(
+                f"{_plural(other, 'turn or belief', 'hold')} the text in another case. Text is "
+                "matched case-sensitively, so they are kept, and the search index keeps their term; "
+                "that is not a copy of what was removed"
+            )
+        elif held:
+            notes.append(
+                f"the search index keeps the text's term for {_plural(held, 'live row')} that share "
+                "it; that is not a copy of what was removed"
+            )
     if r.reasons_redacted:
         notes.append(
             f"{_plural(r.reasons_redacted, 'retraction reason')} quoted the text, as a prune in "
@@ -934,20 +951,33 @@ class _NoText(Exception):
 def _read_text(a: argparse.Namespace, given: str | None, what: str) -> str:
     """The text for an option or argument: as given, from ``--value-file`` when it was left out,
     from a prompt that does not echo when standard input is a terminal, or else one line of
-    standard input. ``-`` also reads standard input. The trailing newline is dropped."""
+    standard input. ``-`` also reads standard input. See :func:`_one_line` for what is refused."""
     import getpass
 
     if given not in (None, _ASK, "-"):
-        return str(given)
+        return _one_line(str(given))
     if given != "-" and getattr(a, "value_file", None):
         try:
             text = Path(a.value_file).expanduser().read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as e:
             raise _NoText(f"--value-file could not be read: {e}") from e
-        return text.removesuffix("\n").removesuffix("\r")
+        return _one_line(text)
     if given != "-" and sys.stdin.isatty():
-        return getpass.getpass(f"{what} (not shown): ", stream=sys.stderr)
-    return sys.stdin.readline().removesuffix("\n").removesuffix("\r")
+        return _one_line(getpass.getpass(f"{what} (not shown): ", stream=sys.stderr))
+    return _one_line(sys.stdin.readline())
+
+
+def _one_line(text: str) -> str:
+    """The text with every trailing line break dropped. One that still holds a line break is
+    refused: a file with a stray blank line would otherwise search for the value plus a newline,
+    match nothing, and report a clean store while a transcript still holds the value."""
+    text = text.rstrip("\r\n")
+    if "\n" in text or "\r" in text:
+        raise _NoText(
+            "the value holds a line break, so it would match nothing a transcript holds and "
+            "report it clean; give it as one line (a --value-file must not start with a blank line)"
+        )
+    return text
 
 
 def _prune_texts(a: argparse.Namespace) -> None:
