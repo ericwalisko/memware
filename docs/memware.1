@@ -143,9 +143,40 @@ turn. One of
 (turns that begin with it) is required, and a turn selector takes no other selector. Text is
 matched literally and case\-sensitively. Without
 .B \-\-apply
-it is a dry run: it prints what it would remove and retract, and writes nothing. A selector
+it is a dry run: it prints what it would remove and retract, and the beliefs whose subject,
+relation or value holds the text (prune keeps belief rows), and writes nothing. A selector
 that matches nothing says on standard error what it searched and which selector reaches the
-text instead.
+text instead. Every
+.B \-\-apply
+then scrubs the store file: it rebuilds both search indexes, runs
+.BR VACUUM ,
+and empties the write\-ahead log, so removed text leaves the file and not only every query,
+including what an earlier prune left behind. Standard error names each step, and says where
+copies may remain: backups made before now, and the transcript files, which memware never
+changes.
+.TP
+.BI "scan " VALUE
+Count where a value is still stored, read\-only: every transcript under
+.B backup.transcript_src
+walked on disk, with whether each is indexed and, if not, why
+.RB ( capture.exclude ,
+the no\-capture list, an ignore marker, or not synced yet); the store file and its write\-ahead
+log, as given and in any case; the turns and beliefs holding it; the value's search terms on
+the index pages, deleted entries included; and the copies
+.B restore
+set aside. With
+.B \-\-backups
+(or
+.BI \-\-dest " DIR" )
+it also reads the mirrored transcripts and snapshot files in the backup destination.
+.B \-\-transcript\-src
+names another tree. A
+.I VALUE
+of
+.B \-
+is read from standard input. Prints paths and counts, never the value or text around it. Exit
+status is 0 when nothing is found and every path was read, 1 when anything is found, and 2 when
+nothing is found but a path could not be read (each is listed with its reason).
 .TP
 .B stats
 Print store counts; sessions, turns and current beliefs by the entrypoint that started the

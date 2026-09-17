@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +46,8 @@ from memware.ledger import (
     stale_turn_count,
 )
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
-from memware.store import Store
+from memware.scan import DbCheck, ScanReport, TranscriptHit, scan
+from memware.store import Scrubbed, Store
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -691,17 +693,23 @@ _CASCADE_COLS = [
 _PRUNE_COUNTS = {
     "sources_pruned": ("sources un-indexed", "sources to un-index"),
     "turns_removed": ("turns removed", "turns to remove"),
+    "beliefs_holding_text": ("beliefs holding the text", "beliefs holding the text"),
 }
 
 
 def _cascade(
-    a: argparse.Namespace, plan: Retraction, applied: bool, head: dict[str, int] | None = None
+    a: argparse.Namespace,
+    plan: Retraction,
+    applied: bool,
+    head: dict[str, Any] | None = None,
+    lines: list[tuple[str, str]] | None = None,
 ) -> None:
     """Print a belief retraction, done or planned: counts, then one record per belief it touches.
 
     Counts are labeled ``field : value`` lines like ``stats``, and records follow in the
     ``beliefs`` layout, each led by its action. The dry-run notice goes to stderr, so stdout stays
-    data. --json carries the counts and the full lists; --plain prints only the records."""
+    data. --json carries ``head`` and the full lists; --plain prints only the records. The labeled
+    view prints the ``head`` counts :data:`_PRUNE_COUNTS` names, and ``lines`` after the counts."""
     head = head or {}
     lists = {
         "retract": plan.retract,
@@ -720,19 +728,27 @@ def _cascade(
         _emit(a, records, _CASCADE_COLS)
         return
     n = 0 if applied else 1
-    counts = [(_PRUNE_COUNTS[k][n], v) for k, v in head.items()]
+    counts: list[tuple[str, int | str]] = [
+        (_PRUNE_COUNTS[k][n], v) for k, v in head.items() if k in _PRUNE_COUNTS
+    ]
     counts += [
         ("sessions with no turn left", len(plan.sessions)),
         (("beliefs retracted", "beliefs to retract")[n], len(plan.retract)),
         (("predecessors reopened", "predecessors to reopen")[n], len(plan.reopen)),
         (("predecessors relinked", "predecessors to relink")[n], len(plan.relink)),
         ("human-stated beliefs kept", len(plan.kept)),
+        *(lines or []),
     ]
     width = max(len(label) for label, _ in counts)
-    print("\n".join(f"{label.rjust(width)} : {value:,}" for label, value in counts))
+    print("\n".join(f"{label.rjust(width)} : {_n(value)}" for label, value in counts))
     if records:
         print()
         _emit(a, records, _CASCADE_COLS)
+
+
+def _n(value: int | str) -> str:
+    """A count with thousands separators; text as it is."""
+    return f"{value:,}" if isinstance(value, int) else value
 
 
 def _plural(n: int, noun: str, verb: str = "") -> str:
@@ -793,6 +809,42 @@ def _source_notes(s: Store, a: argparse.Namespace, r: Pruned) -> list[str]:
     return notes
 
 
+def _scrubbed_line(done: Scrubbed) -> str:
+    log = "emptied" if done.wal_truncated else "NOT emptied, a reader held it"
+    return (
+        f"scrubbed in {done.seconds:.1f} s: {' and '.join(done.indexes)} rebuilt, "
+        f"compacted, write-ahead log {log}"
+    )
+
+
+def _scrub_notes(r: Pruned, dest: str | None) -> list[str]:
+    """What an applied prune leaves holding the text: belief rows, a log a reader kept, backups
+    and the transcripts themselves. The scrub is real, and it ends at the store file."""
+    notes = []
+    if r.beliefs_holding:
+        notes.append(
+            f"{_plural(r.beliefs_holding, 'belief', 'hold')} the text in a subject, relation or "
+            "value, and prune keeps belief rows, so the store file still holds it there"
+        )
+    if r.scrubbed and not r.scrubbed.wal_truncated:
+        notes.append(
+            "another process was reading the store, so its write-ahead log (the -wal file) may "
+            "still hold removed text; run the same prune again once nothing has the store open"
+        )
+    where = (
+        "backups made before now may still hold the removed text: the snapshots and mirrored "
+        f"transcripts in {dest}, which memware never changes"
+        if dest
+        else "no backup destination is configured, but a copy of the store made elsewhere may "
+        "still hold the removed text"
+    )
+    notes.append(
+        f"{where}. The transcript files are unchanged too. `memware scan VALUE"
+        f"{' --backups' if dest else ''}` counts every place the value is left"
+    )
+    return notes
+
+
 def cmd_prune(a: argparse.Namespace) -> int:
     turn_flags = [f for f in ("turns_containing", "turns_starting_with") if getattr(a, f)]
     if not (a.glob or a.containing or turn_flags):
@@ -823,6 +875,7 @@ def cmd_prune(a: argparse.Namespace) -> int:
             turns_starting_with=a.turns_starting_with,
             apply=a.apply,
             reason=f"memware prune {selector}",
+            progress=lambda step: print(f"scrubbing the store file: {step}", file=sys.stderr),
         )
         text = a.turns_containing or a.turns_starting_with
         notes = (
@@ -830,14 +883,164 @@ def cmd_prune(a: argparse.Namespace) -> int:
             if text
             else _source_notes(s, a, r)
         )
-    head = {"turns_removed": r.turns}
+    head: dict[str, Any] = {"turns_removed": r.turns}
     if not turn_flags:
         head = {"sources_pruned": len(r.sources), **head}
-    _cascade(a, r.beliefs, r.applied, head)
+    if r.beliefs_holding is not None:
+        head["beliefs_holding_text"] = r.beliefs_holding
+    lines = []
+    if r.scrubbed:
+        from memware.config import get_dotted, load_config
+
+        dest = get_dotted(load_config(), "backup.dest")
+        head["store_scrubbed"] = asdict(r.scrubbed)
+        head["backup_dest"] = dest
+        lines.append(("store file", _scrubbed_line(r.scrubbed)))
+        notes += _scrub_notes(r, dest)
+    _cascade(a, r.beliefs, r.applied, head, lines)
     if notes:
         sys.stdout.flush()  # the notes explain the counts, so they follow them in a merged stream
         print("\n".join(notes), file=sys.stderr)
     return 0
+
+
+def _indexed_line(hit: TranscriptHit) -> str:
+    if hit.indexed and hit.excluded_by:
+        return f"yes, and excluded by {hit.excluded_by}: the next sync un-indexes it"
+    if hit.indexed:
+        return "yes"
+    return f"no: excluded by {hit.excluded_by}" if hit.excluded_by else "no: not synced yet"
+
+
+def _either_case(n: int, folded: int | None) -> str:
+    return f"{n:,} ({folded or 0:,} in any case)"
+
+
+def _db_block(label: str, c: DbCheck) -> list[tuple[str, str]]:
+    """One SQLite file's counts. Never the text: only how often and where."""
+    rows = [(label, c.path), ("occurrences", _either_case(c.occurrences, c.occurrences_any_case))]
+    if c.wal_occurrences is not None:
+        rows.append(
+            ("-wal occurrences", _either_case(c.wal_occurrences, c.wal_occurrences_any_case))
+        )
+    if c.error:
+        rows.append(("not queried", c.error))
+        return rows
+    held = ", ".join(f"{t} {n:,} of {c.tokens:,}" for t, n in c.index_tokens.items())
+    rows += [
+        ("turns holding it", _n(c.turns or 0)),
+        ("beliefs holding it", _n(c.beliefs or 0)),
+        ("search terms held", held if c.tokens else "the value makes no search term"),
+        ("free pages", _n(c.free_pages or 0)),
+    ]
+    return rows
+
+
+def _scan_verdict(r: ScanReport) -> str:
+    places = []
+    if r.transcripts:
+        places.append(_plural(len(r.transcripts), "transcript"))
+    if r.store_check and r.store_check.found:
+        places.append("the store file")
+    copies = sum(c.found for c in r.store_copies)
+    if copies:
+        places.append(_plural(copies, "pre-restore copy"))
+    if r.mirrored:
+        places.append(_plural(len(r.mirrored), "mirrored transcript"))
+    snaps = sum(c.found for c in r.snapshots)
+    if snaps:
+        places.append(_plural(snaps, "snapshot"))
+    if places:
+        return "found in " + ", ".join(places)
+    if r.unread:
+        return f"not found, but {_plural(len(r.unread), 'path')} could not be read: see below"
+    return "not found"
+
+
+def cmd_scan(a: argparse.Namespace) -> int:
+    """Where a value is still stored. Exit 0 when nothing is found and everything was read, 1 when
+    anything is found, 2 when nothing is found but something could not be read (or on bad usage).
+    Paths and counts only: the value is never printed, nor any text around it."""
+    from memware.config import get_dotted, load_config
+
+    value = sys.stdin.readline().rstrip("\r\n") if a.value == "-" else a.value
+    if not value:
+        print("scan needs a value: an empty one would match everything", file=sys.stderr)
+        return 2
+    cfg = load_config()
+    src = a.transcript_src or get_dotted(cfg, "backup.transcript_src") or "~/.claude/projects"
+    dest = None
+    if a.backups or a.dest:
+        dest = a.dest or get_dotted(cfg, "backup.dest")
+        if not dest:
+            print(
+                "--backups needs a destination: pass --dest DIR or set backup.dest "
+                "(`memware setup`)",
+                file=sys.stderr,
+            )
+            return 2
+    r = scan(value, db=a.db, transcript_src=src, backup_dest=dest)
+    code = 1 if r.found else 0 if r.complete else 2
+    if a.json:
+        body = asdict(r)
+        if r.store_check:
+            body["store_check"]["found"] = r.store_check.found
+        for key, checks in (("store_copies", r.store_copies), ("snapshots", r.snapshots)):
+            for row, check in zip(body[key], checks, strict=True):
+                row["found"] = check.found
+        _out({"found": r.found, "complete": r.complete, **body}, True)
+        return code
+    blocks: list[list[tuple[str, str]]] = [
+        [
+            ("verdict", _scan_verdict(r)),
+            (
+                "transcript source",
+                f"{r.transcript_src} ({_plural(r.transcripts_read, 'transcript')} read)",
+            ),
+        ]
+    ]
+    for hit in r.transcripts:
+        blocks.append(
+            [
+                ("transcript", hit.path),
+                ("occurrences", _n(hit.occurrences)),
+                ("indexed", _indexed_line(hit)),
+            ]
+        )
+    if r.indexed_gone:
+        blocks.append(
+            [
+                (
+                    "indexed, file gone",
+                    f"{_plural(len(r.indexed_gone), 'source')}: their turns are counted in the "
+                    "store below",
+                )
+            ]
+        )
+    blocks.append(
+        _db_block("store", r.store_check)
+        if r.store_check
+        else [("store", f"{r.store} (no store file)")]
+    )
+    blocks += [_db_block("pre-restore copy", c) for c in r.store_copies]
+    if r.backup_dest is not None:
+        blocks.append(
+            [
+                (
+                    "backup destination",
+                    f"{r.backup_dest} ({_plural(r.mirrored_read, 'mirrored transcript')} read, "
+                    f"{_plural(len(r.snapshots), 'snapshot')})",
+                )
+            ]
+        )
+        blocks += [
+            [("mirrored transcript", hit.path), ("occurrences", _n(hit.occurrences))]
+            for hit in r.mirrored
+        ]
+        blocks += [_db_block("snapshot", c) for c in r.snapshots]
+    blocks += [[("not read", u.path), ("reason", u.reason)] for u in r.unread]
+    _print_blocks(blocks)
+    return code
 
 
 def _beliefs_retract(a: argparse.Namespace) -> int:
@@ -1819,6 +2022,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="delete the turns and retract the beliefs; without it nothing is written",
     )
     s.set_defaults(fn=cmd_prune)
+
+    s = add(
+        "scan",
+        "count where a value is still stored: transcripts on disk, whether each is indexed, the "
+        "store file and its search index, and with --backups the backup destination (read-only)",
+        epilog=(
+            "Examples:\n"
+            '  memware scan "SECRET123"              every transcript, the store file, its index\n'
+            '  memware scan "SECRET123" --backups    also mirrored transcripts and snapshots\n'
+            "  pbpaste | memware scan - --json      read the value from stdin, not the command line\n"
+            "Prints paths and counts, never the value or text around it. Transcripts match\n"
+            "literally and case-sensitively. Exit: 0 not found · 1 found · 2 not found, but a path\n"
+            "could not be read. See docs/keeping-memory-clean.md."
+        ),
+    )
+    s.add_argument(
+        "value", metavar="VALUE", help="the text to look for, or `-` to read one line from stdin"
+    )
+    s.add_argument(
+        "--backups",
+        action="store_true",
+        help="also read the backup destination: mirrored transcripts and snapshot files",
+    )
+    s.add_argument(
+        "--dest", metavar="DIR", help="backup destination (implies --backups; default: backup.dest)"
+    )
+    s.add_argument(
+        "--transcript-src",
+        metavar="DIR",
+        help="transcript tree to walk (default: backup.transcript_src)",
+    )
+    s.set_defaults(fn=cmd_scan)
 
     s = add(
         "stats",

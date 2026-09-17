@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`memware scan VALUE` counts every place a value is still stored**
+  ([#37](https://github.com/ericwalisko/memware/issues/37)). `prune --containing` reads only
+  indexed transcripts, so a transcript kept out of the index, by `capture.exclude` above all, was
+  one no memware command could look inside, and verifying a removal meant leaving the tool. `scan`
+  walks the transcript source on disk and reports each file holding the value: how many times,
+  whether it is indexed, and if not why (`capture.exclude`, the no-capture list, an ignore
+  marker, or not synced yet). Every file is read whole, and a value escaped inside a JSON string
+  counts too. It checks the store file and its `-wal` for the value's bytes, as given and in any
+  case, counts the turns and beliefs holding it, and reads the search index's own pages for the
+  value's terms, deleted entries included, which SQLite's vocabulary view does not show. It also
+  reads the `pre-restore` copies beside the store, and with `--backups` the mirrored transcripts
+  and snapshot files in the backup destination. A path it cannot read is listed with the reason.
+  It prints paths and counts, never the value or the text around it, takes the value from stdin
+  as `-`, and has `--json`. Exit status: 0 nothing found, 1 found, 2 nothing found but a path
+  could not be read. It opens nothing for writing.
+
+### Fixed
+- **An applied `memware prune` removes the text from the store file, not only from every
+  query** ([#36](https://github.com/ericwalisko/memware/issues/36)). A deleted turn stayed
+  readable in the file: SQLite frees a deleted row's page without zeroing it unless
+  `secure_delete` is on, and builds disagree on that default (Homebrew's Python leaves it off). A
+  full-text index keeps a deleted row's words on their page, lowercased, until it merges, which
+  happens on every build and which a case-sensitive search of the file cannot see. A backup
+  snapshot taken after the prune copied those index pages, and the `-wal` file kept older copies
+  of pages while another process held the store open. The store now turns `secure_delete` on for
+  every connection, and every `--apply` then rebuilds both search indexes, runs `VACUUM`, and
+  empties the write-ahead log with a `TRUNCATE` checkpoint. On a 50,000-turn, 180 MB store the
+  prune takes about 4 seconds instead of 1, and a full sync is unchanged within noise. Standard
+  error names each step as it starts. Every `--apply` scrubs, including one that removes
+  nothing, so rerunning a prune made with 0.6.1 or earlier clears what that one left. When a
+  reader keeps the log from being emptied, the prune says so. It then says where copies may
+  remain, which memware never changes: backups made before now (it names the destination) and
+  the transcript files, and it points to `memware scan`. The dry run counts the beliefs whose
+  subject, relation or value holds the text (`beliefs holding the text`), because prune keeps
+  every belief row. `--json` adds `beliefs_holding_text`, `store_scrubbed` and `backup_dest`.
+  The removal runbook in [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#removing-a-value-a-token-a-password)
+  is rewritten around prune, scan and the copies that remain.
+
 ## [0.6.1] - 2026-09-16
 
 ### Changed

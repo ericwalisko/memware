@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -182,6 +185,17 @@ def age_hours(ts: str | None, now: datetime | None = None) -> float | None:
     return ((now or datetime.now(UTC)) - t).total_seconds() / 3600.0
 
 
+@dataclass(frozen=True)
+class Scrubbed:
+    """What :meth:`Store.scrub` did."""
+
+    indexes: tuple[str, ...]
+    """The FTS tables rebuilt."""
+    wal_truncated: bool
+    """False when a reader kept the write-ahead log from being emptied."""
+    seconds: float
+
+
 class Store:
     """One SQLite database holding turns, beliefs, cursors and reviews.
 
@@ -201,6 +215,10 @@ class Store:
         # write with "database is locked". Several memware processes can touch the store at
         # once — the SessionStart catch-up, a session-end sync, and the backup cron can overlap.
         self.conn.execute("PRAGMA busy_timeout=5000")
+        # Overwrite deleted content with zeros instead of only unlinking it, so a removed turn
+        # leaves no readable copy on a free page. SQLite builds disagree on the default
+        # (Anaconda's Python turns it on, Homebrew's leaves it off), so it is set, not assumed.
+        self.conn.execute("PRAGMA secure_delete=ON")
         if not self._has_fts5():
             raise RuntimeError("this SQLite build lacks FTS5; memware requires it")
         self.conn.executescript(SCHEMA)
@@ -302,6 +320,29 @@ class Store:
                     (entrypoint, source),
                 ).rowcount
         return done
+
+    def scrub(self, progress: Callable[[str], None] | None = None) -> Scrubbed:
+        """Rewrite the file so the text of deleted rows leaves it, after a delete has committed.
+
+        ``secure_delete`` zeroes what a delete frees, but not what an FTS5 index keeps: its
+        ``'delete'`` adds a tombstone and leaves the term in the segment until a merge, stored
+        lowercased, so a case-sensitive search of the file misses it. So both indexes are rebuilt
+        from their content tables, ``VACUUM`` rewrites the file without its free pages, and a
+        ``TRUNCATE`` checkpoint empties the write-ahead log, whose frames hold earlier copies of
+        pages. The checkpoint waits for readers up to the busy timeout; ``wal_truncated`` is False
+        when one was still reading.
+
+        About 3 seconds for 50,000 turns (180 MB) on a laptop. ``progress`` hears each step first."""
+        say = progress or (lambda _: None)
+        started = time.perf_counter()
+        indexes = ("passage_fts", "belief_fts")
+        for table in indexes:
+            say(f"rebuilding the {table} search index")
+            self.conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+        say("compacting it (VACUUM)")
+        self.conn.execute("VACUUM")
+        busy = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        return Scrubbed(indexes, not busy, round(time.perf_counter() - started, 2))
 
     def _has_fts5(self) -> bool:
         row = self.conn.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()

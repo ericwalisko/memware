@@ -99,16 +99,10 @@ matches nothing prints what it searched, so a `0` is never silent.
 
 ### Remove a value pasted into a session you keep
 
-A token or password pasted mid-conversation sits inside turns you otherwise want. Select the
-turns that hold it, not the whole transcript:
-
-```bash
-memware prune --turns-containing "the-pasted-value"          # dry run: how many turns hold it
-memware prune --turns-containing "the-pasted-value" --apply
-```
-
-`--turns-containing` matches the text anywhere in a turn, literally and case-sensitively. Copies
-already mirrored to a backup folder are not touched; delete those by hand.
+A token or password pasted mid-conversation sits inside turns you otherwise want. `memware prune
+--turns-containing` selects the turns that hold it, not the whole transcript, and
+[Removing a value](#removing-a-value-a-token-a-password) is the whole runbook: prune, verify with
+`memware scan`, and what to do about the copies memware does not own.
 
 ### Retract the beliefs those runs left behind
 
@@ -211,6 +205,97 @@ Side by side, not instead of each other: a transcript is excluded when any layer
 `--exclude GLOB` flag of `memware sync` and `backfill` is a different thing: it skips for that
 one call and un-indexes nothing.
 
+## Removing a value (a token, a password)
+
+A secret pasted into a session reaches more places than the index: the store file, its
+write-ahead log, backup snapshots, the transcript mirror and the transcript itself. Four steps,
+in this order.
+
+**1. Dry run.**
+
+```bash
+memware prune --turns-containing "the-value"          # nothing written
+```
+
+It counts the turns that hold the value anywhere, matched literally and case-sensitively, and the
+`beliefs holding the text`. A belief whose subject, relation or value holds it keeps it: prune
+retracts beliefs from sessions it empties but never deletes or rewrites a belief row, and no
+command rewrites a belief's text yet.
+
+**2. Apply.**
+
+```bash
+memware prune --turns-containing "the-value" --apply
+```
+
+The turns are deleted, and then the store file is scrubbed, so the value leaves the file and not
+only every query. memware sets SQLite's `secure_delete` on every connection, which overwrites
+deleted content with zeros; builds disagree on its default, and Homebrew's Python leaves it off.
+That is not enough on its own: a full-text index keeps a deleted row's words on their page,
+lowercased, until the index merges. So the prune rebuilds both search indexes, rewrites the file
+with `VACUUM`, and empties the write-ahead log (the `-wal` file beside the store) with a `TRUNCATE`
+checkpoint. Standard error names each step as it starts. It takes a few seconds on a large store
+(4 seconds for 50,000 turns and 180 MB on a laptop), and `VACUUM` briefly needs free disk of up
+to twice the file's size.
+
+Every `--apply` scrubs, even one that removes nothing. A store pruned by memware 0.6.1 or earlier
+still holds what that prune removed: run the same prune again and it is gone. If another process
+was partway through reading the store, the log cannot be emptied, and the prune says so (`write-ahead
+log NOT emptied`); run it again once nothing has the store open.
+
+**3. Verify.**
+
+```bash
+memware scan "the-value" --backups          # exit 0: found nowhere it looked
+pbpaste | memware scan - --backups          # the value from stdin, out of shell history
+```
+
+`scan` is read-only and prints paths and counts, never the value or text around it. It reads:
+
+- **transcripts**: every `*.jsonl` under `backup.transcript_src` (default `~/.claude/projects`),
+  walked on disk rather than taken from the index, plus any indexed transcript that lives
+  elsewhere. Each file holding the value shows how many times, whether it is indexed, and if not,
+  why: `excluded by capture.exclude`, `excluded by no-capture list`, `excluded by ignore marker`,
+  or `not synced yet`. A value escaped inside a JSON string (a quote, a backslash) is counted too.
+- **the store**: the value's bytes in the file and in its `-wal` file, as given and in any case;
+  the turns and beliefs holding it; and how many of its search terms the index pages hold,
+  counting entries a delete left behind. That last check reads the pages themselves: SQLite's own
+  vocabulary view skips deleted entries, and a page stores most terms as only the bytes that differ
+  from the term before, which a byte search cannot match.
+- **copies beside the store**: the `memware.pre-restore-*.db` files `memware restore` sets aside.
+- **with `--backups`** (or `--dest DIR`): the mirrored transcripts in `<dest>/transcripts` and every
+  `.db` file in the destination.
+
+Exit status is 0 when nothing is found and every path was read, 1 when anything is found, and 2
+when nothing is found but a path could not be read (each is listed with its reason) or the
+command was used wrongly. An indexed transcript whose file is gone is counted, not failed: its
+turns are in the store check. `--json` gives the same report for a script.
+
+The search-term check matches a value's words, not the value, so a value made of common words
+(`correct horse`) is found in any store that has those words. Scan for the distinctive part.
+It reads only `*.jsonl` under the transcript source; Claude Code keeps other files there too, such
+as large tool output under `<session>/tool-results/`, and `grep -rlF -- "the-value"
+~/.claude/projects` reads those.
+
+**4. Deal with what memware does not change.**
+
+- **Transcripts.** memware never modifies a transcript, so the file the value was pasted into
+  still holds it. Delete the transcript, or overwrite the value in place with the same number of
+  bytes (`x` for each character of an ASCII value): sync reads a transcript by byte offset, and a
+  file that keeps its length keeps its offsets.
+- **Snapshots taken before the prune.** memware never changes or deletes anything in a backup
+  destination. Take a fresh snapshot with `memware backup`, then delete the older snapshots `scan
+  --backups` lists. Left alone, retention deletes each one by the time it is older than the largest
+  tier (14 days by default), and the value stays in the destination until then.
+- **Mirrored transcripts.** Delete or overwrite the copy in `<dest>/transcripts` as for the
+  original. The mirror copies a transcript again when the original changes, and never deletes a
+  copy whose original is gone.
+- **Pre-restore copies.** Delete a `memware.pre-restore-*.db` you no longer need.
+- **Everything outside memware.** A synced folder keeps deleted files and old versions (Dropbox,
+  iCloud Drive and Google Drive all do), Time Machine and APFS snapshots keep old copies of the
+  disk, and an SSD can keep blocks a file no longer uses. memware cannot reach those. A leaked
+  credential stays leaked until it is rotated: rotate it.
+
 ## Writing evaluations that don't poison the store
 
 1. Set `MEMWARE_NO_CAPTURE=1` for the whole run **and** put `[memware-eval]`
@@ -285,8 +370,9 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
-| remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises |
-| remove a value pasted into a session you keep | `memware prune --turns-containing VALUE`, then again with `--apply` |
+| remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises, `memware scan TEXT --backups` finds any holding a text |
+| remove a value pasted into a session you keep | `memware prune --turns-containing VALUE`, then again with `--apply`, then `memware scan VALUE --backups` ([runbook](#removing-a-value-a-token-a-password)) |
+| check whether a value is still stored anywhere | `memware scan VALUE --backups`: transcripts (indexed or not), the store file and its index, backups |
 | tame a recurring/dated automation prompt | `prune --turns-starting-with PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
 | evaluate without self-contamination | `memware-eval --corpus … --beliefs-from …` |
 | keep headless runs out of the ledger, in recall | the default (`derive.sources interactive`); `memware config derive.sources all` reads them |

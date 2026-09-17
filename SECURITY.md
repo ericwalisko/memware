@@ -16,4 +16,6 @@ issues.
 memware indexes conversation transcripts, which routinely contain secrets pasted into
 chats. The database is local and unencrypted by default. Treat `~/.memware/` like you
 treat the transcripts themselves, and use the ingest filters (or a pre-ingest scrubber)
-if you sync from shared machines.
+if you sync from shared machines. To remove a secret that was already indexed, follow the
+removal runbook in [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#removing-a-value-a-token-a-password):
+`memware prune` scrubs it from the store file and `memware scan` shows where copies remain.

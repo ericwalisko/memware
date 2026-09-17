@@ -152,7 +152,10 @@ def test_prune_dry_run_lists_the_cascade_and_writes_nothing(db, capsys):
 def test_prune_apply_retracts_and_the_belief_leaves_every_read_path(db, capsys):
     rows_before = _beliefs(db)
     code, out, err = _run(capsys, "--db", db, "prune", "--containing", MARKER, "--apply")
-    assert code == 0 and err == ""
+    assert code == 0
+    *progress, note = err.splitlines()  # the scrub's steps, then where the text may be left
+    assert all(line.startswith("scrubbing the store file: ") for line in progress)
+    assert "`memware scan VALUE`" in note
     assert "beliefs retracted : 2" in out and "predecessors reopened : 1" in out
 
     after = _beliefs(db)

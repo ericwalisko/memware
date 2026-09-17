@@ -8,6 +8,7 @@ is new. Transcripts themselves are never modified.
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from memware.ledger import Retraction, apply_retraction, plan_retraction
 from memware.passage import index_turn
-from memware.store import Store, now_iso
+from memware.store import Scrubbed, Store, now_iso
 
 
 @dataclass(frozen=True)
@@ -208,22 +209,50 @@ def file_contains(path: Path, marker: str | list[str], *, head_bytes: int = 200_
     return any(m.encode("utf-8") in head for m in markers)
 
 
-def _file_holds(path: Path, marker: str, *, chunk_bytes: int = 1 << 20) -> bool:
-    """True if ``marker`` appears anywhere in the file, which is read whole, a chunk at a time.
-
-    Unlike :func:`file_contains`, a head check, this is the ground truth ``prune --containing``
-    decides by. Each chunk is searched together with the last ``len(marker) - 1`` bytes before
-    it, so a marker that spans a chunk boundary still matches."""
-    needle = marker.encode("utf-8")
-    overlap = len(needle) - 1
+def file_windows(path: Path, overlap: int, *, chunk_bytes: int = 1 << 20) -> Iterator[bytes]:
+    """The file read whole, a chunk at a time. Each window is a chunk led by the ``overlap`` bytes
+    before it, so a needle of up to ``overlap + 1`` bytes that spans a chunk boundary still sits
+    whole inside one window."""
     carry = b""
     with path.open("rb") as fh:
         while chunk := fh.read(chunk_bytes):
             window = carry + chunk
-            if needle in window:
-                return True
+            yield window
             carry = window[-overlap:] if overlap else b""
-    return False
+
+
+def _file_holds(path: Path, marker: str, *, chunk_bytes: int = 1 << 20) -> bool:
+    """True if ``marker`` appears anywhere in the file, which is read whole, a chunk at a time.
+
+    Unlike :func:`file_contains`, a head check, this is the ground truth ``prune --containing``
+    decides by. A marker that spans a chunk boundary still matches (:func:`file_windows`)."""
+    needle = marker.encode("utf-8")
+    return any(needle in w for w in file_windows(path, len(needle) - 1, chunk_bytes=chunk_bytes))
+
+
+def file_occurrences(
+    path: Path, needles: list[bytes], *, any_case: bool = False, chunk_bytes: int = 1 << 20
+) -> int:
+    """How many times any of ``needles`` occurs in the file, read whole as :func:`_file_holds`
+    reads it. Overlapping occurrences each count. With ``any_case``, ASCII letters match in
+    either case, as SQLite folds them.
+
+    An occurrence is counted in the window where it ends, so one that spans a chunk boundary
+    counts once however the chunks fall."""
+    wanted = [n.lower() if any_case else n for n in dict.fromkeys(needles) if n]
+    if not wanted:
+        return 0
+    overlap = max(len(n) for n in wanted) - 1
+    found, carried = 0, 0
+    for window in file_windows(path, overlap, chunk_bytes=chunk_bytes):
+        hay = window.lower() if any_case else window
+        for needle in wanted:
+            at = hay.find(needle, max(0, carried - len(needle) + 1))
+            while at >= 0:
+                found += 1
+                at = hay.find(needle, at + 1)
+        carried = min(overlap, len(window))
+    return found
 
 
 def sync_file(
@@ -352,6 +381,12 @@ class Pruned:
     missing: tuple[str, ...] = ()
     """Sources ``containing`` could not read because the transcript file is gone. Their turns
     may still be indexed, and only a turn selector reaches them."""
+    beliefs_holding: int | None = None
+    """Beliefs, in any status, whose subject, relation or value holds the selector's text, matched
+    as the selector matches. Prune keeps every belief row, so their text stays in the store file.
+    None for a ``glob`` alone, which has no text."""
+    scrubbed: Scrubbed | None = None
+    """How the store file was rewritten; every applied prune rewrites it."""
 
 
 @dataclass(frozen=True)
@@ -412,6 +447,7 @@ def prune(
     turns_starting_with: str | None = None,
     apply: bool = False,
     reason: str = "memware prune",
+    progress: Callable[[str], None] | None = None,
 ) -> Pruned:
     """Un-index whole sources (``glob`` and/or ``containing``) or single turns
     (``turns_containing`` or ``turns_starting_with``), and retract the beliefs derived from every
@@ -423,7 +459,10 @@ def prune(
 
     Without ``apply`` nothing is written and the result is what would happen. With it, the
     deletes and the retraction commit together. Sessions are read before the delete: a deleted
-    turn no longer says which session it came from."""
+    turn no longer says which session it came from. Every applied prune then scrubs the store file
+    (:meth:`memware.store.Store.scrub`), reporting each step to ``progress``: the removed text
+    leaves the file and not only every query, and so does what an earlier prune left behind, even
+    when this one matches nothing."""
     missing: list[str] = []
     scanned = 0
     turn_selectors = [t for t in (turns_containing, turns_starting_with) if t is not None]
@@ -431,6 +470,8 @@ def prune(
         raise ValueError("a turn selector takes no other selector")
     if turn_selectors and not turn_selectors[0]:
         raise ValueError("an empty turn selector would match every turn")
+    text = turns_containing or turns_starting_with or containing
+    holding = None if text is None else beliefs_holding(store.conn, text)
     if turns_containing is not None:
         sources: list[str] = []
         doomed, args = "instr(text, ?) > 0", [turns_containing]
@@ -440,7 +481,9 @@ def prune(
     else:
         sources, scanned, missing = _matching_sources(store, glob, containing)
         if not sources:
-            return Pruned({}, 0, plan_retraction(store, []), apply, scanned, tuple(missing))
+            scrubbed = store.scrub(progress=progress) if apply else None
+            empty = plan_retraction(store, [])
+            return Pruned({}, 0, empty, apply, scanned, tuple(missing), holding, scrubbed)
         doomed, args = f"source IN ({','.join('?' * len(sources))})", sources
     conn = store.conn
     conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
@@ -477,7 +520,29 @@ def prune(
     finally:
         if conn.in_transaction:
             conn.execute("COMMIT")
-    return Pruned(counts if sources else {}, turns, plan, apply, scanned, tuple(missing))
+    return Pruned(
+        counts if sources else {},
+        turns,
+        plan,
+        apply,
+        scanned,
+        tuple(missing),
+        holding,
+        store.scrub(progress=progress) if apply else None,
+    )
+
+
+def beliefs_holding(conn: sqlite3.Connection, text: str) -> int:
+    """Beliefs, in any status, whose subject, relation or value holds ``text``, matched literally
+    and case-sensitively. Retracting a belief keeps its row, so this is what still carries the text
+    in the store once every turn holding it is gone."""
+    return int(
+        conn.execute(
+            "SELECT count(*) FROM belief "
+            "WHERE instr(subject, ?1) > 0 OR instr(relation, ?1) > 0 OR instr(value, ?1) > 0",
+            (text,),
+        ).fetchone()[0]
+    )
 
 
 def prune_turns(
@@ -517,10 +582,13 @@ __all__ = [
     "Pruned",
     "Turn",
     "TurnMatches",
+    "beliefs_holding",
     "capture_disabled",
     "capture_exclude_patterns",
     "default_skip_markers",
     "file_contains",
+    "file_occurrences",
+    "file_windows",
     "ignore_markers_file",
     "is_excluded",
     "is_no_capture",

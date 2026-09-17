@@ -219,7 +219,7 @@ nothing. That needs a memware hook to run in the session, so also put `[memware-
 evaluation prompts, and use `memware-eval --corpus ROOT --db scratch.db
 --beliefs-from ~/.memware/memware.db` to judge retrieval against a store that excludes them.
 `memware prune --containing TEXT` shows the runs that already slipped in and the beliefs derived from them, and `--apply` un-indexes the runs and retracts those beliefs; copies already
-mirrored to a backup folder have to be deleted there by hand. For a durable filter that every sync and backup honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed or mirrored.
+mirrored to a backup folder have to be deleted there by hand. For a pasted secret, `memware prune --turns-containing VALUE --apply` removes it from the store file too, and `memware scan VALUE --backups` counts every place it is left, the transcripts memware does not index included ([removal runbook](docs/keeping-memory-clean.md#removing-a-value-a-token-a-password)). For a durable filter that every sync and backup honours — including runs that predate a marker — list content signatures in `~/.memware/ignore-markers.txt` (or `MEMWARE_IGNORE_MARKERS`); any transcript whose head contains one is never indexed or mirrored.
 
 A generator that runs from its own working directory can be excluded by path, whatever its environment: `memware exclude --add '*/<project-dir>/*'` previews a `capture.exclude` glob and `--apply` writes it ([docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#layer-3--path-exclusions-the-machine-remembers)).
 
