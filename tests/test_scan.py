@@ -220,7 +220,9 @@ def test_the_store_check_counts_beliefs_and_the_log(tmp_path, capsys):
     with Store(db) as s:
         assert_belief(s, "deploy", "api token", VALUE)
     holder = sqlite3.connect(db)  # keeps the -wal file in place after the store closes
-    holder.execute("SELECT 1").fetchall()
+    holder.execute(
+        "SELECT count(*) FROM belief"
+    ).fetchall()  # a read opens the log; SELECT 1 does not
     try:
         with Store(db) as s:
             assert_belief(s, "deploy", "old token", f"was {VALUE}")
