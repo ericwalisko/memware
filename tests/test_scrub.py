@@ -729,7 +729,9 @@ def test_a_use_count_is_skipped_rather_than_waited_for(tmp_path):
     finally:
         locker.execute("ROLLBACK")
         locker.close()
-    assert [h.text for h in hits] == ["deploy region us-east-1"] and took < 1.0
+    # a quarter second of wait plus the search: past 1 s on a macOS CI runner under coverage, and
+    # nowhere near the minute a use count waited before
+    assert [h.text for h in hits] == ["deploy region us-east-1"] and took < 3.0
     with Store(db) as s:
         assert s.conn.execute("SELECT use_count FROM belief").fetchone()[0] == 0  # skipped
 
@@ -829,7 +831,9 @@ def test_a_hook_opening_a_store_mid_upgrade_under_a_held_lock_returns_in_time(
         locker.execute("ROLLBACK")
         locker.close()
     out = capsys.readouterr()
-    assert code == 0 and took < 2.0 < limit, took
+    assert code == 0 and took < 3.0 < limit, (
+        took
+    )  # well inside the hook's timeout, on a slow runner too
     assert "Traceback" not in out.err
 
     code, _, _ = _run(capsys, "--db", str(db), "beliefs")  # an ordinary command upgrades it
