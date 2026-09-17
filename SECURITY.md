@@ -25,7 +25,9 @@ written into its transcript, which memware indexes. Leave the value off the comm
 commands ask for it without echoing it. `memware prune --apply` removes the turns holding it,
 scrubs the store file and its write-ahead log, checks the file afterwards, and exits 1 when copies
 remain. It never deletes a belief row, but it redacts the value in every belief that holds it,
-and retracts the current ones. `memware scan` is read-only and
+and retracts the current ones. No prune output prints the value. A redaction too broad to be a
+secret's (more than 20 beliefs, or a text under 6 characters) is refused unless
+`--allow-broad-redaction`. `memware scan` is read-only and
 counts what is left in the transcripts, the store and the backups. memware never changes a
 transcript or a backup, and cannot reach synced-folder history, Time Machine or blocks an SSD
 keeps: rotate a leaked credential.

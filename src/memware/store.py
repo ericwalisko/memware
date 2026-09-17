@@ -217,6 +217,11 @@ SHORT_WAIT_MS = 250
 a connection opened on a foreground path that only reads. Recall runs before an agent's turn, and
 a use count is not worth stalling it behind a sync or a scrub."""
 
+HOOK_SYNC_WAIT_MS = 5_000
+"""The wait of a ``memware sync --from-hook``. Claude Code gives the foreground PreCompact sync 30
+seconds; waiting well under that, and giving up quietly, loses nothing, because the next sync
+catches up from each transcript's cursor."""
+
 CHECKPOINT_WAIT_MS = 10_000
 """How long a scrub keeps trying to empty the write-ahead log while readers hold it. It never
 waits inside SQLite, where a ``TRUNCATE`` checkpoint would hold the write lock the whole time."""

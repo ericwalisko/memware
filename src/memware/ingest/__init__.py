@@ -14,7 +14,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from memware.ledger import Redaction, Retraction, apply_retraction, plan_retraction, redact
+from memware.ledger import (
+    Redaction,
+    RedactionRefused,
+    Retraction,
+    apply_retraction,
+    plan_retraction,
+    redact,
+    redaction_refusal,
+)
 from memware.passage import index_turn
 from memware.residue import FileCheck, check_file, file_windows, value_tokens
 from memware.store import Scrubbed, Store, now_iso
@@ -364,6 +372,9 @@ class Pruned:
     left: FileCheck | None = None
     """What the store file and its log still hold of the text once an applied prune is done. None
     for a dry run, a ``glob`` alone, or a store with no file."""
+    redaction_refusal: str | None = None
+    """Why an applied prune would refuse this redaction as too broad, or None. An applied prune
+    that went ahead did so with ``allow_broad_redaction``."""
 
 
 @dataclass(frozen=True)
@@ -425,6 +436,7 @@ def prune(
     apply: bool = False,
     reason: str = "memware prune",
     progress: Callable[[str], None] | None = None,
+    allow_broad_redaction: bool = False,
 ) -> Pruned:
     """Un-index whole sources (``glob`` and/or ``containing``) or single turns
     (``turns_containing`` or ``turns_starting_with``), and retract the beliefs derived from every
@@ -443,7 +455,12 @@ def prune(
     An applied prune then scrubs the store file (:meth:`memware.store.Store.scrub`), reporting each
     step to ``progress``, when it removed anything, or when its text is still in the file with no
     live row to account for it, as a prune in memware 0.6.1 and earlier left it. A scrub that fails is
-    reported in ``scrub_error``, not raised. Last, ``left`` checks what the file still holds."""
+    reported in ``scrub_error``, not raised. Last, ``left`` checks what the file still holds.
+
+    An applied prune whose redaction is too broad to be a secret's
+    (:func:`memware.ledger.redaction_refusal`) raises :class:`memware.ledger.RedactionRefused`
+    before it writes anything, unless ``allow_broad_redaction``; a dry run reports the refusal
+    in ``redaction_refusal``."""
     missing: list[str] = []
     scanned = 0
     turn_selectors = [t for t in (turns_containing, turns_starting_with) if t is not None]
@@ -462,9 +479,14 @@ def prune(
         sources, scanned, missing = _matching_sources(store, glob, containing)
         doomed, args = f"source IN ({','.join('?' * len(sources))})", sources
     conn = store.conn
-    redacted, redaction = 0, None
+    redacted, redaction, refusal = 0, None, None
     conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
     try:
+        if text:  # decided before anything is deleted, so a refusal writes nothing
+            planned = redact(store, text, prefix=turns_starting_with is not None)
+            refusal = redaction_refusal(planned, text)
+            if apply and refusal and not allow_broad_redaction:
+                raise RedactionRefused(refusal, planned)
         counts = dict.fromkeys(sources, 0)
         for source, n in conn.execute(
             f"SELECT source, count(*) FROM turn WHERE {doomed} GROUP BY source", args
@@ -517,6 +539,7 @@ def prune(
         tuple(missing),
         redaction,
         redacted,
+        redaction_refusal=refusal,
     )
     if not apply:
         return result

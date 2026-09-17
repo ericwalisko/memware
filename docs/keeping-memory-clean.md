@@ -258,9 +258,21 @@ memware prune --turns-containing          # asks for the text; nothing written
 ```
 
 It counts the turns that hold the value anywhere, matched literally and case-sensitively, and
-lists the `beliefs to redact` by id, never by text: every belief whose subject, relation, value or
+lists the `beliefs to redact` by id: every belief whose subject, relation, value or free-text
 source holds the value, whatever its status, and whether derive filed it or a person stated it.
-Removing a secret outranks the rule that memware never retracts what a person stated.
+Removing a secret outranks the rule that memware never retracts what a person stated. A source
+memware wrote itself, such as derive's `memware:session/…/turn/…` pointer, is provenance, and is
+never matched or rewritten.
+
+No prune output prints the value, in any view: the beliefs it retracts are listed with the value
+replaced by `[removed]`, in their keys too, and notes and errors withhold it the same way.
+
+The dry run also says when `--apply` would refuse. A redaction that would rewrite more than 20
+beliefs, or any belief for a text shorter than 6 characters, is more likely a word than a secret:
+`api` or `memware` names hundreds of beliefs in a real ledger, and a rewrite of each cannot be
+undone. The applied prune then writes nothing at all, prints what it would have done, and exits 2;
+`--allow-broad-redaction` applies it anyway. A short text that redacts no belief removes turns as
+before.
 
 **2. Apply.**
 
@@ -276,6 +288,8 @@ The turns are deleted, and the value leaves the store file, not only every query
   `valid_to` and supersession links stay, no older value is reopened, and a belief already
   retracted keeps its retraction. No belief row is deleted; a prune rewrites one only to redact
   the text it removes. A person's confirmation that quoted the value is redacted the same way.
+  An open review whose candidate or incumbent is redacted is closed, with the decision `redacted`,
+  and a redacted or retracted candidate can no longer be approved.
 - A retraction the prune records gives the command as `--turns-containing (value withheld)`. A
   retraction reason that memware 0.6.0 or 0.6.1 wrote with the value in it is rewritten the same
   way.
@@ -308,8 +322,9 @@ On a large store this takes seconds: at 50,000 turns (190 MB) about 3–4 second
 removes something and 1 second when it removes nothing, and at 150,000 turns about 11 seconds.
 `VACUUM` briefly needs free disk of up to twice the file's size. Other memware processes that
 write meanwhile, a hook's sync or a Hermes memory write, wait for the store's lock for up to a
-minute rather than fail. Recall does not wait: Hermes prefetch, MCP recall and `memware recall`
-skip recording a use when the lock is not free within a quarter of a second.
+minute rather than fail. A hook's sync waits five seconds and gives up quietly, since the next
+sync catches up. Recall does not wait: Hermes prefetch, MCP recall and `memware recall` skip
+recording a use when the lock is not free within a quarter of a second.
 
 **3. Verify.**
 

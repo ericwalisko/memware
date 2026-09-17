@@ -12,6 +12,7 @@ cannot match them, so :func:`leaf_terms` reads the pages themselves.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
@@ -70,23 +71,43 @@ def file_occurrences(
     return found + len(pending)
 
 
+STRUCTURED_SOURCE = re.compile(
+    r"memware:.*|hermes built-in memory \(\w+\)|review #\d+ approved", re.S
+)
+"""A source memware writes itself, never a person's words: derive's ``memware:session/<id>/turn/<n>``
+pointer, the Hermes provider's ``hermes built-in memory (<action>)``, and an approved review's
+``review #<n> approved`` confirmation. Redaction never matches or rewrites one: it is provenance,
+and rewriting a derive pointer would make a derived belief read as a person's."""
+
+_STRUCTURED_SOURCE_SQL = "({c} LIKE 'memware:%' OR {c} GLOB 'hermes built-in memory (*)' OR {c} GLOB 'review #*approved')"
+
+
+def free_text_source(source: object) -> bool:
+    """Whether a belief's or a confirmation's source is free text a person or an agent gave, which
+    can quote a value, rather than a :data:`STRUCTURED_SOURCE` memware wrote."""
+    return isinstance(source, str) and STRUCTURED_SOURCE.fullmatch(source) is None
+
+
 def beliefs_holding(conn: sqlite3.Connection, text: str, *, any_case: bool = False) -> int:
-    """Beliefs, in any status, whose subject, relation, value or source holds ``text``, matched
-    literally and case-sensitively, or with ASCII case folded as SQLite folds it. A prune redacts
+    """Beliefs, in any status, whose subject, relation, value or free-text source
+    (:func:`free_text_source`) holds ``text``, matched literally and case-sensitively, or with ASCII
+    case folded as SQLite folds it. A prune redacts
     these (:func:`memware.ledger.redact`), so after one this counts what it could not reach, such
     as a text past the start of a field that ``--turns-starting-with`` left."""
     col = "lower(coalesce({}, ''))" if any_case else "coalesce({}, '')"
     arg = "lower(?1)" if any_case else "?1"
     where = " OR ".join(
-        f"instr({col.format(c)}, {arg}) > 0" for c in ("subject", "relation", "value", "source")
+        f"instr({col.format(c)}, {arg}) > 0" for c in ("subject", "relation", "value")
     )
+    structured = _STRUCTURED_SOURCE_SQL.format(c="coalesce(source, '')")
+    where += f" OR (instr({col.format('source')}, {arg}) > 0 AND NOT {structured})"
     return int(conn.execute(f"SELECT count(*) FROM belief WHERE {where}", (text,)).fetchone()[0])
 
 
 def other_rows_holding(conn: sqlite3.Connection, text: str) -> dict[str, int]:
     """``table.column`` -> rows holding ``text``, for every ordinary table but ``turn`` and
-    ``belief``: a retraction's reason, a review's, a cursor's source path, a passage. Only columns
-    that hold it are listed."""
+    ``belief``: a retraction's reason, a review's, a cursor's source path, a passage, and the
+    schema's own SQL. Only columns that hold it are listed."""
     out: dict[str, int] = {}
     tables = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
@@ -101,6 +122,11 @@ def other_rows_holding(conn: sqlite3.Connection, text: str) -> dict[str, int]:
             ).fetchone()[0]
             if n:
                 out[f"{table}.{column}"] = int(n)
+    schema = conn.execute(
+        "SELECT count(*) FROM sqlite_master WHERE instr(sql, ?) > 0", (text,)
+    ).fetchone()[0]
+    if schema:  # a word in the schema's own SQL and comments, which no prune can remove
+        out["sqlite_master.sql"] = int(schema)
     return out
 
 

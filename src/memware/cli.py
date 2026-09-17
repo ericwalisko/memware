@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import io
 import json
 import os
 import shlex
 import sqlite3
 import sys
+from collections.abc import Iterator
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -43,14 +45,19 @@ from memware.ingest import (
     turn_matches,
 )
 from memware.ledger import (
+    REDACT_MAX_BELIEFS,
+    REDACT_MIN_CHARS,
+    REDACTED,
     Policy,
     Redaction,
+    RedactionRefused,
     Retraction,
     approve,
     assert_belief,
     confirmed_sql,
     current,
     history,
+    make_key,
     orphaned_count,
     reject,
     retract,
@@ -59,7 +66,7 @@ from memware.ledger import (
 from memware.residue import FileCheck
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.scan import ScanReport, TranscriptHit, scan
-from memware.store import SHORT_WAIT_MS, Scrubbed, Store, now_iso
+from memware.store import HOOK_SYNC_WAIT_MS, SHORT_WAIT_MS, Scrubbed, Store, now_iso
 from memware.volatile import REASONS, WINDOW_KEY, Gate, label, older_version, parse_days
 
 
@@ -206,25 +213,32 @@ def cmd_sync(a: argparse.Namespace) -> int:
     if not paths:
         print("nothing to sync", file=sys.stderr)
         return 0
-    with Store(a.db) as s:
-        report: dict[str, int] = {}
-        for p in paths:
-            path = Path(p).expanduser()
-            if path.is_dir():
-                report.update(
-                    sync_tree(
-                        s,
-                        path,
-                        harness=a.harness,
-                        skip_if_contains=a.skip_if_contains,
-                        exclude=a.exclude,
+    try:
+        # A hook's sync waits a few seconds for the lock, not a minute: PreCompact runs it in the
+        # foreground with a 30 s timeout, and the next sync catches up from each cursor.
+        with Store(a.db, busy_timeout_ms=HOOK_SYNC_WAIT_MS if a.from_hook else None) as s:
+            report: dict[str, int] = {}
+            for p in paths:
+                path = Path(p).expanduser()
+                if path.is_dir():
+                    report.update(
+                        sync_tree(
+                            s,
+                            path,
+                            harness=a.harness,
+                            skip_if_contains=a.skip_if_contains,
+                            exclude=a.exclude,
+                        )
                     )
-                )
-            elif path.exists():
-                report[str(path)] = sync_file(
-                    s, path, harness=a.harness, skip_if_contains=a.skip_if_contains
-                )
-        _out({"added": sum(report.values()), "files": len(report)}, a.json or a.from_hook)
+                elif path.exists():
+                    report[str(path)] = sync_file(
+                        s, path, harness=a.harness, skip_if_contains=a.skip_if_contains
+                    )
+            _out({"added": sum(report.values()), "files": len(report)}, a.json or a.from_hook)
+    except sqlite3.OperationalError as e:
+        if a.from_hook and ("locked" in str(e) or "busy" in str(e)):
+            return 0  # quietly: another writer held the store, and the next sync catches up
+        raise
     return 0
 
 
@@ -748,10 +762,13 @@ def cmd_review(a: argparse.Namespace) -> int:
     with Store(a.db) as s:
         if a.action == "list":
             _out([r.__dict__ for r in open_reviews(s)], a.json)
-        elif a.action == "approve":
-            _out(approve(s, a.id).__dict__, a.json)
-        elif a.action == "reject":
-            _out(reject(s, a.id).__dict__, a.json)
+        elif a.action in ("approve", "reject"):
+            try:
+                result = (approve if a.action == "approve" else reject)(s, a.id)
+            except LookupError as e:  # no open review, or a candidate that cannot be approved
+                print(str(e).strip("'\""), file=sys.stderr)
+                return 2
+            _out(result.__dict__, a.json)
         elif a.action == "sync":
             backend: HttpReviewBackend | JsonlReviewBackend = (
                 HttpReviewBackend(a.url, a.token)
@@ -792,6 +809,7 @@ def _cascade(
     lines: list[tuple[str, str]] | None = None,
     *,
     by_session: bool = True,
+    unwritten: str = "dry run: nothing written; add --apply to write it",
 ) -> None:
     """Print a belief retraction, done or planned: counts, then one record per belief it touches.
 
@@ -812,7 +830,7 @@ def _cascade(
         for row in rows
     ]
     if not applied:
-        print("dry run: nothing written; add --apply to write it", file=sys.stderr)
+        print(unwritten, file=sys.stderr)
     if a.json:
         body = {"applied": applied, **head, "sessions_emptied": plan.sessions, **lists}
         if not by_session:
@@ -917,7 +935,12 @@ def _redaction_line(red: Redaction, applied: bool) -> str:
         if red.retracted
         else ""
     )
-    return f"{len(red.beliefs):,} (ids {ids}){retracted}"
+    reviews = (
+        f"; {_plural(len(red.reviews), 'open review')} {'closed' if applied else 'to close'}"
+        if red.reviews
+        else ""
+    )
+    return f"{len(red.beliefs):,} (ids {ids}){retracted}{reviews}"
 
 
 def _scrubbed_line(r: Pruned) -> str:
@@ -1132,6 +1155,92 @@ def _cmd_scrub(a: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _withheld_forms(text: str) -> list[str]:
+    """Every form of a prune's text that output could carry, longest first: as given, lowercased
+    (a belief's key), and escaped inside a JSON string."""
+    forms = [text, text.lower(), json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1]]
+    return sorted({f for f in forms if f}, key=len, reverse=True)
+
+
+def _withhold(value: Any, forms: list[str]) -> Any:
+    """``value`` with every form replaced by ``[removed]``, in strings and, recursively, in the
+    values of lists and dicts. Dict keys are left alone: they are memware's names, not the text."""
+    if isinstance(value, str):
+        for form in forms:
+            value = value.replace(form, REDACTED)
+        return value
+    if isinstance(value, dict):
+        return {k: _withhold(v, forms) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_withhold(v, forms) for v in value]
+    return value
+
+
+class _Withheld(io.TextIOBase):
+    """A text stream that passes everything through with every form of a prune's text replaced by
+    ``[removed]`` (:func:`_withheld_forms`)."""
+
+    def __init__(self, stream: Any, text: str) -> None:
+        self._stream = stream
+        self._forms = _withheld_forms(text)
+
+    def write(self, data: str) -> int:
+        self._stream.write(_withhold(data, self._forms))
+        return len(data)
+
+    def flush(self) -> None:
+        self._stream.flush()
+
+    def isatty(self) -> bool:
+        return bool(self._stream.isatty())
+
+
+@contextlib.contextmanager
+def _withholding(text: str | None, *, stdout: bool = True) -> Iterator[None]:
+    """While a prune prints, no form of its text reaches standard error, or standard output unless
+    ``stdout`` is off, by any path: counts, belief records, notes, errors. The records are withheld
+    where they are built too (:func:`_withheld_plan`); this is what holds when a path is missed.
+    ``--json`` withholds in the data instead, where a replacement cannot break the JSON."""
+    if not text:
+        yield
+        return
+    out, err = sys.stdout, sys.stderr
+    sys.stderr = _Withheld(err, text)
+    if stdout:
+        sys.stdout = _Withheld(out, text)
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = out, err
+
+
+def _withheld_plan(plan: Retraction, text: str | None) -> Retraction:
+    """A retraction plan as a prune prints it: every value of every belief with the text withheld
+    (:func:`_withhold`), and the key made again from what is left. The plan lists beliefs as they
+    were before the redaction, which would otherwise print the value the prune removes."""
+    if not text:
+        return plan
+    forms = _withheld_forms(text)
+
+    def row(r: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = _withhold(r, forms)
+        if "key" in out and (out.get("subject"), out.get("relation")) != (
+            r.get("subject"),
+            r.get("relation"),
+        ):
+            # lowercasing can make the text again from a case variant, so withhold the key too
+            out["key"] = _withhold(make_key(str(out["subject"]), str(out["relation"])), forms)
+        return out
+
+    return Retraction(
+        _withhold(plan.sessions, forms),
+        [row(r) for r in plan.retract],
+        [row(r) for r in plan.reopen],
+        [row(r) for r in plan.relink],
+        [row(r) for r in plan.kept],
+    )
+
+
 def cmd_prune(a: argparse.Namespace) -> int:
     if a.scrub:
         return _cmd_scrub(a)
@@ -1140,6 +1249,13 @@ def cmd_prune(a: argparse.Namespace) -> int:
     except _NoText as e:
         print(e, file=sys.stderr)
         return 2
+    with _withholding(
+        a.containing or a.turns_containing or a.turns_starting_with, stdout=not a.json
+    ):
+        return _prune(a)
+
+
+def _prune(a: argparse.Namespace) -> int:
     turn_flags = [f for f in ("turns_containing", "turns_starting_with") if getattr(a, f)]
     if not (a.glob or a.containing or turn_flags):
         print(
@@ -1161,17 +1277,26 @@ def cmd_prune(a: argparse.Namespace) -> int:
         for flag in ("glob", "containing", "turns_containing", "turns_starting_with")
         if getattr(a, flag)
     )
+    refused: RedactionRefused | None = None
     with Store(a.db) as s:
-        r = prune(
-            s,
-            glob=a.glob,
-            containing=a.containing,
-            turns_containing=a.turns_containing,
-            turns_starting_with=a.turns_starting_with,
-            apply=a.apply,
-            reason=f"memware prune {selector}",
-            progress=lambda step: print(f"scrubbing the store file: {step}", file=sys.stderr),
-        )
+        selected = {
+            "glob": a.glob,
+            "containing": a.containing,
+            "turns_containing": a.turns_containing,
+            "turns_starting_with": a.turns_starting_with,
+        }
+        try:
+            r = prune(
+                s,
+                **selected,
+                apply=a.apply,
+                reason=f"memware prune {selector}",
+                progress=lambda step: print(f"scrubbing the store file: {step}", file=sys.stderr),
+                allow_broad_redaction=a.allow_broad_redaction,
+            )
+        except RedactionRefused as e:
+            refused = e
+            r = prune(s, **selected)  # the dry run it refused, for its counts
         text = a.turns_containing or a.turns_starting_with
         notes = (
             _turn_notes(s, text, prefix=bool(a.turns_starting_with), removed=r.turns)
@@ -1181,18 +1306,27 @@ def cmd_prune(a: argparse.Namespace) -> int:
     head: dict[str, Any] = {"turns_removed": r.turns}
     if not turn_flags:
         head = {"sources_pruned": len(r.sources), **head}
+    lines = []
     if r.redaction is not None:
         head["beliefs_redacted"] = r.redaction.beliefs
         head["beliefs_retracted_by_redaction"] = r.redaction.retracted
         head["confirmation_sources_redacted"] = r.redaction.confirmations
-    lines = []
-    if r.redaction is not None:
+        head["reviews_closed_by_redaction"] = r.redaction.reviews
+        head["redaction_refused"] = r.redaction_refusal
         lines.append(
             (
                 "beliefs redacted" if r.applied else "beliefs to redact",
                 _redaction_line(r.redaction, r.applied),
             )
         )
+        if r.redaction_refusal:
+            guard = (
+                f"overridden with --allow-broad-redaction: {r.redaction_refusal}"
+                if r.applied
+                else f"--apply refuses, because {r.redaction_refusal}; "
+                "--allow-broad-redaction applies it anyway"
+            )
+            lines.append(("redaction guard", guard))
     failed = False
     if r.applied:
         from memware.config import get_dotted, load_config
@@ -1210,11 +1344,22 @@ def cmd_prune(a: argparse.Namespace) -> int:
             lines.append(("text left in the store", _left_line(r.left)))
         more, failed = _scrub_notes(a, r, dest)
         notes += more
-    _cascade(a, r.beliefs, r.applied, head, lines)
+    unwritten = "dry run: nothing written; add --apply to write it"
+    if refused is not None:
+        head["refused"] = str(refused)
+        unwritten = (
+            f"refused, nothing written: {refused}. A text that broad is more likely a word than a "
+            "secret; the counts below are what --apply would do, and --allow-broad-redaction "
+            "applies it anyway"
+        )
+    text_given = a.containing or a.turns_containing or a.turns_starting_with
+    if text_given:  # --json writes around the stream guard, so its values are withheld here
+        head = _withhold(head, _withheld_forms(text_given))
+    _cascade(a, _withheld_plan(r.beliefs, text_given), r.applied, head, lines, unwritten=unwritten)
     if notes:
         sys.stdout.flush()  # the notes explain the counts, so they follow them in a merged stream
         print("\n".join(notes), file=sys.stderr)
-    return 1 if failed else 0
+    return 2 if refused is not None else 1 if failed else 0
 
 
 def _indexed_line(hit: TranscriptHit) -> str:
@@ -2516,6 +2661,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="delete the turns, retract the beliefs and scrub the file; without it nothing is written",
+    )
+    s.add_argument(
+        "--allow-broad-redaction",
+        action="store_true",
+        help=f"apply even when the text would redact more than {REDACT_MAX_BELIEFS} beliefs, or "
+        f"any belief for a text shorter than {REDACT_MIN_CHARS} characters",
     )
     s.add_argument(
         "--scrub",

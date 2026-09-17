@@ -77,9 +77,25 @@ All notable changes to this project are documented here. The format follows
   or relation. A committed belief is also retracted, with the reason `memware prune: text redacted
   (value withheld)`, by its status alone: its id, `valid_from`, `valid_to` and supersession links
   stay, and no older value is reopened. A belief already retracted keeps its retraction. A
-  confirmation's source that quoted the text is redacted too. No belief row is deleted, and none
-  is merged, even one redaction makes identical to another. The dry run lists the beliefs it would
-  redact by id, never by text.
+  confirmation's source that quoted the text is redacted too. A source memware wrote itself
+  (derive's `memware:session/<id>/turn/<n>` pointer, the Hermes provider's `hermes built-in memory
+  (…)`, an approval's `review #N approved`) is provenance and is never matched or rewritten. An
+  open review whose candidate or incumbent is redacted is closed with the decision `redacted`, and
+  approving a redacted or retracted candidate is refused. No belief row is deleted, and none is
+  merged, even one redaction makes identical to another. The dry run lists the beliefs it would
+  redact by id. An `--apply` whose redaction would rewrite more than 20 beliefs, or any belief for
+  a text shorter than 6 characters, is refused whole: nothing is written, the counts are printed,
+  it exits 2, and `--allow-broad-redaction` applies it anyway. On a synthetic ledger of 330
+  beliefs, `api` would have redacted 157 and `memware` 310, 300 of them by rewriting derive's
+  session pointers.
+- **No prune output prints the text it removes.** The retraction a prune cascades into listed the
+  beliefs it retracts as they were, so a derived `staging api key = <secret>` printed the secret,
+  in the dry run and in `--apply`, in every view. Every field of those records, their keys, the
+  notes and any error now read `[removed]` where the text was; `--json` withholds it in values
+  only, so the JSON stays valid.
+- **A hook's sync gives up quietly instead of waiting a minute.** `memware sync --from-hook` (the
+  PreCompact hook runs it in the foreground with a 30 s timeout) waits 5 s for the lock and exits
+  0 with nothing printed when it does not get it; the next sync catches up from each cursor.
 - **A prune never prints or records its text.** The notes a selector that matched nothing prints
   said `no turn contains 'VALUE'`; they now say `the text`. A text selector written without its
   text asks for it without echoing it, or reads `--value-file` or stdin. A value is one line:
