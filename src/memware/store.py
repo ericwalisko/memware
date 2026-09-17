@@ -118,6 +118,24 @@ CREATE TABLE IF NOT EXISTS retraction (
   retracted_at TEXT NOT NULL,
   reason       TEXT NOT NULL
 );
+
+-- A person confirmed a belief derive wrote: asserted the same value again (``memware assert``,
+-- ``remember``) or approved it in review. The belief row keeps its session source; this row is
+-- what makes it human-stated to the injection gate (memware.volatile). Beside ``belief`` for
+-- the same reason as ``retraction``.
+CREATE TABLE IF NOT EXISTS confirmation (
+  belief_id    INTEGER PRIMARY KEY,
+  confirmed_at TEXT NOT NULL,
+  source       TEXT
+);
+
+-- One-time notices ``memware notice`` has given for this store, by key. In the store, not the
+-- memware home: once per store, and a home that will not parse or take a write cannot repeat one.
+CREATE TABLE IF NOT EXISTS notice (
+  key      TEXT PRIMARY KEY,
+  shown_at TEXT NOT NULL,
+  version  TEXT NOT NULL
+);
 """
 
 

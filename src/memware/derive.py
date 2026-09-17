@@ -12,7 +12,9 @@ Two halves, and the deterministic one decides:
   with its neighbours. The model turns a region into a triple or rejects it.
 * **a deterministic backstop after the model.** ``validate()`` admits a triple only if every
   content word of its value occurs in the excerpt (GROUNDEDNESS), the model echoed the right
-  excerpt back (``anchor``), and the shape is a fact rather than an order or a pronoun. A
+  excerpt back (``anchor``), and the shape is a fact rather than an order, a pronoun, a generic
+  noun with no name, or a snapshot: a measurement, a moving version or a status
+  (:func:`memware.volatile.classify`, which the prompt hook applies to older stores too). A
   model cannot introduce a fact the evidence does not contain; a bad model writes less, not
   wrong. Writes carry reliability 0.5 under ``gate_conflicts``, below any human-stated belief,
   so a challenge to one lands in ``memware review``, never in the ledger.
@@ -68,6 +70,7 @@ from memware import __version__
 from memware.config import get_dotted, load_config, memware_home
 from memware.ledger import Policy, assert_belief
 from memware.store import Store, age_hours
+from memware.volatile import DESCRIBE, classify, label, names_setting, wordset
 
 RELIABILITY = 0.5  # a machine read a transcript: below every human-stated belief
 POLICY = Policy.GATE_CONFLICTS
@@ -199,20 +202,33 @@ A triple is (subject, relation, value):
   value    what that attribute currently is  ("0.22.1")
 
 Keep a triple ONLY if all of these hold:
-  - it would still be true and worth knowing WEEKS later, in a different session
+  - it would still be true and worth knowing WEEKS later, in a different session,
+    without anyone re-checking it
   - it is a state of the world, a configuration, a decision, or a location — not
-    an event that happened once
+    an event that happened once, and not a measurement
   - every word of the value appears in the excerpt. Copy the identifiers,
     numbers, paths, flags and version strings EXACTLY. Never normalise them,
     never expand an abbreviation, never add a fact of your own.
-  - the subject names the thing. "the watchdog" is too vague if the excerpt says
-    "the ingest watchdog" — use what the excerpt says.
+  - the subject names the thing. The test: a determiner plus a generic noun with
+    no name ("the table", "the repo", "the worker", "the job") names nothing —
+    reject it, unless the excerpt names the thing ("the staging table", "the
+    ingest worker"), and then use the excerpt's words.
 
 REJECT (keep: false) — expect to reject MOST excerpts:
   - an instruction for the task at hand ("implement X", "run the tests then
     report", "do not switch branches") — orders are not knowledge
   - anything restating a prompt, a plan, a TODO, or what someone was asked to do
   - a description of what happened once ("the run failed", "I fixed the typo")
+  - a measurement, on the same footing as an event: a count, a row total, a
+    percentage, a rate, a size, a duration, an "N of M" figure ("4.2 million
+    rows", "83% non-null", "91 tests", "3 of 5 checks")
+  - transient state: the version a branch, build or install is currently at
+    ("main is at 0.4.0", "the built wheel is 0.5.0"); the status of an issue, PR,
+    run or check ("PR #12 is merged", "CI is red"); what a PR contains
+  - for both, ask: would the value need re-checking to know it is still true? A
+    pinned or required version would not ("ruff is pinned to 0.16.5"); a current
+    or built version would. A configured limit would not ("the retry limit is
+    5"); a count would.
   - a prediction, an intention, or an option under discussion — only what IS
   - anything whose subject or value would be a pronoun ("it", "this", "that")
 
@@ -529,8 +545,27 @@ _STOP = {
 }
 
 
+GENERIC_NOUNS = wordset(
+    """
+    table tables repo repository worker workers job jobs service services database db project
+    app application system server file config script tool test tests suite branch build
+    pipeline model module package library feature code codebase process task run queue cache
+    index store schema container cluster environment env machine client component page site
+    function endpoint bucket folder directory team user
+    """
+)
+_DETERMINERS = wordset("the a an this that these those our my your its their")
+
+
 def _words(s: str) -> list[str]:
     return re.sub(r"[^a-z0-9 ]", " ", s.lower()).split()
+
+
+def vague_subject(subject: str) -> bool:
+    """A generic noun with no name: "the table", "repo". The prompt asks for the name; this is
+    the same test with no model."""
+    words = [w for w in _words(subject) if w not in _DETERMINERS]
+    return len(words) == 1 and words[0] in GENERIC_NOUNS
 
 
 def anchor_ok(region: str, anchor: str) -> bool:
@@ -567,18 +602,24 @@ def validate(item: dict[str, Any], region: str) -> tuple[dict[str, str] | None, 
         return None, "incomplete triple"
     if subject.lower() in DEICTIC or value.lower() in DEICTIC:
         return None, "deictic subject or value"
+    if vague_subject(subject):
+        return None, "vague subject: a generic noun with no name"
     if len(subject) > MAX_SUBJECT_CHARS:
         return None, "subject too long — a sentence, not a thing"
     if len(relation.split()) > MAX_RELATION_WORDS:
         return None, "relation too long — a clause, not an attribute"
     if len(value) > MAX_VALUE_CHARS:
         return None, "value too long — a summary, not a fact"
-    if len(value) < 2:
+    if len(value) < 2 and not (value.isdigit() and names_setting(relation)):
+        # A one-character value is usually a fragment, but "5" for a retry limit is a setting.
         return None, "value too short"
     if TASK_SHAPE.match(value):
         return None, "task instruction, not a fact"
     if not grounded(value, region):
         return None, "NOT GROUNDED: value contains words the excerpt does not"
+    cls = classify(subject, relation, value)
+    if cls is not None:
+        return None, f"{label(cls)}: {DESCRIBE[cls]}, a snapshot rather than a durable fact"
     return {"subject": subject, "relation": relation, "value": value}, None
 
 

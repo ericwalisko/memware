@@ -64,7 +64,9 @@ def build() -> Any:
     def beliefs(subject: str | None = None) -> list[dict[str, Any]]:
         """Call this for the current value of a setting or decision the ledger tracks.
 
-        Returns currently valid beliefs, optionally filtered by subject.
+        Returns current beliefs, optionally filtered by subject, each with ``valid_from`` (when it
+        was recorded). ``volatile`` names a derived measurement, moving version or status: true
+        when recorded, and worth re-checking before relying on it.
         """
         with Store(db, busy_timeout_ms=SHORT_WAIT_MS) as s:
             return current(s, subject)

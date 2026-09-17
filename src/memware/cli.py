@@ -7,7 +7,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import shlex
 import sqlite3
 import sys
@@ -17,9 +16,16 @@ from typing import Any
 
 from memware import __version__
 from memware.derive import add_arguments as _derive_arguments
-from memware.derive import cmd_derive
+from memware.derive import cmd_derive, open_readonly
 from memware.derive import status as derive_status
-from memware.digest import DEFAULT_MAX_CHARS, digest
+from memware.digest import (
+    CONTEXT_TITLE,
+    DEFAULT_MAX_CHARS,
+    belief_line,
+    digest,
+    injection_gate,
+    resolve_project,
+)
 from memware.index import (
     read_turns,
     search_beliefs,
@@ -41,6 +47,7 @@ from memware.ledger import (
     Retraction,
     approve,
     assert_belief,
+    confirmed_sql,
     current,
     history,
     orphaned_count,
@@ -51,7 +58,8 @@ from memware.ledger import (
 from memware.residue import FileCheck
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.scan import ScanReport, TranscriptHit, scan
-from memware.store import Scrubbed, Store
+from memware.store import Scrubbed, Store, now_iso
+from memware.volatile import REASONS, WINDOW_KEY, Gate, label, older_version, parse_days
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -71,6 +79,7 @@ _RECALL_COLS = [
     ("relation", "relation"),
     ("source", "source"),
     ("text", "text"),
+    ("volatile", "volatile"),  # last: --plain column positions stay where scripts expect them
 ]
 _BELIEF_COLS = [
     ("id", "id"),
@@ -81,6 +90,17 @@ _BELIEF_COLS = [
     ("valid_to", "valid to"),
     ("reliability", "reliability"),
     ("status", "status"),
+    ("source", "source"),
+    ("volatile", "volatile"),  # last: --plain column positions stay where scripts expect them
+]
+_STALE_COLS = [
+    ("id", "id"),
+    ("subject", "subject"),
+    ("relation", "relation"),
+    ("value", "value"),
+    ("valid_from", "valid from"),
+    ("reason", "left out"),
+    ("why", "why"),
     ("source", "source"),
 ]
 _TURN_COLS = [("id", "id"), ("seq", "seq"), ("role", "role"), ("ts", "when"), ("text", "text")]
@@ -491,6 +511,7 @@ def cmd_recall(a: argparse.Namespace) -> int:
                 "relation": h.relation,
                 "source": h.source,
                 "offset": h.offset,
+                "volatile": h.volatile,
                 "snippet": h.snippet,
                 "text": h.text if a.full else h.text[:300],
             }
@@ -501,23 +522,35 @@ def cmd_recall(a: argparse.Namespace) -> int:
 
 
 def cmd_context(a: argparse.Namespace) -> int:
-    """Prompt-time helper: print currently valid beliefs relevant to the prompt."""
+    """Prompt-time helper: print the beliefs whose subject the prompt names, less what the
+    injection gate leaves out (memware.volatile)."""
     payload = _hook_payload() if a.from_hook or not a.prompt else {}
     prompt = a.prompt or str(payload.get("prompt", ""))
     if not prompt.strip():
         return 0
+    gate = injection_gate(resolve_project(Path(str(payload.get("cwd") or os.getcwd()))))
     with Store(a.db) as s:
         # Injection is not retrieval: nobody asked for these, so they must not gain activation
-        # or count as used — use_count means an agent or a person retrieved the belief.
-        hits = search_beliefs(s, prompt, k=a.k, require_subject=True, record_use=False)
-    if not hits:
+        # or count as used — use_count means an agent or a person retrieved the belief. Ranked
+        # past k, so a left-out belief makes room for the next one rather than a shorter block.
+        hits = search_beliefs(s, prompt, k=100, require_subject=True, record_use=False)
+        if not hits:
+            return 0
+        rows = {
+            r["id"]: r
+            for r in s.conn.execute(
+                f"SELECT *, {confirmed_sql()} FROM belief WHERE id IN ({','.join('?' * len(hits))})",
+                [h.id for h in hits],
+            )
+        }
+    lines = [
+        belief_line(r["subject"], r["relation"], r["value"], r["valid_from"])
+        for r in (rows[h.id] for h in hits if h.id in rows)
+        if gate.verdict(r) is None
+    ][: a.k]
+    if not lines:
         return 0
-    lines = []
-    for h in hits:
-        value = h.text.removeprefix(f"{h.subject} {h.relation} ")
-        since = f" (since {h.ts[:10]})" if h.ts else ""
-        lines.append(f"- {h.subject} {h.relation}: {value}{since}")
-    block = "Known facts (currently valid, from your memory ledger):\n" + "\n".join(lines)
+    block = CONTEXT_TITLE + "\n" + "\n".join(lines)
     if a.from_hook:
         print(
             json.dumps(
@@ -643,13 +676,43 @@ def _assert_stdin(a: argparse.Namespace) -> int:
     return 0
 
 
+def _retract_ids(a: argparse.Namespace) -> list[int] | None:
+    """The belief ids after `beliefs retract`, or None when the words there are not all ids (a
+    key whose subject is "retract" stays readable as history)."""
+    words = [w for w in (a.relation, *a.ids) if w is not None]
+    return [int(w) for w in words] if all(w.isdigit() for w in words) else None
+
+
+def _gate(a: argparse.Namespace) -> Gate:
+    return injection_gate(resolve_project(Path(a.cwd or os.getcwd()).expanduser()))
+
+
+def _stale(s: Store, gate: Gate, subject: str | None = None) -> list[dict[str, Any]]:
+    """Current beliefs the injection gate leaves out, each with its reason and why."""
+    out = []
+    for row in current(s, subject):
+        v = gate.verdict(row)
+        if v is not None:
+            out.append({**row, "reason": v.reason, "why": v.detail})
+    return out
+
+
 def cmd_beliefs(a: argparse.Namespace) -> int:
-    if a.subject == "retract" and a.relation is None:
+    if a.subject == "retract" and _retract_ids(a) is not None:
         return _beliefs_retract(a)
     if a.orphaned or a.apply:
         print("--orphaned and --apply belong to `memware beliefs retract`", file=sys.stderr)
         return 2
+    if a.ids:
+        print(f"unexpected arguments: {' '.join(a.ids)}", file=sys.stderr)
+        return 2
     with Store(a.db) as s:
+        if a.stale:
+            if a.relation:
+                print("--stale takes a subject, not a key", file=sys.stderr)
+                return 2
+            _emit(a, _stale(s, _gate(a), a.subject), _STALE_COLS)
+            return 0
         rows = history(s, a.subject, a.relation) if a.relation else current(s, a.subject)
         _emit(a, rows, _BELIEF_COLS)
     return 0
@@ -689,6 +752,7 @@ _CASCADE_COLS = [
     ("valid_to", "valid to"),
     ("was_superseded_by", "was superseded by"),
     ("superseded_by", "superseded by"),
+    ("reason", "reason"),
     ("source", "source"),
 ]
 
@@ -707,6 +771,8 @@ def _cascade(
     applied: bool,
     head: dict[str, Any] | None = None,
     lines: list[tuple[str, str]] | None = None,
+    *,
+    by_session: bool = True,
 ) -> None:
     """Print a belief retraction, done or planned: counts, then one record per belief it touches.
 
@@ -721,11 +787,17 @@ def _cascade(
         "relink": plan.relink,
         "keep": plan.kept,
     }
-    records = [{"action": act, **row} for act, rows in lists.items() for row in rows]
+    records = [
+        {"action": act, **row, "reason": plan.reasons.get(row["id"])}
+        for act, rows in lists.items()
+        for row in rows
+    ]
     if not applied:
         print("dry run: nothing written; add --apply to write it", file=sys.stderr)
     if a.json:
         body = {"applied": applied, **head, "sessions_emptied": plan.sessions, **lists}
+        if not by_session:
+            body = {"applied": applied, "reasons": plan.reasons, **lists}
         print(json.dumps(body, indent=2, default=str))
         return
     if a.plain:
@@ -735,14 +807,16 @@ def _cascade(
     counts: list[tuple[str, int | str]] = [
         (_PRUNE_COUNTS[k][n], v) for k, v in head.items() if k in _PRUNE_COUNTS
     ]
-    counts += [
-        ("sessions with no turn left", len(plan.sessions)),
-        (("beliefs retracted", "beliefs to retract")[n], len(plan.retract)),
-        (("predecessors reopened", "predecessors to reopen")[n], len(plan.reopen)),
-        (("predecessors relinked", "predecessors to relink")[n], len(plan.relink)),
-        ("human-stated beliefs kept", len(plan.kept)),
-        *(lines or []),
-    ]
+    if by_session:
+        counts.append(("sessions with no turn left", len(plan.sessions)))
+    counts.append((("beliefs retracted", "beliefs to retract")[n], len(plan.retract)))
+    if by_session:
+        counts += [
+            (("predecessors reopened", "predecessors to reopen")[n], len(plan.reopen)),
+            (("predecessors relinked", "predecessors to relink")[n], len(plan.relink)),
+            ("human-stated beliefs kept", len(plan.kept)),
+        ]
+    counts += lines or []
     width = max(len(label) for label, _ in counts)
     print("\n".join(f"{label.rjust(width)} : {_n(value)}" for label, value in counts))
     if records:
@@ -1248,16 +1322,60 @@ def cmd_scan(a: argparse.Namespace) -> int:
     return code
 
 
+def _not_retractable(s: Store, ids: list[int]) -> list[str]:
+    """Why each of ``ids`` cannot be retracted by id: no committed belief, or one that is no
+    longer current. A superseded belief reaches no prompt already, and retracting it would move
+    the end of its interval, which is history."""
+    marks = ",".join("?" * len(ids))
+    rows = {
+        r["id"]: r
+        for r in s.conn.execute(
+            f"SELECT id, status, valid_to, superseded_by FROM belief WHERE id IN ({marks})", ids
+        )
+    }
+    out = []
+    for i in ids:
+        r = rows.get(i)
+        if r is None or r["status"] != "committed":
+            out.append(f"no committed belief with id {i}")
+        elif r["valid_to"] is not None:
+            by = f" by #{r['superseded_by']}" if r["superseded_by"] else ""
+            out.append(
+                f"belief {i} is not current: it was superseded{by} at {r['valid_to']}, and "
+                "retract by id only acts on current beliefs"
+            )
+    return out
+
+
 def _beliefs_retract(a: argparse.Namespace) -> int:
-    if not a.orphaned:
+    ids = _retract_ids(a) or []
+    if a.orphaned + a.stale + bool(ids) != 1:
         print(
-            "beliefs retract needs --orphaned: beliefs whose cited session is no longer indexed",
+            "beliefs retract needs --orphaned (beliefs whose cited session is no longer indexed), "
+            "--stale (beliefs injection leaves out) or belief ids, and takes one of them",
             file=sys.stderr,
         )
         return 2
     with Store(a.db) as s:
-        plan = retract(s, reason="memware beliefs retract --orphaned", apply=a.apply)
-    _cascade(a, plan, a.apply)
+        if a.orphaned:
+            plan = retract(s, reason="memware beliefs retract --orphaned", apply=a.apply)
+            _cascade(a, plan, a.apply)
+            return 0
+        if a.stale:
+            chosen = {
+                r["id"]: f"left out of injection, {label(r['reason'])}: {r['why']} "
+                "(memware beliefs retract --stale)"
+                for r in _stale(s, _gate(a))
+            }
+        else:
+            why = f"retracted by id (memware beliefs retract {' '.join(map(str, ids))})"
+            chosen = dict.fromkeys(ids, why)
+            refused = _not_retractable(s, ids)
+            if refused:
+                print("\n".join([*refused, "nothing written"]), file=sys.stderr)
+                return 2
+        plan = retract(s, reason="", apply=a.apply, beliefs=chosen)
+    _cascade(a, plan, a.apply, by_session=False)
     return 0
 
 
@@ -1376,6 +1494,7 @@ def _print_stats(r: dict[str, Any]) -> None:
             ("beliefs citing an unindexed session", f"{u['beliefs_orphaned']:,}"),
             ("beliefs with a stale turn citation", f"{u['beliefs_stale_turn']:,}"),
         ],
+        _injection_lines(r["injection"]),
         _capture_lines(r["capture"]),
         [("verdict", v) for v in _stats_verdicts(r)],
     ]
@@ -1387,6 +1506,43 @@ def _print_stats(r: dict[str, Any]) -> None:
             for block in blocks
         )
     )
+
+
+def _injection_status(s: Store, gate: Gate) -> dict[str, Any]:
+    """Current beliefs the injection gate leaves out, by reason, and what decided it: the window
+    and, for the project in the current directory, the versions its manifests declare."""
+    left_out = dict.fromkeys(REASONS, 0)
+    for row in _stale(s, gate):
+        left_out[row["reason"]] += 1
+    return {
+        "volatile_days": gate.volatile_days,
+        "manifests": [d._asdict() for d in gate.declared],
+        "left_out": left_out,
+    }
+
+
+def _injection_lines(i: dict[str, Any]) -> list[tuple[str, str]]:
+    total = sum(i["left_out"].values())
+    parts = ", ".join(f"{n:,} {label(k)}" for k, n in i["left_out"].items() if n)
+    days = i["volatile_days"]
+    lines = [
+        (
+            "beliefs left out of injection",
+            f"{total:,}" + (f" ({parts}; `memware beliefs --stale` lists them)" if total else ""),
+        ),
+        (
+            "inject.volatile_days",
+            f"{days:g}: a volatile derived belief is injected while younger than that"
+            if days
+            else "0: a derived measurement, moving version or status is never injected",
+        ),
+    ]
+    if i["manifests"]:
+        declared = "; ".join(
+            f"{d['name'] or '(no name)'} {d['version']} ({d['path']})" for d in i["manifests"]
+        )
+        lines.append(("manifest versions here", declared))
+    return lines
 
 
 def _capture_status() -> dict[str, Any]:
@@ -1426,6 +1582,7 @@ def cmd_stats(a: argparse.Namespace) -> int:
             "beliefs_orphaned": orphaned_count(s),
             "beliefs_stale_turn": stale_turn_count(s),
         }
+        report["injection"] = _injection_status(s, injection_gate(resolve_project(Path.cwd())))
     report["capture"] = _capture_status()
     if a.json:
         _out(report, True)
@@ -1566,26 +1723,11 @@ _CONSENT_HINTS = {
 }
 
 
-def _release(version: str) -> tuple[int, ...]:
-    m = re.match(r"\d+(?:\.\d+)*", version.strip())
-    return tuple(int(x) for x in m.group().split(".")) if m else ()
-
-
 def _older(version: str, than: str) -> bool:
     """Whether ``version`` is older than ``than``, compared as versions, never as strings
-    (as strings, "0.10.0" sorts before "0.4.0")."""
-    try:
-        from packaging.version import InvalidVersion, Version
-    except ImportError:  # memware has no runtime dependencies; packaging is usually there
-        pass
-    else:
-        try:
-            return Version(version) < Version(than)
-        except InvalidVersion:
-            pass
-    a, b = _release(version), _release(than)
-    width = max(len(a), len(b))
-    return a + (0,) * (width - len(a)) < b + (0,) * (width - len(b))
+    (as strings, "0.10.0" sorts before "0.4.0"). A version that cannot be read is older: setup
+    never recorded one it could read, so it never asked."""
+    return older_version(version, than) is not False
 
 
 def _consent_hints(done: object) -> list[str]:
@@ -1621,16 +1763,71 @@ def _maybe_setup_hint(a: argparse.Namespace) -> None:
         print(hint, file=sys.stderr)
 
 
+STALE_NOTICE = "stale-beliefs"
+"""The key in the store's ``notice`` table that records the stale-belief notice was given."""
+
+
+def _notice_given(db: str, key: str) -> bool:
+    """Whether the store records notice ``key``, read through a handle that takes no lock. A
+    store older than the ``notice`` table has not given it."""
+    try:
+        conn = open_readonly(db)
+    except (OSError, sqlite3.Error):
+        return False
+    try:
+        return conn.execute("SELECT 1 FROM notice WHERE key=?", (key,)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def _stale_notice(a: argparse.Namespace, cwd: object) -> list[str]:
+    """Once per store: how many beliefs injection now leaves out, and the command that lists
+    them. Every session start after the first is one read that takes no lock. The first counts,
+    and records in the store's ``notice`` table that it ran, whether or not it had anything to
+    say; that write waits at most a quarter second for another writer and is skipped rather than
+    stall the session start (the next one tries again). A marker in the store, not the memware
+    home, so a home that will not parse or take a write changes nothing. A store that is not
+    there is never created."""
+    if a.db == ":memory:" or not Path(a.db).expanduser().exists():
+        return []  # no store yet: nothing was ever injected, and a hook must not create one
+    if _notice_given(a.db, STALE_NOTICE):
+        return []
+    with Store(a.db) as s:
+        n = len(_stale(s, injection_gate(resolve_project(Path(str(cwd or os.getcwd()))))))
+        s.conn.execute("PRAGMA busy_timeout = 250")
+        try:
+            claimed = s.conn.execute(
+                "INSERT OR IGNORE INTO notice(key, shown_at, version) VALUES (?,?,?)",
+                (STALE_NOTICE, now_iso(), __version__),
+            ).rowcount
+        except sqlite3.OperationalError:  # locked: say it now, record it next time
+            claimed = 1
+    if not n or not claimed:
+        return []  # nothing to say, or a session starting alongside said it
+    return [
+        f"memware no longer injects {_count(n, 'belief')} that "
+        f"{'was true when recorded and needs' if n == 1 else 'were true when recorded and need'} "
+        "re-checking now (a measurement, a moving version or a status, or a version the project "
+        "manifest overrules). `memware beliefs --stale` lists "
+        f"{'it' if n == 1 else 'them'} and why; `memware beliefs retract --stale --apply` "
+        f"retracts {'it' if n == 1 else 'them'}."
+    ]
+
+
 def cmd_notice(a: argparse.Namespace) -> int:
-    """The consent hints, for someone who only uses the plugin: they never type a memware command,
-    so they never see what `stats` prints. The plugin runs this in the foreground at session start,
-    and Claude Code shows the ``systemMessage`` to them. It reads the config file and nothing else
-    (never the store), so it is quick, and it cannot fail a session start: whatever goes wrong, it
-    prints nothing and exits 0."""
+    """What the person should hear at session start, for someone who only uses the plugin: they
+    never type a memware command, so they never see what `stats` prints. The plugin runs this in
+    the foreground at session start, and Claude Code shows the ``systemMessage`` to them. The
+    consent hints read the config file. The stale-belief notice reads the store's one-time marker
+    without a lock, counts only the first time, and never creates a store. Whatever goes wrong, it prints nothing and exits 0: it cannot fail a session
+    start."""
     try:
         from memware.config import config_path, get_dotted
 
-        if a.from_hook and _hook_payload().get("source") == "compact":
+        payload = _hook_payload() if a.from_hook else {}
+        if payload.get("source") == "compact":
             return 0  # a compaction mid-session, not a session the person just opened
         # No file means nobody has answered. A file that will not parse is not an answer either,
         # but it may hold one: stay quiet rather than ask at every session start.
@@ -1639,6 +1836,8 @@ def cmd_notice(a: argparse.Namespace) -> int:
         if not isinstance(user, dict):
             return 0
         hints = _consent_hints(get_dotted(user, "setup.completed_version"))
+        with contextlib.suppress(Exception):
+            hints += _stale_notice(a, payload.get("cwd"))
         if a.from_hook:
             if hints:
                 print(json.dumps({"systemMessage": "\n".join(hints)}))
@@ -1818,6 +2017,16 @@ def cmd_config(a: argparse.Namespace) -> int:
         val: object = a.value
         if a.key.endswith("keep_days"):
             val = [int(x) for x in a.value.replace(",", " ").split()]
+        elif a.key == WINDOW_KEY:
+            days = parse_days(a.value)
+            if days is None:
+                print(
+                    f"{WINDOW_KEY} takes a number of days, 0 or more (0 never injects a volatile "
+                    f"belief); got {a.value!r}, nothing written",
+                    file=sys.stderr,
+                )
+                return 2
+            val = int(days) if days.is_integer() else days
         elif a.value.lower() in ("true", "false"):
             val = a.value.lower() == "true"
         user = load_user_config()  # write the one key; defaults stay defaults, not choices
@@ -2058,7 +2267,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--snippet-tokens", type=int, default=96, help="FTS5 snippet window (tokens)")
     s.set_defaults(fn=cmd_recall)
 
-    s = add("context", "print valid beliefs relevant to a prompt (hook-friendly)")
+    s = add(
+        "context",
+        "print the beliefs a prompt names, less the stale ones (hook-friendly)",
+    )
     s.add_argument("prompt", nargs="?")
     s.add_argument("-k", type=int, default=6)
     s.add_argument("--from-hook", action="store_true")
@@ -2137,16 +2349,34 @@ def build_parser() -> argparse.ArgumentParser:
             "  memware beliefs                        all current beliefs\n"
             "  memware beliefs api                    current beliefs about a subject\n"
             '  memware beliefs api "listens on port"  full history of one key\n'
+            "  memware beliefs --stale                what injection leaves out, and why\n"
             "  memware beliefs retract --orphaned     dry run: beliefs whose session is gone\n"
-            "  memware beliefs retract --orphaned --apply   retract them (rows are kept)"
+            "  memware beliefs retract --orphaned --apply   retract them (rows are kept)\n"
+            "  memware beliefs retract --stale --apply      retract what --stale lists\n"
+            "  memware beliefs retract 12 15 --apply        retract beliefs by id"
         ),
     )
-    s.add_argument("subject", nargs="?", help="a subject, or `retract` (with --orphaned)")
+    s.add_argument(
+        "subject", nargs="?", help="a subject, or `retract` (with --orphaned, --stale or ids)"
+    )
     s.add_argument("relation", nargs="?")
+    s.add_argument("ids", nargs="*", help=argparse.SUPPRESS)
     s.add_argument(
         "--orphaned",
         action="store_true",
         help="with `retract`: committed beliefs citing a session that is no longer indexed",
+    )
+    s.add_argument(
+        "--stale",
+        action="store_true",
+        help="current beliefs the prompt hook and digest leave out: a derived measurement, "
+        "moving version or status, or a version the project manifest overrules; with `retract`, "
+        "retract them",
+    )
+    s.add_argument(
+        "--cwd",
+        metavar="DIR",
+        help="with --stale: the project whose manifest version is checked (default: this one)",
     )
     s.add_argument(
         "--apply",

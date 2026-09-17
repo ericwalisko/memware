@@ -1,6 +1,6 @@
 """User configuration at ``$MEMWARE_HOME/config.json`` (default ``~/.memware``).
 
-Small and explicit: the store path, a backup block, capture exclusions, and derive. Everything has a safe default,
+Small and explicit: the store path, a backup block, capture exclusions, derive, and injection. Everything has a safe default,
 so memware works with no config file at all; ``memware setup`` writes one interactively.
 """
 
@@ -62,6 +62,12 @@ DEFAULTS: dict[str, Any] = {
         "model": None,  # provider default (claude-code: haiku)
         # Which sessions it reads: "interactive" skips claude -p and Agent SDK runs; "all" reads them too.
         "sources": "interactive",
+    },
+    # What the prompt hook and the session-start digest inject (memware.volatile).
+    "inject": {
+        # A derived measurement, moving version or status is injected while younger than this
+        # many days. 0 never injects one: a version belief one day old was already wrong.
+        "volatile_days": 0,
     },
 }
 

@@ -664,3 +664,149 @@ def test_the_docs_say_a_dry_run_sends_and_point_at_plan(capsys):
             assert "send" in flat[m.end() : m.end() + 40], (
                 f"{name}: {flat[m.start() : m.end() + 60]!r}"
             )
+
+
+# ── issue #38: a measurement is a snapshot, and a short setting is still a fact ──
+ISSUE_38 = [
+    "The dedup fix is now validated. We removed 10,671 duplicate rows across 2,223 accounts in "
+    "the staging table. The join key is account_id.",
+    "Backfill is now complete. The staging table holds 4.2 million rows today and 83% of them "
+    "carry a non-null region code.",
+    "The retry limit is now set to 5 for the ingest worker. That value lives in config/worker.yaml.",
+]
+
+
+def _keep(n: int, region: str, subject: str, relation: str, value: str) -> dict:
+    return {
+        "n": n,
+        "anchor": " ".join(region.split()[:6]),
+        "keep": True,
+        "subject": subject,
+        "relation": relation,
+        "value": value,
+    }
+
+
+def test_issue_38_the_gate_rejects_the_measurements_and_admits_the_retry_limit(
+    tmp_path, monkeypatch, capsys
+):
+    """The #38 corpus, with a fake provider that keeps every excerpt, as a weak model does: the
+    deterministic gate alone decides. The row count and the dedup total are measurements, and
+    "5" for a retry limit is a setting, not a fragment too short to be a value."""
+    db = str(tmp_path / "m.db")
+    with Store(db) as s:
+        s.conn.executemany(
+            "INSERT INTO turn(session,seq,ts,role,text,source,harness) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("t", i, None, "assistant", text, "t.jsonl", "generic")
+                for i, text in enumerate(ISSUE_38)
+            ],
+        )
+        s.conn.commit()
+    regions = [md.regions_from_texts([text])[0] for text in ISSUE_38]
+    stub(
+        monkeypatch,
+        [
+            [
+                _keep(1, regions[0], "staging table", "duplicate rows removed", "10,671"),
+                _keep(2, regions[1], "staging table", "row count", "4.2 million rows"),
+                _keep(3, regions[2], "ingest worker", "retry limit", "5"),
+            ]
+        ],
+        chunk=24,
+    )
+    assert main(["--db", db, "derive", "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "created=1" in out
+    assert "measurement=2" in out and "value too short" not in out
+    with Store(db) as s:
+        rows = s.conn.execute("SELECT subject, relation, value FROM belief").fetchall()
+    assert [tuple(r) for r in rows] == [("ingest worker", "retry limit", "5")]
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value, reason",
+    [
+        ("the table", "row count", "4.2 million rows", "vague subject"),
+        ("repo", "license", "MIT", "vague subject"),
+        ("the worker", "retry limit", "5", "vague subject"),
+        ("staging table", "row count", "4.2 million rows", "measurement"),
+        ("staging table", "null rate", "83%", "measurement"),
+        ("memware test suite", "test count", "91 tests", "measurement"),
+        ("staging table", "rows backfilled", "3 of 5", "measurement"),
+        ("memware main branch", "current version", "0.4.0", "moving version"),
+        ("built memware wheel", "version", "0.5.0", "moving version"),
+        ("memware PR #12", "state", "merged", "status"),
+        ("memware ci", "status", "failing", "status"),
+        ("card t_cd03d14d", "status", "review", "status"),
+        ("backfill", "progress", "83%", "measurement"),
+        ("graph_health scan", "status", "clean 0 for three weeks", "status"),
+        ("ingest worker", "retry limit", "x", "value too short"),
+        ("ingest queue", "row count", "12,000", "measurement"),
+    ],
+)
+def test_the_gate_refuses_a_snapshot_or_a_thing_with_no_name(subject, relation, value, reason):
+    region = f"Noted: {subject} {relation} is now {value} for good."
+    cand, why = md.validate(_keep(1, region, subject, relation, value), region)
+    assert cand is None and why.startswith(reason), why
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value",
+    [
+        ("ingest worker", "retry limit", "5"),  # a setting: short and numeric is still a fact
+        ("ingest worker", "batch size", "500"),  # "size", but a setting beside it
+        ("ruff", "pinned version", "0.16.5"),  # pinned, not moving
+        ("staging api", "port", "8443"),
+        ("the staging table", "join key", "account_id"),  # named, not generic
+        ("memware repo", "license", "MIT"),
+        # the review's config cases (a generic "model" subject is refused as vague, separately)
+        ("ruff", "line length", "100"),
+        ("db connection pool", "size", "20"),
+        ("api", "page size", "50"),
+        ("sentry", "sample rate", "0.1"),
+        ("gunicorn", "worker count", "4"),  # one character, and a setting
+        ("k8s pod", "memory request", "512Mi"),
+        ("claude model", "context length", "200000 tokens"),
+        ("sidebar", "default state", "open"),
+        ("circuit breaker", "initial state", "closed"),
+        # the second review's cases: a qualifier, or nothing unambiguous, is durable
+        ("api", "p99 latency slo", "200ms"),
+        ("checkout service SLA", "uptime commitment", "99.9%"),
+        ("pytest-cov", "fail under coverage", "90%"),
+        ("nightly backup cron", "runs every", "6 hours"),
+        ("memware digest", "sessions listed", "5"),
+        ("ci", "status check", "required"),
+        ("order state machine", "final state", "completed"),
+        ("deploy pipeline", "stage", "production"),
+        ("main branch", "python version", "3.12"),
+        ("feature flag dark_mode", "state", "enabled"),
+        ("rollout", "percentage", "10%"),
+        ("digware PR #82", "merged date", "2026-07-25"),
+    ],
+)
+def test_the_gate_admits_a_durable_fact(subject, relation, value):
+    region = f"Noted: {subject} {relation} is now {value} for good."
+    cand, why = md.validate(_keep(1, region, subject, relation, value), region)
+    assert why is None and cand == {"subject": subject, "relation": relation, "value": value}
+
+
+def test_the_prompt_rejects_measurements_and_transient_state_and_tests_a_vague_subject():
+    for phrase in (
+        "a measurement",
+        "4.2 million rows",
+        "the version a branch, build or install is currently at",
+        "the status of an issue, PR,",
+        "what a PR contains",
+        "would the value need re-checking to know it is still true?",
+        '("the table", "the repo", "the worker"',
+    ):
+        assert phrase in " ".join(md.SYSTEM.split()), phrase
+
+
+def test_derive_and_the_injection_gate_agree_on_what_derive_writes():
+    from memware.volatile import DERIVED_RELIABILITY, DERIVED_SOURCE, human_stated
+
+    assert md.RELIABILITY == DERIVED_RELIABILITY
+    assert md.source_pointer("s", 1).startswith(DERIVED_SOURCE)
+    assert not human_stated(md.RELIABILITY, md.source_pointer("s", 1))

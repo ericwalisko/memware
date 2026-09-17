@@ -51,7 +51,7 @@ declares it to `hermes backup`.
 
 | Hook | What it does |
 |------|--------------|
-| `prefetch` | Injects the few currently valid beliefs relevant to the turn — never a superseded value |
+| `prefetch` | Injects the few current beliefs relevant to the turn, each dated — never a superseded value, and never a derived measurement, moving version or status memware marks `volatile` |
 | `sync_turn` | Appends the turn to `$HERMES_HOME/memware/sessions/<id>.jsonl` and indexes it on a daemon thread |
 | `on_session_end`, `on_pre_compress`, `on_session_switch` | Flush and re-index; idempotent |
 | `on_memory_write` | Mirrors built-in `MEMORY.md` adds into the ledger as human-stated beliefs |

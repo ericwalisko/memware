@@ -134,6 +134,34 @@ memware beliefs retract --orphaned           # dry run: what would be retracted 
 memware beliefs retract --orphaned --apply   # retract them
 ```
 
+### Beliefs that were true when recorded
+
+Some derived beliefs keep their evidence and are still wrong: a row count, the version a branch
+was at, a PR's status. Nothing supersedes them, so they stay current in the ledger. The prompt
+hook and the digest leave them out already (see [what injection leaves
+out](integrations.md#what-injection-leaves-out)), and so does a belief about the project's
+version that its manifest overrules. To see them, and to retract them for good:
+
+```bash
+memware beliefs --stale                     # each with its reason and why
+memware beliefs retract --stale             # dry run: what would be retracted
+memware beliefs retract --stale --apply     # retract them (rows are kept, reasons recorded)
+memware beliefs retract 12 15 --apply       # or just these current beliefs, by id
+```
+
+Neither form reopens what a retracted belief had superseded: that value is older still. An id
+that names a belief no longer current is refused. Run `--stale` from inside the project, or pass
+`--cwd DIR`, so the manifest rules apply to it. A belief a person stated is never listed.
+
+**One the gate misses.** The rules catch only unambiguous cases, so some stale beliefs are still
+injected (`api p95 latency: 340ms`, a `known issue` read outside its project). Retract one by id:
+`memware beliefs SUBJECT` shows its id, and `memware beliefs retract ID --apply` retracts it.
+
+**Keeping one the gate got wrong.** If `--stale` lists a fact you rely on, state it yourself:
+`memware assert SUBJECT RELATION VALUE` with the same value (or `remember` from an agent)
+records a confirmation beside the derived belief, and from then on it is injected and no longer
+listed. Nothing about the derived row changes.
+
 **A dangling citation is not the same thing.** Re-indexing a transcript (a `memware sync` that
 re-reads a file whose turns were re-parsed) can renumber a session's turn ids while the session
 stays indexed. A belief still citing the old id then points at a turn that no longer exists,
@@ -405,6 +433,7 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
+| see or retract measurements, moving versions and statuses injection leaves out | `memware beliefs --stale`; `memware beliefs retract --stale`, then again with `--apply` |
 | remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises, `memware scan --backups` finds any holding a text |
 | remove a value pasted into a session you keep | from a plain terminal: `memware prune --turns-containing` (it asks for the value), then again with `--apply`, then `memware scan --backups` ([runbook](#removing-a-value-a-token-a-password)) |
 | check whether a value is still stored anywhere | `memware scan --backups` (it asks for the value): transcripts (indexed or not), the store file and its index, backups |

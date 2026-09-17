@@ -27,6 +27,23 @@ All notable changes to this project are documented here. The format follows
   supported. Exit status: 0 nothing found, 1 found, 2 nothing found but a path could not be read.
 - **`memware prune --scrub`** rewrites the store file, removing nothing: the command a prune prints
   when its scrub could not finish.
+- **`memware beliefs --stale`** lists the current beliefs injection leaves out, each with its
+  reason (`measurement`, `moving_version`, `status`, `contradicted`, `older_version`) and why
+  (`pyproject.toml says 0.6.1`). `--cwd DIR` names the project whose manifest is checked.
+- **`memware beliefs retract` takes `--stale` or belief ids**, as a dry run unless `--apply`, as
+  `--orphaned` does. Rows are kept and each retraction records its reason. Neither reopens what
+  a retracted belief had superseded, because that value is older still. An id that names a
+  belief no longer current is refused with the reason and nothing is written: it reaches no
+  prompt already, and retracting it would move the end of its interval.
+- **`memware stats` counts the beliefs injection leaves out, by reason** (`injection.left_out`
+  under `--json`), with the window and the manifest versions it read.
+- **An upgrading user is told once.** The session-start notice says how many beliefs are no
+  longer injected and names `memware beliefs --stale`. The marker is a row in the store's own
+  `notice` table, so a memware home that takes no write cannot repeat it or keep it from
+  firing. Once it is recorded, a session start only reads it, taking no lock; the one write
+  waits at most a quarter second for another writer. It never creates a store.
+- **`memware config inject.volatile_days`** refuses a value that is not a number of days, 0 or
+  more (`7d`, `-3`), exits 2 and writes nothing.
 
 ### Fixed
 - **An applied `memware prune` removes the text from the store file, not only from every
@@ -68,6 +85,74 @@ All notable changes to this project are documented here. The format follows
   `hunter2` while a turn says `Hunter2` left the term `hunter2` on an index page for that turn;
   the check now counts turns and beliefs that hold the text in another case and reports them,
   exits 0, and does not scrub again on later prunes.
+- **`derive` no longer files a measurement as a durable belief, and keeps a short setting**
+  ([#38](https://github.com/ericwalisko/memware/issues/38)). The prompt rejected events,
+  predictions and intentions, but nothing rejected a dated quantity, so `the table | row count =
+  4.2 million rows` became a permanent fact while `The retry limit is now set to 5` was dropped
+  as `value too short`. The prompt now rejects measurements (counts, row totals, percentages,
+  rates, sizes, durations, "N of M" figures) and transient state (the version a branch, build or
+  install is currently at; the status of an issue, PR, run or check; what a PR contains) on the
+  same footing as events, with one test for both: would the value need re-checking to know it is
+  still true? Its vague-subject rule now has a concrete test: a determiner plus a generic noun
+  with no name ("the table", "the repo", "the worker") names nothing. The deterministic gate
+  backs both with no model call: it rejects a generic-noun subject, and a triple that
+  `memware.volatile.classify` names a measurement, a moving version or a status, so a weaker
+  model still writes less rather than wrong. A one-character value is admitted when it is a
+  number and the relation names a setting (`retry limit = 5`).
+- **The prompt hook and the session-start digest stop injecting beliefs that were true when
+  recorded and are wrong now.** A derived belief closes only when a later derive supersedes the
+  same key, which rarely happens, so `memware main branch current version: 0.4.0`, `built memware
+  wheel version: 0.5.0` and `memware test suite test count: 91 tests` reached every session under
+  "Known facts (currently valid…)" long after the repository moved on. None of them is an orphan,
+  so `retract --orphaned` and `prune` never touched them. Both unsolicited readers now leave out:
+  - a derived belief `memware.volatile` classifies, **unambiguously**, as a **measurement** (a
+    count or total of rows, records, tests, files, lines, commits, duplicates, accounts, users or
+    downloads; a magnitude or a comma-grouped number of 1,000 or more beside one; an "N of M"
+    over one; a relation that is exactly progress, coverage or null rate), a **moving version**
+    (a version called current, latest, built, installed, deployed, released or on main) or a
+    **status** (a relation that is exactly status, state or progress, with a status word for a
+    value or an instance for a subject: `card t_cd03d14d status: review`, `graph_health scan
+    status: …`). Precision over recall: hiding a durable fact silently removes something someone
+    relied on, while a stale belief that slips through is the old behaviour and `memware beliefs
+    retract ID` removes it. So a qualifier (slo, sla, target, threshold, budget, commitment,
+    fail under, min, max, limit, default, initial, final, required, desired, every, schedule,
+    check, and their like) always means durable, and anything in doubt is durable:
+    `api p99 latency slo: 200ms`, `ci status check: required`, `order state machine final state:
+    completed`, `main branch python version: 3.12`. `tests/data/volatility_cases.jsonl` holds 115
+    labeled cases: none of the 69 durable ones is left out, and the 13 volatile ones the narrow
+    rules miss are kept there, marked, so the tradeoff is explicit. The derive prompt carries
+    the fuzzy judgment for new beliefs, where the model sees the excerpt. It is left out by
+    default; `memware config inject.volatile_days N` injects one while it is younger than N days.
+    The default is 0 (never) because the reported version belief was one day old and already
+    wrong, so no multi-day window would have kept it out;
+  - inside a project whose manifest declares a version (`pyproject.toml`, including a hatch
+    `[tool.hatch.version] path`; `package.json`; `Cargo.toml`), a belief about the project's own
+    version that differs from it (**contradicted**), and a belief naming an older version of
+    the project beside its name, such as `memware 0.4.0 config format` (**older version**).
+    A declared version is checked only against beliefs whose subject names the package that
+    declares it, never another package's; a version a build tool computes (setuptools-scm) and
+    a `0.0.0` placeholder are never checked against. Only the project root's manifests are
+    read, not a monorepo's nested packages.
+  A person stating a fact is a decision to keep it: a belief with reliability above derive's
+  0.5, or a source that is not a `memware:session/` pointer (`remember`, `memware assert`), is
+  exempt from all of it. So is a derived belief a person has since confirmed, by asserting the
+  same value (`memware assert`, `remember`) or approving it in `memware review`: that is how a
+  fact the gate left out is kept. The confirmation is a row beside the belief; the belief row
+  keeps its session source. Nothing is deleted or hidden: a left-out belief stays in `memware
+  beliefs`, `recall` and the MCP tools, which now mark it with `volatile` (its class). The
+  classification is regex and word lists, no model and no network, because the prompt hook runs
+  it on every prompt.
+- **The Hermes provider applies the same rule.** Its `prefetch` leaves out a belief memware
+  marks `volatile` (honouring `inject.volatile_days`) and its header no longer claims facts are
+  currently valid. The staged upstream copy gets the equivalent change and still works against a
+  memware that predates the mark. Neither has a project directory, so the manifest rules apply
+  only to the Claude Code hooks.
+
+### Changed
+- **The injected blocks say what they are.** The prompt hook's header is now `Known facts from
+  your memory ledger, each with the date it was recorded:` and the digest's `Beliefs about this
+  project from your memory ledger, each with the date it was recorded:`; each line ends
+  `(recorded YYYY-MM-DD)` instead of `(since …)`. Neither claims a fact is currently valid.
 
 ## [0.6.1] - 2026-09-16
 

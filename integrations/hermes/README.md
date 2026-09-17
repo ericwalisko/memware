@@ -10,7 +10,7 @@ hermes memory setup                                   # select "memware"; accept
 
 | hook / tool | what it does |
 |---|---|
-| `prefetch` | injects the few currently valid beliefs relevant to the turn (never a superseded value) |
+| `prefetch` | injects the few current beliefs relevant to the turn, each with the date it was recorded (never a superseded value, and never a derived measurement, moving version or status; see [what injection leaves out](../../docs/integrations.md#what-injection-leaves-out)) |
 | `sync_turn` | appends the completed turn to `<hermes_home>/memware/sessions/<id>.jsonl` and indexes it, in a daemon thread |
 | `on_session_end` / `on_pre_compress` | flushes and re-syncs the session file |
 | `on_memory_write` | mirrors built-in `MEMORY.md` adds into the ledger as human-stated beliefs |
