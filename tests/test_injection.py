@@ -571,8 +571,8 @@ def test_the_notice_is_held_by_the_store_not_the_home(db, app, capsys, monkeypat
 
 
 def test_the_notice_takes_no_lock_once_given_and_never_waits_long(db, app, capsys, monkeypatch):
-    """Another writer holding the store: the first notice still comes within a second (its one
-    write gives up after a quarter second), and once given, a session start only reads."""
+    """Another writer holding the store: the first notice still comes well inside the hook's 5 s
+    (its one write gives up after a quarter second), and once given, a session start only reads."""
     import sqlite3
     import time
 
@@ -584,7 +584,9 @@ def test_the_notice_takes_no_lock_once_given_and_never_waits_long(db, app, capsy
     try:
         started = time.perf_counter()
         assert _notice(monkeypatch, capsys, db, app).startswith("memware no longer injects 4")
-        assert time.perf_counter() - started < 1.0
+        # A quarter second of wait plus the count: 0.3 s on a laptop, and past 1 s on a macOS CI
+        # runner under coverage, twice in #40's CI. A wait for the lock would take 5 s or more.
+        assert time.perf_counter() - started < 2.0
     finally:
         holder.execute("ROLLBACK")
     assert _notice(monkeypatch, capsys, db, app).startswith("memware no longer injects 4")

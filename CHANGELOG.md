@@ -6,7 +6,119 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`memware scan` counts every place a value is still stored**
+  ([#37](https://github.com/ericwalisko/memware/issues/37)). `prune --containing` reads only
+  indexed transcripts, so a transcript kept out of the index, by `capture.exclude` above all, was
+  one no memware command could look inside, and verifying a removal meant leaving the tool. `scan`
+  walks the transcript source on disk and reports each file holding the value: how many times,
+  whether it is indexed, and if not why (`capture.exclude`, the no-capture list, an ignore
+  marker, or not synced yet). Every file is read whole, and a value escaped inside a JSON string
+  counts too. It checks the store file and its `-wal` for the value's bytes, as given and in any
+  case, counts the turns, beliefs and other rows holding it, and reads the search index's own
+  pages for the value's terms, including those only a deleted row left, which SQLite's
+  vocabulary view does not show. It also reads the `pre-restore` copies beside the store, and with
+  `--backups` the mirrored transcripts and snapshot files in the backup destination. A path it
+  cannot read is listed with the reason. It is read-only: the store's bytes are counted before it
+  is opened, and it is opened so that no write-ahead log is ever checkpointed, and a symlinked
+  store is followed to its log. It prints paths and counts, never the value or the text around
+  it. The value comes from a prompt that does not echo it, `--value-file`, or stdin (`-`), so it
+  stays out of `ps`, shell history and, run outside Claude Code, any transcript. `--json` is
+  supported. Exit status: 0 nothing found, 1 found, 2 nothing found but a path could not be read.
+- **`memware prune --scrub`** rewrites the store file, removing nothing: the command a prune prints
+  when its scrub could not finish.
+- **`memware beliefs --stale`** lists the current beliefs injection leaves out, each with its
+  reason (`measurement`, `moving_version`, `status`, `contradicted`, `older_version`) and why
+  (`pyproject.toml says 0.6.1`). `--cwd DIR` names the project whose manifest is checked.
+- **`memware beliefs retract` takes `--stale` or belief ids**, as a dry run unless `--apply`, as
+  `--orphaned` does. Rows are kept and each retraction records its reason. Neither reopens what
+  a retracted belief had superseded, because that value is older still. An id that names a
+  belief no longer current is refused with the reason and nothing is written: it reaches no
+  prompt already, and retracting it would move the end of its interval.
+- **`memware stats` counts the beliefs injection leaves out, by reason** (`injection.left_out`
+  under `--json`), with the window and the manifest versions it read.
+- **An upgrading user is told once.** The session-start notice says how many beliefs are no
+  longer injected and names `memware beliefs --stale`. The marker is a row in the store's own
+  `notice` table, so a memware home that takes no write cannot repeat it or keep it from
+  firing. Once it is recorded, a session start only reads it, taking no lock; the one write
+  waits at most a quarter second for another writer. It never creates a store.
+- **`memware config inject.volatile_days`** refuses a value that is not a number of days, 0 or
+  more (`7d`, `-3`), exits 2 and writes nothing.
+
 ### Fixed
+- **An applied `memware prune` removes the text from the store file, not only from every
+  query** ([#36](https://github.com/ericwalisko/memware/issues/36)). A deleted turn stayed
+  readable in the file: SQLite frees a deleted row's page without zeroing it unless
+  `secure_delete` is on, and builds disagree on that default (Homebrew's Python leaves it off). A
+  full-text index keeps a deleted row's words on its pages, lowercased, until it merges, which
+  happens on every build and which a case-sensitive search of the file cannot see. A backup
+  snapshot taken after the prune copied those index pages, and the `-wal` file kept older copies
+  of pages while another process held the store open. And a prune that retracted a belief wrote
+  its own command line, text included, into the retraction's reason. Now the store turns
+  `secure_delete` on for every connection, a retraction's reason reads `(value withheld)` where
+  the text was (and a reason an older prune wrote is rewritten), and an applied prune scrubs the
+  file when it removed anything or copies of the text are left that no row accounts for: it
+  merges both search indexes, rebuilds one a merge left holding a deleted row's terms, runs
+  `VACUUM`, and empties the write-ahead log. It then checks the file and prints what it still
+  holds. It exits 1, naming the files and counts and printing `memware prune --scrub` to finish,
+  when copies remain or the scrub failed (a lock, a full disk); the removal itself stays
+  committed. On a 50,000-turn store a matching prune takes 3–4 s instead of 1.2 s, and one
+  matching nothing 1.1 s instead of 0.65 s. Standard error names each scrub step, and says where
+  copies may remain that memware never changes: backups made before now and the transcript files.
+  `--json` adds `beliefs_redacted`, `beliefs_retracted_by_redaction`,
+  `confirmation_sources_redacted`, `retraction_reasons_redacted`, `store_scrubbed`, `scrub_error`,
+  `left_in_store` and `backup_dest`.
+- **An applied `memware prune` with a text selector redacts that text in beliefs.** A belief that
+  quoted a pasted secret kept it: prune never rewrote a belief row. Now every belief whose subject,
+  relation, value or free-text source holds the text, matched as the selector matches turns, has
+  it replaced with `[removed]`, in any status (committed, candidate, rejected, retracted,
+  superseded) and whether derive filed it or a person stated it, because removing a secret
+  outranks the rule that a person's belief is never retracted. The key follows a rewritten subject
+  or relation. A committed belief is also retracted, with the reason `memware prune: text redacted
+  (value withheld)`, by its status alone: its id, `valid_from`, `valid_to` and supersession links
+  stay, and no older value is reopened. A belief already retracted keeps its retraction. A
+  confirmation's source that quoted the text is redacted too. A source memware wrote itself
+  (derive's `memware:session/<id>/turn/<n>` pointer, the Hermes provider's `hermes built-in memory
+  (…)`, an approval's `review #N approved`) is provenance and is never matched or rewritten. An
+  open review whose candidate or incumbent is redacted is closed with the decision `redacted`, and
+  approving a redacted or retracted candidate is refused. No belief row is deleted, and none is
+  merged, even one redaction makes identical to another. The dry run lists the beliefs it would
+  redact by id. An `--apply` whose redaction would rewrite more than 20 beliefs, or any belief for
+  a text shorter than 6 characters, is refused whole: nothing is written, the counts are printed,
+  it exits 2, and `--allow-broad-redaction` applies it anyway. On a synthetic ledger of 330
+  beliefs, `api` would have redacted 157 and `memware` 310, 300 of them by rewriting derive's
+  session pointers.
+- **No prune output prints the text it removes.** The retraction a prune cascades into listed the
+  beliefs it retracts as they were, so a derived `staging api key = <secret>` printed the secret,
+  in the dry run and in `--apply`, in every view. Every field of those records, their keys, the
+  notes and any error now read `[removed]` where the text was; `--json` withholds it in values
+  only, so the JSON stays valid.
+- **A hook's sync gives up quietly instead of waiting a minute.** `memware sync --from-hook` (the
+  PreCompact hook runs it in the foreground with a 30 s timeout) waits 5 s for the lock and exits
+  0 with nothing printed when it does not get it; the next sync catches up from each cursor.
+- **A prune never prints or records its text.** The notes a selector that matched nothing prints
+  said `no turn contains 'VALUE'`; they now say `the text`. A text selector written without its
+  text asks for it without echoing it, or reads `--value-file` or stdin. A value is one line:
+  trailing line breaks are dropped and one that still holds a line break is refused, so a value
+  file with a stray blank line cannot make `scan` report a clean store.
+- **Writes that must land wait out a long write; recall never does.** A store connection waits
+  up to 60 s for another's write lock by default (was 5 s), and its caller can choose a shorter
+  wait. On a 150,000-turn store the prune and its scrub held the lock past 5 s, so a hook's sync
+  failed with `database is locked` and a Hermes memory write was lost; both now wait and land.
+  Recording a use (Hermes prefetch, MCP recall, `memware recall`) waits at most 250 ms and is
+  skipped when the lock is not free, and the scrub never waits for a reader while holding the
+  lock: with a reader held during a 150,000-turn prune, Hermes prefetch took at most 0.33 s
+  (10.6 s before).
+- **A hook never waits out a schema upgrade.** The first open after an upgrade that adds a table
+  (this release adds `notice` and `confirmation`) takes the write lock. From the prompt hook, the
+  session-start digest or the notice, with another writer holding the lock, that open waited 12 s,
+  past the hooks' 5 s and 10 s timeouts. A hook now waits 250 ms, says nothing that time, and the
+  next open, a sync's or any command's, adds the tables. The notice's own write and a person's
+  confirmation follow the same rule for writes nothing depends on.
+- **A prune does not report a live row's search term as a copy it failed to remove.** Pruning
+  `hunter2` while a turn says `Hunter2` left the term `hunter2` on an index page for that turn;
+  the check now counts turns and beliefs that hold the text in another case and reports them,
+  exits 0, and does not scrub again on later prunes.
 - **`derive` no longer files a measurement as a durable belief, and keeps a short setting**
   ([#38](https://github.com/ericwalisko/memware/issues/38)). The prompt rejected events,
   predictions and intentions, but nothing rejected a dated quantity, so `the table | row count =
@@ -69,25 +181,6 @@ All notable changes to this project are documented here. The format follows
   currently valid. The staged upstream copy gets the equivalent change and still works against a
   memware that predates the mark. Neither has a project directory, so the manifest rules apply
   only to the Claude Code hooks.
-
-### Added
-- **`memware beliefs --stale`** lists the current beliefs injection leaves out, each with its
-  reason (`measurement`, `moving_version`, `status`, `contradicted`, `older_version`) and why
-  (`pyproject.toml says 0.6.1`). `--cwd DIR` names the project whose manifest is checked.
-- **`memware beliefs retract` takes `--stale` or belief ids**, as a dry run unless `--apply`, as
-  `--orphaned` does. Rows are kept and each retraction records its reason. Neither reopens what
-  a retracted belief had superseded, because that value is older still. An id that names a
-  belief no longer current is refused with the reason and nothing is written: it reaches no
-  prompt already, and retracting it would move the end of its interval.
-- **`memware stats` counts the beliefs injection leaves out, by reason** (`injection.left_out`
-  under `--json`), with the window and the manifest versions it read.
-- **An upgrading user is told once.** The session-start notice says how many beliefs are no
-  longer injected and names `memware beliefs --stale`. The marker is a row in the store's own
-  `notice` table, so a memware home that takes no write cannot repeat it or keep it from
-  firing. Once it is recorded, a session start only reads it, taking no lock; the one write
-  waits at most a quarter second for another writer. It never creates a store.
-- **`memware config inject.volatile_days`** refuses a value that is not a number of days, 0 or
-  more (`7d`, `-3`), exits 2 and writes nothing.
 
 ### Changed
 - **The injected blocks say what they are.** The prompt hook's header is now `Known facts from

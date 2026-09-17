@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from memware.residue import free_text_source
 from memware.store import Store, now_iso
 from memware.volatile import human_stated, volatility
 
@@ -74,9 +75,11 @@ def _confirm(store: Store, row: sqlite3.Row, source: str | None) -> None:
     """Record that a person stated a belief derive wrote. The belief row is not touched: its
     source still says where derive read it."""
     if not human_stated(row["reliability"], row["source"]):
-        store.conn.execute(
+        # Written in the transaction that writes the belief, which already holds the lock, so it
+        # never waits on its own; outside one it waits briefly and is skipped when busy.
+        store.try_write(
             "INSERT OR IGNORE INTO confirmation(belief_id, confirmed_at, source) VALUES (?,?,?)",
-            (row["id"], now_iso(), source),
+            [(row["id"], now_iso(), source)],
         )
 
 
@@ -287,6 +290,12 @@ def approve(store: Store, review_id: int) -> Result:
         if rv is None:
             raise LookupError(f"no open review {review_id}")
         cand = conn.execute("SELECT * FROM belief WHERE id=?", (rv["belief_id"],)).fetchone()
+        if cand["status"] != "candidate":
+            raise NotApprovable(
+                f"review {review_id}: its candidate is {cand['status']}, not pending"
+            )
+        if any(REDACTED in str(cand[c]) for c in _REDACTABLE):
+            raise NotApprovable(f"review {review_id}: a prune redacted its candidate")
         incumbent = _current(store, cand["key"])
         if incumbent is not None and incumbent["id"] != cand["id"]:
             conn.execute(
@@ -534,7 +543,8 @@ def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
     """Carry out ``plan``. The caller holds the write transaction and planned inside it.
 
     A retracted belief is closed at its own start, as a rejected candidate is, and keeps its
-    row, so ``history`` still shows it. No belief row is deleted."""
+    row, so ``history`` still shows it. No belief row is deleted; a prune rewrites one only to
+    redact its text (:func:`redact`)."""
     conn, ts = store.conn, now_iso()
     notes: dict[int, list[str]] = {}
     for p in plan.reopen:
@@ -559,6 +569,179 @@ def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
             "INSERT OR REPLACE INTO retraction(belief_id, retracted_at, reason) VALUES (?,?,?)",
             (r["id"], ts, "; ".join([why, *notes.get(r["id"], [])])),
         )
+
+
+REDACTED = "[removed]"
+"""What ``memware prune --apply`` writes in a belief in place of the text it removes."""
+
+REDACT_REASON = "memware prune: text redacted (value withheld)"
+"""The retraction reason of a committed belief a prune redacted, and the note on a review it
+closes."""
+
+REDACT_MAX_BELIEFS = 20
+"""The most beliefs an applied prune redacts without ``--allow-broad-redaction``. A pasted secret
+reaches a few beliefs: those derive filed from the sessions that quoted it and any a person wrote.
+A word reaches many: on a synthetic ledger of 330 beliefs, ``api`` reached 157 and ``memware``
+310. Past this many the text is more likely a word than a secret, and a rewrite of every belief
+naming it cannot be undone."""
+
+REDACT_MIN_CHARS = 6
+"""The shortest text an applied prune redacts beliefs for without ``--allow-broad-redaction``.
+Credentials are longer; ``a``, ``api``, ``key`` and ``token`` are not credentials, and they match
+inside other words. Six still admits a short password such as ``hunter2``."""
+
+_REDACTABLE = ("subject", "relation", "value")
+
+
+@dataclass(frozen=True)
+class Redaction:
+    """What :func:`redact` does, or would do. Ids only: the text is usually a secret."""
+
+    beliefs: list[int]
+    """Beliefs, in any status, whose subject, relation, value or free-text source holds the text."""
+    retracted: list[int]
+    """Those that were committed, which the redaction retracts."""
+    confirmations: list[int]
+    """Beliefs whose confirmation's free-text source holds the text."""
+    reviews: list[int] = field(default_factory=list)
+    """Open reviews whose candidate or incumbent it rewrites, which it closes."""
+
+    @property
+    def rewrites(self) -> int:
+        """Beliefs whose row or confirmation it rewrites."""
+        return len(set(self.beliefs) | set(self.confirmations))
+
+
+class NotApprovable(LookupError):
+    """A review whose candidate cannot become a belief: retracted, rejected, or redacted by a prune.
+    A ``LookupError``, so a review sync skips it as it skips a review already decided."""
+
+
+class RedactionRefused(ValueError):
+    """An applied redaction too broad to be a secret's; see :func:`redaction_refusal`."""
+
+    def __init__(self, reason: str, redaction: Redaction) -> None:
+        super().__init__(reason)
+        self.redaction = redaction
+
+
+def redaction_refusal(redaction: Redaction, text: str) -> str | None:
+    """Why an applied prune should refuse this redaction, or None. It refuses when the redaction
+    would rewrite more than :data:`REDACT_MAX_BELIEFS` beliefs, or any belief for a text shorter
+    than :data:`REDACT_MIN_CHARS`: whole, never in part, and never on a dry run, which only says."""
+    n = redaction.rewrites
+    if n > REDACT_MAX_BELIEFS:
+        return f"it would redact {n:,} beliefs, more than {REDACT_MAX_BELIEFS}"
+    if n and len(text) < REDACT_MIN_CHARS:
+        return (
+            f"the text is {len(text)} characters, shorter than {REDACT_MIN_CHARS}, and it would "
+            f"redact {n:,} belief{'' if n == 1 else 's'}"
+        )
+    return None
+
+
+def _holds(field_text: object, text: str, prefix: bool) -> bool:
+    if not isinstance(field_text, str):
+        return False
+    return field_text.startswith(text) if prefix else text in field_text
+
+
+def _redacted(text: str | None, removed: str, prefix: bool) -> str | None:
+    if text is None:
+        return None
+    if prefix:
+        return REDACTED + text[len(removed) :] if text.startswith(removed) else text
+    return text.replace(removed, REDACTED)
+
+
+def redact(store: Store, text: str, *, prefix: bool = False, apply: bool = False) -> Redaction:
+    """Replace ``text`` with :data:`REDACTED` in every belief row that holds it, whatever its
+    status, human-stated or derived: removing a secret outranks the rule that a prune never touches
+    what a person stated. Matching is literal and case-sensitive, anywhere in a field, or with
+    ``prefix`` only at its start, as the prune's selector matches turns. The subject, relation and
+    value are rewritten, and so is a source when it is free text; a source memware wrote, such as
+    derive's session pointer, is never matched or rewritten (:func:`memware.residue.free_text_source`).
+    The key follows a rewritten subject or relation, and a confirmation's free-text source is
+    rewritten the same way.
+
+    A committed belief is also retracted, with :data:`REDACT_REASON`, by its status alone: its
+    ``valid_to``, ``superseded_by`` and every other link stay as they are, and no predecessor is
+    reopened, because the value was not shown wrong, only secret. A belief already retracted
+    keeps its retraction. An open review whose candidate or incumbent is rewritten is closed, with
+    the decision ``redacted``, so a redacted candidate cannot be approved over the belief it
+    challenged. No row is deleted and none is merged, even one the redaction makes identical to
+    another. ``belief_fts`` follows through its update trigger.
+
+    Without ``apply`` nothing is written. The caller holds the write transaction and checks
+    :func:`redaction_refusal` first."""
+    conn = store.conn
+    op = "= 1" if prefix else "> 0"
+    held = " OR ".join(f"instr(coalesce({c}, ''), ?1) {op}" for c in (*_REDACTABLE, "source"))
+    rows = [
+        r
+        for r in conn.execute(
+            f"SELECT id, key, status, source, {', '.join(_REDACTABLE)} FROM belief "
+            f"WHERE {held} ORDER BY id",
+            (text,),
+        )
+        if any(_holds(r[c], text, prefix) for c in _REDACTABLE)
+        or (free_text_source(r["source"]) and _holds(r["source"], text, prefix))
+    ]
+    confirmations = [
+        c
+        for c in conn.execute(
+            f"SELECT belief_id, source FROM confirmation WHERE instr(coalesce(source, ''), ?1) {op} "
+            "ORDER BY belief_id",
+            (text,),
+        )
+        if free_text_source(c["source"])
+    ]
+    ids = [int(r["id"]) for r in rows]
+    reviews = [
+        int(rv[0])
+        for rv in conn.execute(
+            f"SELECT id FROM review WHERE decision IS NULL AND (belief_id IN ({','.join('?' * len(ids))}) "
+            f"OR incumbent_id IN ({','.join('?' * len(ids))})) ORDER BY id",
+            [*ids, *ids],
+        )
+    ]
+    plan = Redaction(
+        ids,
+        [int(r["id"]) for r in rows if r["status"] == "committed"],
+        [int(c["belief_id"]) for c in confirmations],
+        reviews,
+    )
+    if not apply:
+        return plan
+    ts = now_iso()
+    for r in rows:
+        new = {c: _redacted(r[c], text, prefix) for c in _REDACTABLE}
+        source = (
+            _redacted(r["source"], text, prefix) if free_text_source(r["source"]) else r["source"]
+        )
+        rekeyed = (new["subject"], new["relation"]) != (r["subject"], r["relation"])
+        key = make_key(str(new["subject"]), str(new["relation"])) if rekeyed else r["key"]
+        conn.execute(
+            "UPDATE belief SET subject=?, relation=?, value=?, source=?, key=? WHERE id=?",
+            (new["subject"], new["relation"], new["value"], source, key, r["id"]),
+        )
+        if r["status"] == "committed":
+            conn.execute("UPDATE belief SET status='retracted' WHERE id=?", (r["id"],))
+            conn.execute(
+                "INSERT OR IGNORE INTO retraction(belief_id, retracted_at, reason) VALUES (?,?,?)",
+                (r["id"], ts, REDACT_REASON),
+            )
+    for c in confirmations:
+        conn.execute(
+            "UPDATE confirmation SET source=? WHERE belief_id=?",
+            (_redacted(c["source"], text, prefix), c["belief_id"]),
+        )
+    for review_id in reviews:
+        conn.execute(
+            "UPDATE review SET decision='redacted', decided_at=?, reason=reason || ? WHERE id=?",
+            (ts, f"; closed: {REDACT_REASON}", review_id),
+        )
+    return plan
 
 
 def retract(
@@ -592,12 +775,14 @@ def retract(
     return plan
 
 
-def touch(store: Store, belief_ids: list[int]) -> None:
-    """Record a retrieval (the testing effect): used beliefs rank higher later."""
+def touch(store: Store, belief_ids: list[int]) -> bool:
+    """Record a retrieval (the testing effect): used beliefs rank higher later. Recall runs in the
+    foreground, so the count is skipped, and False returned, when another writer holds the lock
+    past :data:`memware.store.SHORT_WAIT_MS` (:meth:`memware.store.Store.try_write`)."""
     if not belief_ids:
-        return
+        return True
     ts = now_iso()
-    store.conn.executemany(
+    return store.try_write(
         "UPDATE belief SET use_count=use_count+1, last_used=? WHERE id=?",
         [(ts, i) for i in belief_ids],
     )

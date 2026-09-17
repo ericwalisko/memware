@@ -8,14 +8,28 @@ is new. Transcripts themselves are never modified.
 from __future__ import annotations
 
 import os
+import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from memware.ledger import Retraction, apply_retraction, plan_retraction
+from memware.ledger import (
+    Redaction,
+    RedactionRefused,
+    Retraction,
+    apply_retraction,
+    plan_retraction,
+    redact,
+    redaction_refusal,
+)
 from memware.passage import index_turn
-from memware.store import Store, now_iso
+from memware.residue import FileCheck, check_file, file_windows, value_tokens
+from memware.store import Scrubbed, Store, now_iso
+
+WITHHELD = "(value withheld)"
+"""What a prune writes in place of its text wherever it records itself, such as a retraction's
+reason. The text is usually a secret, and writing it back would undo the prune."""
 
 
 @dataclass(frozen=True)
@@ -212,18 +226,9 @@ def _file_holds(path: Path, marker: str, *, chunk_bytes: int = 1 << 20) -> bool:
     """True if ``marker`` appears anywhere in the file, which is read whole, a chunk at a time.
 
     Unlike :func:`file_contains`, a head check, this is the ground truth ``prune --containing``
-    decides by. Each chunk is searched together with the last ``len(marker) - 1`` bytes before
-    it, so a marker that spans a chunk boundary still matches."""
+    decides by. A marker that spans a chunk boundary still matches (:func:`file_windows`)."""
     needle = marker.encode("utf-8")
-    overlap = len(needle) - 1
-    carry = b""
-    with path.open("rb") as fh:
-        while chunk := fh.read(chunk_bytes):
-            window = carry + chunk
-            if needle in window:
-                return True
-            carry = window[-overlap:] if overlap else b""
-    return False
+    return any(needle in w for w in file_windows(path, len(needle) - 1, chunk_bytes=chunk_bytes))
 
 
 def sync_file(
@@ -352,6 +357,24 @@ class Pruned:
     missing: tuple[str, ...] = ()
     """Sources ``containing`` could not read because the transcript file is gone. Their turns
     may still be indexed, and only a turn selector reaches them."""
+    redaction: Redaction | None = None
+    """The beliefs that hold the selector's text, matched as the selector matches, which the prune
+    redacts (:func:`memware.ledger.redact`). None for a ``glob`` alone, which has no text."""
+    reasons_redacted: int = 0
+    """Retraction reasons that held the text and now read :data:`WITHHELD` in its place. A prune in
+    memware 0.6.0 and 0.6.1 wrote its whole command line into each reason."""
+    scrubbed: Scrubbed | None = None
+    """How the store file was rewritten. None for a dry run, a scrub that failed, or an applied
+    prune that removed nothing and found no copy of its text left to scrub."""
+    scrub_error: str | None = None
+    """Why the scrub did not finish. The removal had already committed, so the removed text is out
+    of every query and may still be in the file."""
+    left: FileCheck | None = None
+    """What the store file and its log still hold of the text once an applied prune is done. None
+    for a dry run, a ``glob`` alone, or a store with no file."""
+    redaction_refusal: str | None = None
+    """Why an applied prune would refuse this redaction as too broad, or None. An applied prune
+    that went ahead did so with ``allow_broad_redaction``."""
 
 
 @dataclass(frozen=True)
@@ -412,6 +435,8 @@ def prune(
     turns_starting_with: str | None = None,
     apply: bool = False,
     reason: str = "memware prune",
+    progress: Callable[[str], None] | None = None,
+    allow_broad_redaction: bool = False,
 ) -> Pruned:
     """Un-index whole sources (``glob`` and/or ``containing``) or single turns
     (``turns_containing`` or ``turns_starting_with``), and retract the beliefs derived from every
@@ -422,8 +447,20 @@ def prune(
     literally and case-sensitively, and a turn selector takes no other selector.
 
     Without ``apply`` nothing is written and the result is what would happen. With it, the
-    deletes and the retraction commit together. Sessions are read before the delete: a deleted
-    turn no longer says which session it came from."""
+    deletes, the retraction, the redaction of every belief holding the text
+    (:func:`memware.ledger.redact`), and the rewrite of any retraction reason holding it commit
+    together. Sessions are read before the delete: a deleted turn no longer says which session it
+    came from. ``reason`` is recorded as it is given, so it must not hold the text.
+
+    An applied prune then scrubs the store file (:meth:`memware.store.Store.scrub`), reporting each
+    step to ``progress``, when it removed anything, or when its text is still in the file with no
+    live row to account for it, as a prune in memware 0.6.1 and earlier left it. A scrub that fails is
+    reported in ``scrub_error``, not raised. Last, ``left`` checks what the file still holds.
+
+    An applied prune whose redaction is too broad to be a secret's
+    (:func:`memware.ledger.redaction_refusal`) raises :class:`memware.ledger.RedactionRefused`
+    before it writes anything, unless ``allow_broad_redaction``; a dry run reports the refusal
+    in ``redaction_refusal``."""
     missing: list[str] = []
     scanned = 0
     turn_selectors = [t for t in (turns_containing, turns_starting_with) if t is not None]
@@ -431,6 +468,7 @@ def prune(
         raise ValueError("a turn selector takes no other selector")
     if turn_selectors and not turn_selectors[0]:
         raise ValueError("an empty turn selector would match every turn")
+    text = turns_containing or turns_starting_with or containing
     if turns_containing is not None:
         sources: list[str] = []
         doomed, args = "instr(text, ?) > 0", [turns_containing]
@@ -439,12 +477,16 @@ def prune(
         doomed, args = "instr(text, ?) = 1", [turns_starting_with]
     else:
         sources, scanned, missing = _matching_sources(store, glob, containing)
-        if not sources:
-            return Pruned({}, 0, plan_retraction(store, []), apply, scanned, tuple(missing))
         doomed, args = f"source IN ({','.join('?' * len(sources))})", sources
     conn = store.conn
+    redacted, redaction, refusal = 0, None, None
     conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
     try:
+        if text:  # decided before anything is deleted, so a refusal writes nothing
+            planned = redact(store, text, prefix=turns_starting_with is not None)
+            refusal = redaction_refusal(planned, text)
+            if apply and refusal and not allow_broad_redaction:
+                raise RedactionRefused(refusal, planned)
         counts = dict.fromkeys(sources, 0)
         for source, n in conn.execute(
             f"SELECT source, count(*) FROM turn WHERE {doomed} GROUP BY source", args
@@ -471,13 +513,68 @@ def prune(
         plan = plan_retraction(store, emptied)
         if apply:
             apply_retraction(store, plan, reason=reason)
+        if text:
+            # after the retraction, so a belief it retracted keeps that retraction
+            redaction = redact(store, text, prefix=turns_starting_with is not None, apply=apply)
+        if apply and text:
+            # as given, and as a 0.6.x prune's command line quoted it (repr escapes a backslash)
+            for form in dict.fromkeys([text, repr(text)[1:-1]]):
+                redacted += conn.execute(
+                    "UPDATE retraction SET reason = replace(reason, ?1, ?2) "
+                    "WHERE instr(reason, ?1) > 0",
+                    (form, WITHHELD),
+                ).rowcount
     except BaseException:
         conn.execute("ROLLBACK")
         raise
     finally:
         if conn.in_transaction:
             conn.execute("COMMIT")
-    return Pruned(counts if sources else {}, turns, plan, apply, scanned, tuple(missing))
+    result = Pruned(
+        counts if sources else {},
+        turns,
+        plan,
+        apply,
+        scanned,
+        tuple(missing),
+        redaction,
+        redacted,
+        redaction_refusal=refusal,
+    )
+    if not apply:
+        return result
+    rewrote = bool(redaction and (redaction.beliefs or redaction.confirmations))
+    return _scrub_after(
+        store, result, text, bool(turns or sources or redacted or rewrote), progress
+    )
+
+
+def _scrub_after(
+    store: Store,
+    result: Pruned,
+    text: str | None,
+    removed: bool,
+    progress: Callable[[str], None] | None,
+) -> Pruned:
+    """The scrub and the check that follow an applied prune: see :func:`prune`."""
+    on_disk = text is not None and str(store.path) != ":memory:"
+    tokens = value_tokens(text) if text is not None and on_disk else []
+    before = None
+    if not removed and text is not None and on_disk:
+        before = check_file(store.path, text, tokens, conn=store.conn)
+    if not removed and not (before and before.leftover):
+        return replace(result, left=before)
+    scrubbed, error = None, None
+    try:
+        scrubbed = store.scrub(progress)
+    except (sqlite3.Error, OSError) as e:
+        error = f"{type(e).__name__}: {e}"
+    left = (
+        check_file(store.path, text, tokens, conn=store.conn)
+        if text is not None and on_disk
+        else None
+    )
+    return replace(result, scrubbed=scrubbed, scrub_error=error, left=left)
 
 
 def prune_turns(

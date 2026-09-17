@@ -4,7 +4,8 @@ A derived belief cites ``memware:session/<id>/turn/<n>``. When that session leav
 by ``memware prune`` or by a sync that honours a marker, the belief loses its evidence and must
 stop reaching prompts. These pin the cascade from prune, the one-shot for beliefs that are
 already orphaned, the supersession repair, the dry-run default, and that no belief row is ever
-deleted. Every store here is synthetic, under the test's own tmp dir.
+deleted: a prune rewrites one only to redact the text it removes. Every store here is synthetic,
+under the test's own tmp dir.
 """
 
 from __future__ import annotations
@@ -152,7 +153,10 @@ def test_prune_dry_run_lists_the_cascade_and_writes_nothing(db, capsys):
 def test_prune_apply_retracts_and_the_belief_leaves_every_read_path(db, capsys):
     rows_before = _beliefs(db)
     code, out, err = _run(capsys, "--db", db, "prune", "--containing", MARKER, "--apply")
-    assert code == 0 and err == ""
+    assert code == 0
+    *progress, note = err.splitlines()  # the scrub's steps, then where the text may be left
+    assert all(line.startswith("scrubbing the store file: ") for line in progress)
+    assert "`memware scan`" in note
     assert "beliefs retracted : 2" in out and "predecessors reopened : 1" in out
 
     after = _beliefs(db)
@@ -186,7 +190,7 @@ def test_prune_apply_retracts_and_the_belief_leaves_every_read_path(db, capsys):
     assert timeline[0]["valid_to"] is None and timeline[0]["superseded_by"] is None
     assert timeline[1]["retracted_at"]
     assert timeline[1]["retracted_reason"] == (
-        f"session {EVAL} is no longer indexed (memware prune --containing '{MARKER}'); "
+        f"session {EVAL} is no longer indexed (memware prune --containing (value withheld)); "
         f"reopened #{timeline[0]['id']}"
     )
 
@@ -420,3 +424,21 @@ def test_plain_output_is_the_records_only(db, capsys):
     _, out, _ = _run(capsys, "--db", db, "prune", "--containing", MARKER, "--plain")
     lines = out.splitlines()
     assert [line.split("\t")[0] for line in lines] == ["retract", "retract", "reopen", "keep"]
+
+
+def test_a_prune_rewrites_a_belief_only_to_redact_its_text(db, capsys):
+    """No belief row is ever deleted, and a prune rewrites one only to replace the text it selects
+    with ``[removed]`` (decided on #40): every other belief keeps its subject, relation and value."""
+    with Store(db) as s:
+        noted = assert_belief(
+            s, "eval harness", "marker", f"prompts carry {MARKER}", reliability=0.9
+        ).belief_id
+    before = _beliefs(db)
+    code, _, _ = _run(capsys, "--db", db, "prune", "--containing", MARKER, "--apply")
+    after = _beliefs(db)
+    assert code == 0 and after.keys() == before.keys()
+    assert after[noted]["value"] == "prompts carry [removed]"
+    fields = ("subject", "relation", "value")
+    for i, row in before.items():
+        if i != noted:
+            assert [after[i][f] for f in fields] == [row[f] for f in fields]

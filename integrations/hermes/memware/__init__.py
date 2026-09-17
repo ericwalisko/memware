@@ -200,12 +200,13 @@ class MemwareProvider(MemoryProvider):
             return ""
         from memware.index import search_beliefs
         from memware.ledger import touch
-        from memware.store import Store
+        from memware.store import SHORT_WAIT_MS, Store
         from memware.volatile import Gate, window_days
 
         try:
             gate = Gate(volatile_days=window_days())
-            with Store(self._db) as s:
+            # before every turn: reads, and use counts it skips rather than wait for a writer
+            with Store(self._db, busy_timeout_ms=SHORT_WAIT_MS) as s:
                 # Ranked past k with no use recorded, so a left-out belief makes room for the
                 # next one; what is injected counts as used, as before.
                 ranked = search_beliefs(s, query, k=100, require_subject=True, record_use=False)
