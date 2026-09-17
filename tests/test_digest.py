@@ -152,10 +152,10 @@ def test_beliefs_whose_subject_names_the_directory_or_package(tmp_path, projects
     out = _digest(db, capsys, "--cwd", str(app))
     assert out.splitlines()[0].startswith("memware has 1 session and 3 beliefs for this project")
     assert out.endswith(
-        "Current beliefs about this project:\n"
-        "- checkout service listens on port: 8443 (since 2026-09-03)\n"
-        "- widgetry license: Apache-2.0 (since 2026-09-02)\n"
-        "- gadgetry ui bundler: vite (since 2026-08-20)\n"
+        "Beliefs about this project from your memory ledger, each with the date it was recorded:\n"
+        "- checkout service listens on port: 8443 (recorded 2026-09-03)\n"
+        "- widgetry license: Apache-2.0 (recorded 2026-09-02)\n"
+        "- gadgetry ui bundler: vite (recorded 2026-08-20)\n"
     )
     assert "MIT" not in out and "billing" not in out and "checkouts" not in out
 

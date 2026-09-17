@@ -103,8 +103,10 @@ Transcript recall is what backfill gives you immediately, and it is where most o
 
 Requires the `memware` CLI on your `PATH` (see [Install](#install)). Hooks:
 a `SessionStart` hook catches up any session whose `SessionEnd` was skipped (some environments force-kill Claude Code — a worktree manager may `SIGKILL` it — and a kill cannot run `SessionEnd`); a second one injects `memware digest`, a short block with this project's recent sessions and beliefs and a line pointing at `recall`; `SessionEnd`/`PreCompact` sync the transcript into the index; an optional `UserPromptSubmit`
-hook injects the handful of currently valid beliefs whose subject the prompt names (beliefs
-only — transcript search is on demand through the MCP tools). Set `MEMWARE_DB` to move the
+hook injects the handful of beliefs whose subject the prompt names, each with the date it was
+recorded (beliefs only — transcript search is on demand through the MCP tools). Neither block
+injects a derived measurement, moving version or status, or a version the project's manifest
+overrules; `memware beliefs --stale` lists what they leave out. Set `MEMWARE_DB` to move the
 store. Start a session with `MEMWARE_NO_CAPTURE=1` to keep it out of the index and the backup
 mirror: the hooks list its transcript, and every sync and backup skips what is listed. A session
 that runs no memware hook cannot be recognised that way. See

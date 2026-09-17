@@ -106,6 +106,9 @@ class Hit:
     For turn hits ``text`` is the matching passage or passages rather than the whole
     turn; ``passage_id`` is the best-scoring one and ``offset`` the character where
     the quoted text starts inside the turn.
+
+    For belief hits ``volatile`` is the class (:mod:`memware.volatile`) of a derived belief
+    that was a measurement, a moving version or a status when recorded, and None otherwise.
     """
 
     id: int
@@ -121,6 +124,7 @@ class Hit:
     snippet: str | None = None
     passage_id: int | None = None
     offset: int | None = None
+    volatile: str | None = None
 
 
 def fts_query(text: str, max_terms: int = 24) -> str:
@@ -267,18 +271,22 @@ def search_beliefs(
     record_use: bool = True,
     require_subject: bool = False,
 ) -> list[Hit]:
-    """Top-k *currently valid, committed* beliefs. Superseded values never surface.
+    """Top-k *current, committed* beliefs. Superseded values never surface. A derived belief that
+    was volatile when recorded still surfaces, marked with its class in ``volatile``.
 
     ``require_subject=True`` keeps only beliefs whose *subject* shares a term with the
     query. Use it for unsolicited prompt-time injection: relation and value words
     ("decision", "recovery", "model") match almost any prompt, and a belief about
     the wrong subject is noise, not memory.
     """
+    from memware.ledger import confirmed_sql
+    from memware.volatile import volatility
+
     q = fts_query(query)
     if not q:
         return []
     rows = store.conn.execute(
-        "SELECT b.*, -bm25(belief_fts, 3.0, 1.0, 1.0) AS rel FROM belief_fts "
+        f"SELECT b.*, {confirmed_sql('b')}, -bm25(belief_fts, 3.0, 1.0, 1.0) AS rel FROM belief_fts "
         "JOIN belief b ON b.id = belief_fts.rowid "
         "WHERE belief_fts MATCH ? AND b.valid_to IS NULL AND b.status='committed' "
         "ORDER BY rel DESC LIMIT 100",
@@ -304,6 +312,7 @@ def search_beliefs(
             relation=r["relation"],
             ts=r["valid_from"],
             source=r["source"],
+            volatile=volatility(r),
         )
         for r in rows
     ]

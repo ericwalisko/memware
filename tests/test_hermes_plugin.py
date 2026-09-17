@@ -54,6 +54,28 @@ def test_prefetch_returns_only_current_beliefs(tmp_path):
     assert p.prefetch("") == ""
 
 
+def test_prefetch_leaves_out_a_derived_measurement_until_a_person_restates_it(tmp_path):
+    """The same gate as the prompt hook's: a derived measurement is marked volatile and not
+    injected; the header claims only the date. Restating it through the tool keeps it."""
+    from memware.ledger import assert_belief
+    from memware.store import Store
+
+    _, p = load(tmp_path)
+    with Store(p._db) as s:
+        for relation, value in (("test count", "91 tests"), ("license", "MIT")):
+            assert_belief(s, "memware repo", relation, value, source="memware:session/s/turn/1")
+    block = p.prefetch("memware repo")
+    assert "MIT" in block and "91 tests" not in block
+    assert block.startswith("Known facts from the memory ledger, each with the date")
+    assert "currently valid" not in block + p.system_prompt_block()
+
+    p.handle_tool_call(
+        "memware_remember",
+        {"subject": "memware repo", "relation": "test count", "value": "91 tests"},
+    )
+    assert "91 tests" in p.prefetch("memware repo")
+
+
 def test_sync_turn_is_non_blocking_and_indexes(tmp_path):
     _, p = load(tmp_path)
     p.sync_turn(

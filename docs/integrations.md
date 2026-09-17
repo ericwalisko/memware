@@ -24,9 +24,9 @@ Hooks (`hooks/hooks.json`):
 |---|---|---|
 | `SessionStart` | `memware sync` (catch-up) + `memware backup --if-stale 20`, then `memware derive --apply --auto --if-stale 24` (a no-op until `memware config derive.auto true`), all backgrounded | indexes any session whose `SessionEnd` never ran, then a throttled backup — see note |
 | `SessionStart` | `memware notice --from-hook`, in the foreground | until `memware setup` has asked about `derive` (setup last ran before 0.4.0 or never, and `derive.auto` is unset), shows one line under the session header saying so; reads only the config, and prints nothing once either is true, after a compaction, or when the config will not parse |
-| `SessionStart` | `memware digest --from-hook`, in the foreground (5 s timeout) | injects a block of at most 1,200 characters: a line pointing at `recall`, this project's 5 most recent sessions (date and first prompt), and the currently valid beliefs whose subject names the project; nothing for a project memware has no session for — see [the digest](#the-session-start-digest) |
+| `SessionStart` | `memware digest --from-hook`, in the foreground (5 s timeout) | injects a block of at most 1,200 characters: a line pointing at `recall`, this project's 5 most recent sessions (date and first prompt), and the beliefs whose subject names the project, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)); nothing for a project memware has no session for — see [the digest](#the-session-start-digest) |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
-| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few currently valid beliefs relevant to the prompt as `additionalContext` |
+| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext` |
 
 `SessionEnd` runs when Claude Code exits cleanly, but some environments **force-kill** it (a worktree/pane manager may `SIGKILL` the process group on close), and a `SIGKILL` cannot run any hook. The `SessionStart` hook covers that: it runs a bare `memware sync` — which catches up the configured `backup.transcript_src` (default `~/.claude/projects`) — plus a throttled backup, **backgrounded** so it never delays startup. So the previous session is indexed at the next start even if its `SessionEnd` was skipped; the raw transcript is durable on disk regardless.
 
@@ -65,9 +65,10 @@ transcripts in `~/.claude/projects/<the directory, every non-alphanumeric charac
 (under `$CLAUDE_CONFIG_DIR` when that is set), so only sessions from that directory count.
 Inside a git repository the project is the whole repository: the primary checkout and every
 live linked worktree, read from git's own files. The block lists the most recent sessions
-(`-k`, default 5) and the currently valid beliefs whose subject shares a whole word with the
-directory name, the repository name, or the package name in `pyproject.toml` or
-`package.json`, up to `--max-chars` (default 1,200). The session that is starting is left out.
+(`-k`, default 5) and the current beliefs whose subject shares a whole word with the
+directory name, the repository name, or the package name in `pyproject.toml`, `package.json` or
+`Cargo.toml`, less what [injection leaves out](#what-injection-leaves-out), up to `--max-chars`
+(default 1,200). The session that is starting is left out.
 Nothing the digest reads counts as a recall.
 
 Two limits:
@@ -77,6 +78,63 @@ Two limits:
   remain searchable through `recall`.
 - **Removed worktrees drop out.** Git stops listing a worktree once it is removed, so sessions
   held only in a torn-down worktree leave the digest. `recall` still finds them.
+
+### What injection leaves out
+
+Both blocks are unsolicited, so they carry only what is likely still true. A belief closes when a
+later value supersedes it, and a snapshot is never superseded: a row count, the version a branch
+was at, a PR's status each stay current in the ledger long after they are wrong. The prompt hook
+and the digest leave out:
+
+| reason | what (derived beliefs only, and only unambiguous ones) | example |
+|---|---|---|
+| `measurement` | a count, total or "number of" over rows, records, tests, files, lines, commits, duplicates, accounts, users or downloads; a magnitude or a comma-grouped number of 1,000 or more beside one of those; an "N of M" over one, or over a completion word ("backfilled"); a relation that is exactly progress, coverage or null rate | `memware test suite test count: 91 tests` |
+| `moving_version` | a version string the subject or relation calls current, latest, built, installed, deployed, released or on main | `memware main branch current version: 0.4.0` |
+| `status` | a relation that is exactly status, state or progress, whose value is a status word (open, merged, review, blocked, failing, archived, …) or whose subject names an instance (`#12`, `t_cd03d14d`, or ending in run, scan, build, job, PR, issue or card) | `card t_cd03d14d status: review`, `graph_health scan status: clean` |
+| `contradicted` | inside a project: a belief about a package's own version that differs from the version that package declares | `built memware wheel version: 0.5.0` in a 0.6.1 checkout |
+| `older_version` | the same: a belief naming an older version beside the package's name | `memware 0.4.0 known issue: …` |
+
+**Precision over recall.** Hiding a durable fact silently removes something you relied on; a
+stale belief that slips through is how memware behaved before, and `memware beliefs retract ID`
+removes it. So these rules catch only what is unambiguous, and a qualifier anywhere in the
+subject or relation always means durable: slo, sla, target, threshold, budget, commitment, fail
+under, min, max, limit, default, initial, final, required, desired, every, schedule, check, and
+their like (`api p99 latency slo: 200ms`, `ci status check: required`, `order state machine final
+state: completed`, `nightly backup cron runs every: 6 hours`). Anything else in doubt is durable
+too: `main branch python version: 3.12`, `feature flag dark_mode state: enabled`, `rollout
+percentage: 10%`. The fuzzy judgment belongs to derive's prompt, which sees the excerpt; this
+sees only a triple. `tests/data/volatility_cases.jsonl` is the labeled corpus the rules are held
+to: no durable case may be left out, and the volatile cases they miss (`api p95 latency: 340ms`,
+`memware build status: green`, a `known issue` outside its project, …) are listed there, marked.
+
+The manifest is `pyproject.toml` (`project.version`, a hatch `[tool.hatch.version] path` holding
+`__version__`, or poetry), `package.json` or `Cargo.toml`, read from the root of the project the
+hook's `cwd` is in; a monorepo's nested packages are not read. A belief is checked only against
+the version declared by the package its subject names, never another package's. A version a build tool
+computes (a `dynamic` version with no file to read, setuptools-scm) and a `0.0.0` placeholder
+are never checked against. The classification is regex and word lists: no model call and no
+network, because the prompt hook runs it on every prompt.
+
+A person stating a fact is a decision to keep it. A belief whose reliability is above derive's
+0.5, or whose source is not a `memware:session/` pointer (`remember`, `memware assert`), is
+never left out. Neither is a derived belief a person has confirmed: asserting the same value
+again, through `memware assert` or `remember`, or approving it in `memware review`, records a
+confirmation beside it (the belief row keeps its session source), and from then on it is
+injected. That is how to keep a fact the gate left out.
+
+`memware config inject.volatile_days N` injects a `measurement`, `moving_version` or `status`
+belief while it is younger than N days. The default is 0, never: the reported version belief
+was one day old and already wrong. A `contradicted` or `older_version` belief is left out
+whatever its age.
+
+Nothing is hidden. `memware beliefs`, `recall` and the MCP tools still return these beliefs,
+each with its date and `volatile` naming its class. `memware beliefs --stale` lists what is left
+out and why, `memware beliefs retract --stale` (a dry run until `--apply`) retracts it, and
+`memware stats` counts it by reason. The session-start notice tells an upgrading user once how
+many beliefs are no longer injected; the store records that it did.
+
+The Hermes provider's `prefetch` applies the class rule and the window through each hit's
+`volatile` mark. It has no project directory, so the manifest rules do not apply there.
 
 ## Hermes Agent
 

@@ -1,0 +1,93 @@
+"""The labeled volatility corpus: ``tests/data/volatility_cases.jsonl``.
+
+One line per triple, with the class it should get, where it came from and why. The rule the
+corpus pins is precision over recall: **no durable case may be left out**. Hiding a fact someone
+relied on is a new harm, while a stale belief that slips through is the old behaviour and
+``memware beliefs retract ID`` removes it. A volatile case the narrow rules do not catch stays in
+the corpus marked ``miss``, and its test asserts the miss, so a change that starts catching it
+(or stops catching a hit) has to update the corpus in the same commit.
+
+A case with a ``project`` is judged through the injection gate with that project's declared
+versions, as the prompt hook would judge it inside that project; the rest through the gate with
+no project, as anywhere else.
+"""
+
+from __future__ import annotations
+
+import json
+from collections import Counter
+from pathlib import Path
+
+import pytest
+
+from memware.volatile import Declared, Gate
+
+CORPUS = Path(__file__).parent / "data" / "volatility_cases.jsonl"
+CASES = [json.loads(line) for line in CORPUS.read_text(encoding="utf-8").splitlines() if line]
+
+
+def _verdict(case: dict) -> str | None:
+    project = case.get("project") or {}
+    gate = Gate(
+        tuple(project.get("names", ())), tuple(Declared(*d) for d in project.get("declared", ()))
+    )
+    row = {
+        "subject": case["subject"],
+        "relation": case["relation"],
+        "value": case["value"],
+        "valid_from": "2026-09-01T00:00:00Z",
+        "reliability": 0.5,
+        "source": "memware:session/s/turn/1",
+    }
+    v = gate.verdict(row)
+    return None if v is None else v.reason
+
+
+def _id(case: dict) -> str:
+    where = " @project" if case.get("project") else ""
+    return f"{case['subject']} | {case['relation']} | {case['value'][:24]}{where}"
+
+
+@pytest.mark.parametrize("case", [c for c in CASES if c["expect"] == "durable"], ids=_id)
+def test_no_durable_case_is_left_out(case):
+    assert _verdict(case) is None, case["why"]
+
+
+@pytest.mark.parametrize(
+    "case", [c for c in CASES if c["expect"] != "durable" and not c.get("miss")], ids=_id
+)
+def test_each_volatile_hit_gets_its_class(case):
+    assert _verdict(case) == case["expect"], case["why"]
+
+
+@pytest.mark.parametrize("case", [c for c in CASES if c.get("miss")], ids=_id)
+def test_each_expected_miss_is_still_missed(case):
+    """The tradeoff, kept explicit: these are volatile, and the narrow rules inject them."""
+    assert case["expect"] != "durable"
+    assert _verdict(case) is None, f"now caught: move it out of the misses ({case['why']})"
+
+
+def test_the_corpus_holds_what_the_reviews_and_the_hub_session_named():
+    lines = {(c["subject"], c["relation"], c["value"]) for c in CASES}
+    for triple in [
+        ("card t_cd03d14d", "status", "review"),
+        ("Card", "status", "blocked"),
+        ("de-orphan card t_09736013", "status", "archived"),
+        ("PR", "status", "open and green"),
+        ("PR #125", "status", "opened"),
+        ("PR #211", "status", "review"),
+        ("graph_health scan", "status", "clean 0 for three weeks"),
+        ("memware test suite", "test count", "91 tests"),
+        ("built memware wheel", "version", "0.5.0"),
+        ("memware main branch", "current version", "0.4.0"),
+        ("api", "p99 latency slo", "200ms"),
+        ("main branch", "python version", "3.12"),
+        ("ruff", "line length", "100"),
+        ("dynpkg 1.2.0", "fixed in", "x"),
+    ]:
+        assert triple in lines, triple
+    assert any(c["subject"] == "memware 0.4.0" and c["relation"] == "known issue" for c in CASES)
+    counts = Counter(c["expect"] if not c.get("miss") else "miss" for c in CASES)
+    assert counts["durable"] >= 60 and counts["miss"] >= 1
+    for c in CASES:
+        assert c["why"] and c["from"], c

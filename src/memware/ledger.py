@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
 from memware.store import Store, now_iso
+from memware.volatile import human_stated, volatility
 
 _WS = re.compile(r"\s+")
 _EDGE = re.compile(r"^[\s\"'`.,;:!?()\[\]{}]+|[\s\"'`.,;:!?()\[\]{}]+$")
@@ -61,6 +62,22 @@ class Result:
     belief_id: int
     incumbent_id: int | None = None
     review_id: int | None = None
+
+
+def confirmed_sql(alias: str = "belief") -> str:
+    """A select-list column, ``confirmed``: 1 when a person confirmed the belief (see
+    :func:`_confirm`). The injection gate reads it to treat that belief as human-stated."""
+    return f"EXISTS (SELECT 1 FROM confirmation c WHERE c.belief_id = {alias}.id) AS confirmed"
+
+
+def _confirm(store: Store, row: sqlite3.Row, source: str | None) -> None:
+    """Record that a person stated a belief derive wrote. The belief row is not touched: its
+    source still says where derive read it."""
+    if not human_stated(row["reliability"], row["source"]):
+        store.conn.execute(
+            "INSERT OR IGNORE INTO confirmation(belief_id, confirmed_at, source) VALUES (?,?,?)",
+            (row["id"], now_iso(), source),
+        )
 
 
 def _current(store: Store, key: str) -> sqlite3.Row | None:
@@ -132,13 +149,16 @@ def assert_belief(
     try:
         incumbent = _current(store, key)
 
-        # 1. Same value as the incumbent: reinforce, never duplicate.
+        # 1. Same value as the incumbent: reinforce, never duplicate. A person restating what
+        # derive wrote confirms it, which is how they keep a fact the injection gate left out.
         if incumbent is not None and normalize(incumbent["value"]) == nv:
             conn.execute(
                 "UPDATE belief SET reliability=MAX(reliability, ?), use_count=use_count+1, "
                 "valid_from=MIN(valid_from, ?) WHERE id=?",
                 (reliability, vf, incumbent["id"]),
             )
+            if human_stated(reliability, source):
+                _confirm(store, incumbent, source)
             return Result(Outcome.REINFORCED, int(incumbent["id"]))
 
         # 2. Older evidence arriving late: file it into the timeline as history.
@@ -149,7 +169,8 @@ def assert_belief(
                 (key, vf),
             ).fetchone()
             predecessor = conn.execute(
-                "SELECT id, value, valid_to FROM belief WHERE key=? AND valid_from<=? "
+                "SELECT id, value, valid_to, reliability, source FROM belief WHERE key=? "
+                "AND valid_from<=? "
                 "AND status NOT IN ('rejected','retracted') ORDER BY valid_from DESC LIMIT 1",
                 (key, vf),
             ).fetchone()
@@ -157,6 +178,8 @@ def assert_belief(
                 conn.execute(
                     "UPDATE belief SET use_count=use_count+1 WHERE id=?", (predecessor["id"],)
                 )
+                if human_stated(reliability, source):
+                    _confirm(store, predecessor, source)
                 return Result(Outcome.REINFORCED, int(predecessor["id"]))
             bid = _insert(
                 store,
@@ -253,7 +276,8 @@ def assert_belief(
 
 
 def approve(store: Store, review_id: int) -> Result:
-    """Accept a candidate: it becomes the current belief, the incumbent is retired."""
+    """Accept a candidate: it becomes the current belief, the incumbent is retired. A person
+    decided, so a derived candidate counts as confirmed (see :func:`_confirm`)."""
     conn = store.conn
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -270,6 +294,7 @@ def approve(store: Store, review_id: int) -> Result:
                 (cand["valid_from"], cand["id"], incumbent["id"]),
             )
         conn.execute("UPDATE belief SET status='committed' WHERE id=?", (cand["id"],))
+        _confirm(store, cand, f"review #{review_id} approved")
         conn.execute(
             "UPDATE review SET decision='approved', decided_at=? WHERE id=?",
             (now_iso(), review_id),
@@ -318,14 +343,17 @@ def reject(store: Store, review_id: int) -> Result:
 
 
 def current(store: Store, subject: str | None = None) -> list[dict[str, object]]:
-    """Currently valid, committed beliefs — the only ones that should reach a prompt."""
-    sql = "SELECT * FROM belief WHERE valid_to IS NULL AND status='committed'"
+    """Current, committed beliefs: no superseded or retracted value is among them. Each row
+    carries ``confirmed`` (a person confirmed a derived belief) and ``volatile``, the class of a
+    derived belief that was a measurement, a moving version or a status when recorded
+    (:mod:`memware.volatile`), which no unsolicited injection includes."""
+    sql = f"SELECT *, {confirmed_sql()} FROM belief WHERE valid_to IS NULL AND status='committed'"
     args: tuple[object, ...] = ()
     if subject is not None:
         sql += " AND key LIKE ?"
         args = (f"{normalize(subject)}|%",)
     sql += " ORDER BY subject, relation"
-    return [dict(r) for r in store.conn.execute(sql, args)]
+    return [{**dict(r), "volatile": volatility(r)} for r in store.conn.execute(sql, args)]
 
 
 def history(store: Store, subject: str, relation: str) -> list[dict[str, object]]:
@@ -373,6 +401,9 @@ class Retraction:
     reopen: list[dict[str, Any]]
     relink: list[dict[str, Any]]
     kept: list[dict[str, Any]]
+    reasons: dict[int, str] = field(default_factory=dict)
+    """Why each belief is retracted, by id, when a person chose it rather than its session
+    leaving the index (:func:`plan_belief_retraction`)."""
 
 
 def _cited_sessions(store: Store) -> dict[str, list[dict[str, Any]]]:
@@ -442,8 +473,45 @@ def plan_retraction(store: Store, sessions: list[str] | None = None) -> Retracti
         (s for s in cited if not _indexed(store, s)) if sessions is None else set(sessions)
     )
     retract = sorted((r for s in targets for r in cited.get(s, [])), key=lambda r: r["id"])
-    gone = {r["id"] for r in retract}
+    reopen, relink = _repairs(store, retract)
 
+    kept: list[dict[str, Any]] = []
+    if targets:
+        for b in store.conn.execute(
+            "SELECT * FROM belief WHERE status='committed' AND source IS NOT NULL ORDER BY id"
+        ):
+            if pointer_session(b["source"]) is None and any(s in b["source"] for s in targets):
+                kept.append(dict(b))
+    return Retraction(targets, retract, reopen, relink, kept)
+
+
+def plan_belief_retraction(store: Store, reasons: dict[int, str]) -> Retraction:
+    """Read-only: the current, committed beliefs ``reasons`` names by id, each to be retracted
+    for its reason. An id that names no current committed belief is left out of ``retract``: a
+    superseded belief already reaches no prompt, and retracting it would move the end of its
+    interval, which is history.
+
+    Nothing is reopened or relinked. These beliefs were chosen because they no longer hold, not
+    because their evidence is gone: each was true when recorded, and a value one superseded is
+    older still, so it stays closed where it was."""
+    ids = sorted(set(reasons))
+    marks = ",".join("?" * len(ids))
+    rows = [
+        dict(r)
+        for r in store.conn.execute(
+            f"SELECT * FROM belief WHERE status='committed' AND valid_to IS NULL "
+            f"AND id IN ({marks}) ORDER BY id",
+            ids,
+        )
+    ]
+    return Retraction([], rows, [], [], [], {r["id"]: reasons[r["id"]] for r in rows})
+
+
+def _repairs(
+    store: Store, retract: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(reopen, relink): the supersessions retracting ``retract`` leaves to repair."""
+    gone = {r["id"] for r in retract}
     reopen: list[dict[str, Any]] = []
     relink: list[dict[str, Any]] = []
     for r in retract:
@@ -459,15 +527,7 @@ def plan_retraction(store: Store, sessions: list[str] | None = None) -> Retracti
                 reopen.append({**repair, "valid_to": None, "superseded_by": None})
             else:
                 relink.append({**repair, "valid_to": nxt["valid_from"], "superseded_by": nxt["id"]})
-
-    kept: list[dict[str, Any]] = []
-    if targets:
-        for b in store.conn.execute(
-            "SELECT * FROM belief WHERE status='committed' AND source IS NOT NULL ORDER BY id"
-        ):
-            if pointer_session(b["source"]) is None and any(s in b["source"] for s in targets):
-                kept.append(dict(b))
-    return Retraction(targets, retract, reopen, relink, kept)
+    return reopen, relink
 
 
 def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
@@ -492,7 +552,9 @@ def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
         conn.execute(
             "UPDATE belief SET status='retracted', valid_to=valid_from WHERE id=?", (r["id"],)
         )
-        why = f"session {pointer_session(r['source'])} is no longer indexed ({reason})"
+        why = plan.reasons.get(r["id"]) or (
+            f"session {pointer_session(r['source'])} is no longer indexed ({reason})"
+        )
         conn.execute(
             "INSERT OR REPLACE INTO retraction(belief_id, retracted_at, reason) VALUES (?,?,?)",
             (r["id"], ts, "; ".join([why, *notes.get(r["id"], [])])),
@@ -500,15 +562,25 @@ def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
 
 
 def retract(
-    store: Store, sessions: list[str] | None = None, *, reason: str, apply: bool = False
+    store: Store,
+    sessions: list[str] | None = None,
+    *,
+    reason: str,
+    apply: bool = False,
+    beliefs: dict[int, str] | None = None,
 ) -> Retraction:
     """Retract the committed beliefs derived from ``sessions`` (``None``: every session no
-    longer indexed) and repair the supersessions they made. Without ``apply`` nothing is
-    written, and the result says what would be done."""
+    longer indexed) and repair the supersessions they made; or, given ``beliefs`` (id -> why),
+    exactly those beliefs, reopening nothing (:func:`plan_belief_retraction`). Without ``apply``
+    nothing is written, and the result says what would be done."""
     conn = store.conn
     conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
     try:
-        plan = plan_retraction(store, sessions)
+        plan = (
+            plan_retraction(store, sessions)
+            if beliefs is None
+            else plan_belief_retraction(store, beliefs)
+        )
         if apply:
             apply_retraction(store, plan, reason=reason)
     except BaseException:
