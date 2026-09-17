@@ -739,6 +739,9 @@ def test_issue_38_the_gate_rejects_the_measurements_and_admits_the_retry_limit(
         ("memware PR #12", "state", "merged", "status"),
         ("memware #22", "feature", "the no-capture fix", "status"),
         ("memware ci", "status", "failing", "status"),
+        ("card t_cd03d14d", "status", "review", "status"),
+        ("backfill", "progress", "83%", "status"),
+        ("graph_health scan", "status", "clean 0 for three weeks", "status"),
         ("ingest worker", "retry limit", "x", "value too short"),
         ("ingest worker", "run count", "12", "measurement"),
     ],
@@ -758,6 +761,16 @@ def test_the_gate_refuses_a_snapshot_or_a_thing_with_no_name(subject, relation, 
         ("staging api", "port", "8443"),
         ("the staging table", "join key", "account_id"),  # named, not generic
         ("memware repo", "license", "MIT"),
+        # the review's config cases (a generic "model" subject is refused as vague, separately)
+        ("ruff", "line length", "100"),
+        ("db connection pool", "size", "20"),
+        ("api", "page size", "50"),
+        ("sentry", "sample rate", "0.1"),
+        ("gunicorn", "worker count", "4"),  # one character, and a setting
+        ("k8s pod", "memory request", "512Mi"),
+        ("claude model", "context length", "200000 tokens"),
+        ("sidebar", "default state", "open"),
+        ("circuit breaker", "initial state", "closed"),
     ],
 )
 def test_the_gate_admits_a_durable_fact(subject, relation, value):

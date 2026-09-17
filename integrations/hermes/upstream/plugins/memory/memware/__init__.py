@@ -12,7 +12,8 @@ server) at one path makes them remember the same things.
 
 Design notes for reviewers:
 
-* ``prefetch`` injects **beliefs only** — small, bounded, and always current.
+* ``prefetch`` injects **beliefs only** — small, bounded, current, each dated, and never a
+  derived measurement, moving version or status that memware marks ``volatile``.
   Transcript search is on demand through the ``memware_recall`` tool, so an
   ordinary turn costs one indexed FTS query and no LLM call.
 * ``sync_turn`` appends the completed turn to a per-session JSONL file under
@@ -126,6 +127,19 @@ def _ensure_memware() -> None:
     from tools.lazy_deps import ensure
 
     ensure(_LAZY_FEATURE, prompt=False)
+
+
+def _injectable(hits: list) -> list:
+    """The belief hits prefetch may inject. memware marks a derived measurement, moving version
+    or status ``volatile``: true when recorded, wrong soon after, and never superseded. It stays
+    reachable through ``memware_recall`` and ``memware_beliefs``. A memware too old to mark
+    hits marks none, and ``inject.volatile_days`` in its config lets a young one back in."""
+    try:
+        from memware.volatile import Gate, window_days
+    except ImportError:
+        return hits
+    gate = Gate(volatile_days=window_days())
+    return [hit for hit in hits if gate.admits_hit(getattr(hit, "volatile", None), hit.ts)]
 
 
 def _expand(path: str, hermes_home: str) -> str:
@@ -279,8 +293,8 @@ class MemwareMemoryProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         return (
             "Memory: you have a memware belief ledger and transcript index. Facts "
-            "injected as 'Known facts' are currently valid; if you learn one has "
-            "changed, call memware_remember with the new value. For anything about "
+            "injected as 'Known facts' carry the date each was recorded; if you learn one "
+            "has changed, call memware_remember with the new value. For anything about "
             "prior sessions, call memware_recall before answering."
         )
 
@@ -290,10 +304,15 @@ class MemwareMemoryProvider(MemoryProvider):
         try:
             _ensure_memware()
             from memware.index import search_beliefs
+            from memware.ledger import touch
             from memware.store import Store
 
             with Store(self._db) as store:
-                hits = search_beliefs(store, query, k=self._prefetch_k)
+                # Ranked past k with no use recorded, so a left-out belief makes room for the
+                # next one; what is injected counts as used, as before.
+                ranked = search_beliefs(store, query, k=100, record_use=False)
+                hits = _injectable(ranked)[: self._prefetch_k]
+                touch(store, [hit.id for hit in hits])
         except Exception as e:  # never break a turn over memory
             logger.warning("memware prefetch failed: %s", e)
             return ""
@@ -302,9 +321,12 @@ class MemwareMemoryProvider(MemoryProvider):
         lines = []
         for hit in hits:
             value = hit.text.removeprefix(f"{hit.subject} {hit.relation} ")
-            since = f" (since {hit.ts[:10]})" if hit.ts else ""
-            lines.append(f"- {hit.subject} {hit.relation}: {value}{since}")
-        return "Known facts (currently valid, from the memware ledger):\n" + "\n".join(lines)
+            when = f" (recorded {hit.ts[:10]})" if hit.ts else ""
+            lines.append(f"- {hit.subject} {hit.relation}: {value}{when}")
+        return (
+            "Known facts from the memware ledger, each with the date it was recorded:\n"
+            + "\n".join(lines)
+        )
 
     # ── capture ─────────────────────────────────────────────────────────────
 

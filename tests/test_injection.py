@@ -200,9 +200,10 @@ def test_a_dynamic_version_is_read_where_hatch_keeps_it(db, app, capsys):
     assert _injected(_context(capsys, db)) == {_line(LICENSE)}
 
 
-def test_an_older_version_named_beside_the_project_is_history(db, app, capsys):
-    old = STALE[2]
-    same = ("memware 0.6.1", "known issue", "digest header claims too much", "2026-09-16T00:00:00Z")
+def test_an_older_version_named_beside_the_project_is_history(db, app, capsys, monkeypatch):
+    """ "config format" is durable by class, so only the manifest can age it out."""
+    old = ("memware 0.4.0", "config format", "toml", "2026-09-15T12:00:00Z")
+    same = ("memware 0.6.1", "config format", "json", "2026-09-16T00:00:00Z")
     _derived(db, old, same)
     assert _injected(_digest(capsys, db)) == {_line(same)}
     assert _injected(_context(capsys, db)) == {_line(same)}
@@ -211,6 +212,116 @@ def test_an_older_version_named_beside_the_project_is_history(db, app, capsys):
     elsewhere.mkdir()
     code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--cwd", str(elsewhere), "--json")
     assert code == 0 and json.loads(out) == []
+
+
+def test_a_known_issue_is_left_out_in_any_project(db, app, capsys, monkeypatch):
+    """A known issue is status whatever version it names, so the prompt hook leaves the reported
+    "memware 0.4.0 known issue" out from another repository too, where no manifest can."""
+    _derived(db, STALE[2], LICENSE)
+    elsewhere = app.parent / "other-repo"
+    elsewhere.mkdir()
+    (elsewhere / "pyproject.toml").write_text('[project]\nname = "other"\nversion = "2.0.0"\n')
+    monkeypatch.chdir(elsewhere)
+    assert _injected(_context(capsys, db)) == {_line(LICENSE)}
+    code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
+    assert [r["reason"] for r in json.loads(out)] == ["status"]
+
+
+# ── the review's cases: config is durable, status is not, whatever the words overlap ────────
+DURABLE_CONFIG = [
+    ("ruff", "line length", "100"),
+    ("db connection pool", "size", "20"),
+    ("api", "page size", "50"),
+    ("sentry", "sample rate", "0.1"),
+    ("gunicorn", "worker count", "4"),
+    ("k8s pod", "memory request", "512Mi"),
+    ("model", "context length", "200000 tokens"),
+    ("sidebar", "default state", "open"),
+    ("circuit breaker", "initial state", "closed"),
+]
+STATUS = [
+    ("card t_cd03d14d", "status", "review"),
+    ("de-orphan card t_09736013", "status", "archived"),
+    ("backfill", "progress", "83%"),
+    ("graph_health scan", "status", "clean 0 for three weeks"),
+    ("PR", "status", "open and green"),
+    ("PR #125", "status", "opened"),
+    ("PR #211", "status", "review"),
+]
+
+
+@pytest.mark.parametrize("triple", DURABLE_CONFIG, ids=lambda t: f"{t[0]}-{t[1]}")
+def test_durable_config_is_injected_though_its_words_look_like_a_measurement(
+    db, app, capsys, triple
+):
+    _derived(db, (*triple, "2026-09-01T00:00:00Z"))
+    code, out, _ = _run(capsys, "--db", db, "context", f"what is the {triple[0]} {triple[1]}?")
+    assert code == 0 and _injected(out) == {_line(triple)}
+    code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
+    assert json.loads(out) == []
+
+
+@pytest.mark.parametrize("triple", STATUS, ids=lambda t: f"{t[0]}-{t[2]}")
+def test_a_status_is_left_out_whatever_its_value(db, app, capsys, triple):
+    _derived(db, (*triple, "2026-09-15T00:00:00Z"))
+    code, out, _ = _run(capsys, "--db", db, "context", f"what is the {triple[0]} {triple[1]}?")
+    assert code == 0 and _injected(out) == set()
+    code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
+    assert [r["subject"] for r in json.loads(out)] == [triple[0]]
+
+
+# ── a person can keep what the gate left out ────────────────────────────────────────────────
+def test_a_person_restating_a_hidden_fact_keeps_it_through_the_cli(db, app, capsys):
+    hidden = STALE[3]
+    _derived(db, hidden, LICENSE)
+    assert _injected(_context(capsys, db)) == {_line(LICENSE)}
+    before = _history_rows(db, hidden)
+
+    code, out, _ = _run(capsys, "--db", db, "assert", *hidden[:3], "--json")
+    assert code == 0 and json.loads(out)["outcome"] == "reinforced"
+    assert _injected(_context(capsys, db)) == {_line(LICENSE), _line(hidden)}
+    assert _injected(_digest(capsys, db)) == {_line(LICENSE), _line(hidden)}
+    # no history row deleted or rewritten: the derived row keeps its session source
+    after = _history_rows(db, hidden)
+    assert [(r["id"], r["source"], r["valid_from"]) for r in after] == [
+        (r["id"], r["source"], r["valid_from"]) for r in before
+    ]
+    code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
+    assert json.loads(out) == []
+
+
+def test_a_person_restating_a_hidden_fact_keeps_it_through_mcp_remember(
+    db, app, capsys, monkeypatch
+):
+    pytest.importorskip("mcp")
+    import asyncio
+
+    from memware.mcp_server import build
+
+    hidden = STALE[3]
+    _derived(db, hidden, LICENSE)
+    assert _injected(_context(capsys, db)) == {_line(LICENSE)}
+    monkeypatch.setenv("MEMWARE_DB", db)
+    args = {"subject": hidden[0], "relation": hidden[1], "value": hidden[2]}
+    asyncio.run(build().call_tool("remember", args))
+    assert _injected(_context(capsys, db)) == {_line(LICENSE), _line(hidden)}
+
+
+def test_approving_a_derived_candidate_in_review_keeps_it(db, app, capsys):
+    """A derived challenge to a person's belief waits in review; a person approving it decides."""
+    stated = ("memware main branch", "current version", "0.6.1", "2026-09-10T00:00:00Z")
+    _stated(db, stated, reliability=0.9)
+    _derived(db, ("memware main branch", "current version", "0.6.2", "2026-09-15T00:00:00Z"))
+    (app / "pyproject.toml").write_text('[project]\nname = "memware"\nversion = "0.6.2"\n')
+    with Store(db) as s:
+        (review_id,) = s.conn.execute("SELECT id FROM review").fetchone()
+    assert main(["--db", db, "review", "approve", str(review_id)]) == 0
+    assert _injected(_context(capsys, db)) == {"memware main branch current version: 0.6.2"}
+
+
+def _history_rows(db: str, t: tuple[str, str, str, str]) -> list[dict]:
+    with Store(db) as s:
+        return history(s, t[0], t[1])
 
 
 @pytest.mark.parametrize(
@@ -348,24 +459,27 @@ def test_retract_takes_belief_ids(db, app, capsys):
     assert reason == f"retracted by id (memware beliefs retract {ids['MIT']})"
 
 
-def test_retracting_a_superseded_belief_by_id_relinks_and_reopens_nothing(db, app, capsys):
-    """A wrong middle value: its predecessor now closes where the surviving successor starts.
-    Retracting the current value reopens nothing, because what it superseded is older still."""
+def test_retract_by_id_refuses_a_superseded_belief_and_reopens_nothing(db, app, capsys):
+    """A superseded belief reaches no prompt, and retracting it would move the end of its
+    interval, which is history: refused, with the reason. Retracting the current value closes it
+    at its own start and reopens nothing, because what it superseded is older still."""
     first = ("memware ingest queue", "backend", "sqlite", "2026-09-01T00:00:00Z")
-    middle = ("memware ingest queue", "backend", "redis", "2026-09-05T00:00:00Z")
     last = ("memware ingest queue", "backend", "postgres", "2026-09-10T00:00:00Z")
-    _derived(db, first, middle, last)
+    _derived(db, first, last)
     with Store(db) as s:
         ids = {r["value"]: r["id"] for r in s.conn.execute("SELECT id, value FROM belief")}
-    code, out, _ = _run(capsys, "--db", db, "beliefs", "retract", str(ids["redis"]), "--apply")
-    assert code == 0 and "predecessors relinked : 1" in out
+    before = _dump(db)
+    code, _, err = _run(capsys, "--db", db, "beliefs", "retract", str(ids["sqlite"]), "--apply")
+    assert code == 2 and _dump(db) == before
+    assert f"belief {ids['sqlite']} is not current: it was superseded by #{ids['postgres']}" in err
+    assert "nothing written" in err
+
     code, out, _ = _run(capsys, "--db", db, "beliefs", "retract", str(ids["postgres"]), "--apply")
-    assert code == 0 and "predecessors relinked : 0" in out
+    assert code == 0 and "beliefs retracted : 1" in out and "relink" not in out
     with Store(db) as s:
         timeline = history(s, "memware ingest queue", "backend")
     assert [(b["value"], b["status"], b["valid_to"]) for b in timeline] == [
         ("sqlite", "committed", "2026-09-10T00:00:00Z"),
-        ("redis", "retracted", "2026-09-05T00:00:00Z"),
         ("postgres", "retracted", "2026-09-10T00:00:00Z"),
     ]
 
@@ -377,14 +491,13 @@ def test_stats_counts_what_injection_leaves_out_by_reason(db, app, capsys):
     assert code == 0
     assert json.loads(out)["injection"] == {
         "volatile_days": 0.0,
-        "manifest": "pyproject.toml",
-        "manifest_version": "0.6.1",
+        "manifests": [{"name": "memware", "version": "0.6.1", "path": "pyproject.toml"}],
         "left_out": {
             "contradicted": 2,
             "older_version": 1,
             "measurement": 1,
             "moving_version": 0,
-            "status": 0,
+            "status": 0,  # the 0.4.0 known issue is status too; the manifest reason comes first
         },
     }
     code, out, _ = _run(capsys, "--db", db, "stats")
@@ -408,6 +521,59 @@ def test_an_upgrading_user_is_told_once(db, app, capsys, monkeypatch):
     assert msg.startswith("memware no longer injects 4 beliefs")
     assert "`memware beliefs --stale` lists them" in msg
     assert _notice(monkeypatch, capsys, db, app) == ""  # once
+
+
+def test_the_notice_is_held_by_the_store_not_the_home(db, app, capsys, monkeypatch, tmp_path):
+    """A memware home that takes no write, or holds a notices file that will not parse, neither
+    keeps the notice from firing nor makes it repeat: the marker is a row in the store."""
+    main(["--db", db, "config", "setup.completed_version", "0.6.1"])
+    _derived(db, *STALE)
+    from memware.config import memware_home
+
+    home = memware_home()
+    (home / "notices.json").write_text("{not json")
+    home.chmod(0o500)
+    try:
+        assert _notice(monkeypatch, capsys, db, app).startswith("memware no longer injects 4")
+        assert _notice(monkeypatch, capsys, db, app) == ""
+    finally:
+        home.chmod(0o700)
+    with Store(db) as s:
+        assert [r[0] for r in s.conn.execute("SELECT key FROM notice")] == ["stale-beliefs"]
+
+
+@pytest.mark.parametrize("bad", ["7d", "-3", "soon", "true"])
+def test_the_window_refuses_what_is_not_a_number_of_days(db, capsys, bad):
+    from memware.config import config_path
+
+    code, _, err = _run(capsys, "--db", db, "config", "inject.volatile_days", bad)
+    assert code == 2 and "takes a number of days, 0 or more" in err and "nothing written" in err
+    assert not config_path().exists() or "volatile_days" not in config_path().read_text()
+    code, out, _ = _run(capsys, "--db", db, "config", "inject.volatile_days", "2.5")
+    assert code == 0 and json.loads(out)["inject.volatile_days"] == 2.5
+
+
+def test_a_manifest_version_is_the_one_the_subject_names(db, app, capsys):
+    """setuptools-scm computes the Python version, and package.json holds a 0.0.0 placeholder:
+    neither is a version to check against. With two real ones, the subject picks."""
+    own = ("memware", "version", "0.6.1", "2026-09-15T12:00:00Z")
+    _derived(db, own)
+    (app / "pyproject.toml").write_text(
+        '[project]\nname = "memware"\ndynamic = ["version"]\n[tool.setuptools_scm]\n'
+    )
+    (app / "package.json").write_text('{"name": "memware-ui", "version": "0.0.0"}')
+    assert _injected(_context(capsys, db)) == {_line(own)}
+
+    widget = ("widgetry", "version", "1.2.3", "2026-09-15T12:00:00Z")
+    gadget = ("gadgetry", "version", "0.3.0", "2026-09-15T12:00:00Z")
+    _derived(db, widget, gadget)
+    (app / "pyproject.toml").write_text('[project]\nname = "widgetry"\nversion = "1.2.3"\n')
+    (app / "package.json").write_text('{"name": "gadgetry", "version": "0.3.0"}')
+    code, out, _ = _run(capsys, "--db", db, "context", "widgetry gadgetry version")
+    assert _injected(out) == {_line(widget), _line(gadget)}
+    (app / "package.json").write_text('{"name": "gadgetry", "version": "0.4.0"}')
+    code, out, _ = _run(capsys, "--db", db, "context", "widgetry gadgetry version")
+    assert _injected(out) == {_line(widget)}
 
 
 def test_the_notice_never_creates_a_store(tmp_path, app, capsys, monkeypatch):

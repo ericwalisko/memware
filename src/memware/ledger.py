@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import Any
 
 from memware.store import Store, now_iso
+from memware.volatile import human_stated, volatility
 
 _WS = re.compile(r"\s+")
 _EDGE = re.compile(r"^[\s\"'`.,;:!?()\[\]{}]+|[\s\"'`.,;:!?()\[\]{}]+$")
@@ -61,6 +62,22 @@ class Result:
     belief_id: int
     incumbent_id: int | None = None
     review_id: int | None = None
+
+
+def confirmed_sql(alias: str = "belief") -> str:
+    """A select-list column, ``confirmed``: 1 when a person confirmed the belief (see
+    :func:`_confirm`). The injection gate reads it to treat that belief as human-stated."""
+    return f"EXISTS (SELECT 1 FROM confirmation c WHERE c.belief_id = {alias}.id) AS confirmed"
+
+
+def _confirm(store: Store, row: sqlite3.Row, source: str | None) -> None:
+    """Record that a person stated a belief derive wrote. The belief row is not touched: its
+    source still says where derive read it."""
+    if not human_stated(row["reliability"], row["source"]):
+        store.conn.execute(
+            "INSERT OR IGNORE INTO confirmation(belief_id, confirmed_at, source) VALUES (?,?,?)",
+            (row["id"], now_iso(), source),
+        )
 
 
 def _current(store: Store, key: str) -> sqlite3.Row | None:
@@ -132,13 +149,16 @@ def assert_belief(
     try:
         incumbent = _current(store, key)
 
-        # 1. Same value as the incumbent: reinforce, never duplicate.
+        # 1. Same value as the incumbent: reinforce, never duplicate. A person restating what
+        # derive wrote confirms it, which is how they keep a fact the injection gate left out.
         if incumbent is not None and normalize(incumbent["value"]) == nv:
             conn.execute(
                 "UPDATE belief SET reliability=MAX(reliability, ?), use_count=use_count+1, "
                 "valid_from=MIN(valid_from, ?) WHERE id=?",
                 (reliability, vf, incumbent["id"]),
             )
+            if human_stated(reliability, source):
+                _confirm(store, incumbent, source)
             return Result(Outcome.REINFORCED, int(incumbent["id"]))
 
         # 2. Older evidence arriving late: file it into the timeline as history.
@@ -149,7 +169,8 @@ def assert_belief(
                 (key, vf),
             ).fetchone()
             predecessor = conn.execute(
-                "SELECT id, value, valid_to FROM belief WHERE key=? AND valid_from<=? "
+                "SELECT id, value, valid_to, reliability, source FROM belief WHERE key=? "
+                "AND valid_from<=? "
                 "AND status NOT IN ('rejected','retracted') ORDER BY valid_from DESC LIMIT 1",
                 (key, vf),
             ).fetchone()
@@ -157,6 +178,8 @@ def assert_belief(
                 conn.execute(
                     "UPDATE belief SET use_count=use_count+1 WHERE id=?", (predecessor["id"],)
                 )
+                if human_stated(reliability, source):
+                    _confirm(store, predecessor, source)
                 return Result(Outcome.REINFORCED, int(predecessor["id"]))
             bid = _insert(
                 store,
@@ -253,7 +276,8 @@ def assert_belief(
 
 
 def approve(store: Store, review_id: int) -> Result:
-    """Accept a candidate: it becomes the current belief, the incumbent is retired."""
+    """Accept a candidate: it becomes the current belief, the incumbent is retired. A person
+    decided, so a derived candidate counts as confirmed (see :func:`_confirm`)."""
     conn = store.conn
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -270,6 +294,7 @@ def approve(store: Store, review_id: int) -> Result:
                 (cand["valid_from"], cand["id"], incumbent["id"]),
             )
         conn.execute("UPDATE belief SET status='committed' WHERE id=?", (cand["id"],))
+        _confirm(store, cand, f"review #{review_id} approved")
         conn.execute(
             "UPDATE review SET decision='approved', decided_at=? WHERE id=?",
             (now_iso(), review_id),
@@ -319,12 +344,10 @@ def reject(store: Store, review_id: int) -> Result:
 
 def current(store: Store, subject: str | None = None) -> list[dict[str, object]]:
     """Current, committed beliefs: no superseded or retracted value is among them. Each row
-    carries ``volatile``, the class of a derived belief that was a measurement, a moving version
-    or a status when recorded (:mod:`memware.volatile`), which no unsolicited injection
-    includes."""
-    from memware.volatile import volatility
-
-    sql = "SELECT * FROM belief WHERE valid_to IS NULL AND status='committed'"
+    carries ``confirmed`` (a person confirmed a derived belief) and ``volatile``, the class of a
+    derived belief that was a measurement, a moving version or a status when recorded
+    (:mod:`memware.volatile`), which no unsolicited injection includes."""
+    sql = f"SELECT *, {confirmed_sql()} FROM belief WHERE valid_to IS NULL AND status='committed'"
     args: tuple[object, ...] = ()
     if subject is not None:
         sql += " AND key LIKE ?"
@@ -463,23 +486,25 @@ def plan_retraction(store: Store, sessions: list[str] | None = None) -> Retracti
 
 
 def plan_belief_retraction(store: Store, reasons: dict[int, str]) -> Retraction:
-    """Read-only: the committed beliefs ``reasons`` names by id, each to be retracted for its
-    reason. An id that names no committed belief is left out of ``retract``.
+    """Read-only: the current, committed beliefs ``reasons`` names by id, each to be retracted
+    for its reason. An id that names no current committed belief is left out of ``retract``: a
+    superseded belief already reaches no prompt, and retracting it would move the end of its
+    interval, which is history.
 
-    Nothing is reopened. These beliefs were chosen because they no longer hold, not because
-    their evidence is gone: each was true when recorded, and a value one superseded is older
-    still, so it stays closed. A predecessor is relinked, as :func:`plan_retraction` does, when
-    a later belief survives to close it at."""
+    Nothing is reopened or relinked. These beliefs were chosen because they no longer hold, not
+    because their evidence is gone: each was true when recorded, and a value one superseded is
+    older still, so it stays closed where it was."""
     ids = sorted(set(reasons))
     marks = ",".join("?" * len(ids))
     rows = [
         dict(r)
         for r in store.conn.execute(
-            f"SELECT * FROM belief WHERE status='committed' AND id IN ({marks}) ORDER BY id", ids
+            f"SELECT * FROM belief WHERE status='committed' AND valid_to IS NULL "
+            f"AND id IN ({marks}) ORDER BY id",
+            ids,
         )
     ]
-    _, relink = _repairs(store, rows)
-    return Retraction([], rows, [], relink, [], {r["id"]: reasons[r["id"]] for r in rows})
+    return Retraction([], rows, [], [], [], {r["id"]: reasons[r["id"]] for r in rows})
 
 
 def _repairs(

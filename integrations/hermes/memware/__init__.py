@@ -8,7 +8,8 @@ Design:
 * One store shared with every other memware client (Claude Code, the CLI, MCP)
   — ``db_path`` defaults to ``~/.memware/memware.db``. Set it per profile if you
   want isolation instead of sharing.
-* ``prefetch`` injects only currently valid beliefs (small, bounded, never stale).
+* ``prefetch`` injects only current beliefs, each with the date it was recorded, less a
+  derived measurement, moving version or status (``memware.volatile``; small, bounded).
   Transcript recall is on demand through the ``memware_recall`` tool.
 * ``sync_turn`` is non-blocking: each completed turn is appended to a per-session
   JSONL file under ``<hermes_home>/memware/sessions/`` (which doubles as an
@@ -189,7 +190,7 @@ class MemwareProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         return (
             "Memory: you have a memware ledger and transcript index. Facts injected as "
-            "'Known facts' are currently valid; if you learn one has changed, call "
+            "'Known facts' carry the date each was recorded; if you learn one has changed, call "
             "memware_remember with the new value. For anything about prior sessions, call "
             "memware_recall before answering."
         )
@@ -198,11 +199,18 @@ class MemwareProvider(MemoryProvider):
         if not query or not query.strip():
             return ""
         from memware.index import search_beliefs
+        from memware.ledger import touch
         from memware.store import Store
+        from memware.volatile import Gate, window_days
 
         try:
+            gate = Gate(volatile_days=window_days())
             with Store(self._db) as s:
-                hits = search_beliefs(s, query, k=self._prefetch_k, require_subject=True)
+                # Ranked past k with no use recorded, so a left-out belief makes room for the
+                # next one; what is injected counts as used, as before.
+                ranked = search_beliefs(s, query, k=100, require_subject=True, record_use=False)
+                hits = [h for h in ranked if gate.admits_hit(h.volatile, h.ts)][: self._prefetch_k]
+                touch(s, [h.id for h in hits])
         except Exception as e:  # never break a turn over memory
             logger.warning("memware prefetch failed: %s", e)
             return ""
@@ -211,9 +219,12 @@ class MemwareProvider(MemoryProvider):
         lines = []
         for h in hits:
             value = h.text.removeprefix(f"{h.subject} {h.relation} ")
-            since = f" (since {h.ts[:10]})" if h.ts else ""
-            lines.append(f"- {h.subject} {h.relation}: {value}{since}")
-        return "Known facts (currently valid, from the memory ledger):\n" + "\n".join(lines)
+            when = f" (recorded {h.ts[:10]})" if h.ts else ""
+            lines.append(f"- {h.subject} {h.relation}: {value}{when}")
+        return (
+            "Known facts from the memory ledger, each with the date it was recorded:\n"
+            + "\n".join(lines)
+        )
 
     # -- capture ---------------------------------------------------------------
     def _session_file(self, session_id: str) -> Path:

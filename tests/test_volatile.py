@@ -32,6 +32,9 @@ def _row(subject, relation, value, valid_from="2026-09-15T12:00:00Z", **kw):
         ("checks passed", "3 of 5", True),
         ("p95 latency", "340ms", True),
         ("disk usage", "1.2 GB", True),
+        ("rows backfilled", "3 of 5", True),  # a counted noun
+        ("error rate", "2%", True),  # an ambiguous noun beside a counted one
+        ("size", "4.2 million rows", True),  # ... or with the counted noun in the value
         ("retry limit", "5", False),  # a setting
         ("batch size", "500", False),  # "size" beside a setting
         ("max row count", "10000", False),
@@ -39,6 +42,17 @@ def _row(subject, relation, value, valid_from="2026-09-15T12:00:00Z", **kw):
         ("python version", "3.11", False),
         ("row count", "about half", False),  # not a bare quantity
         ("release date", "2026-09-15", False),
+        # the review's config cases: a setting word, or an ambiguous noun beside nothing counted
+        ("line length", "100", False),
+        ("size", "20", False),
+        ("page size", "50", False),
+        ("sample rate", "0.1", False),
+        ("worker count", "4", False),
+        ("memory request", "512Mi", False),
+        ("context length", "200000 tokens", False),
+        ("rows per page", "50", False),
+        ("user id", "1204", False),  # an identifier counts nothing
+        ("issue number", "38", False),
     ],
 )
 def test_measurement(relation, value, want):
@@ -68,13 +82,45 @@ def test_moving_version(subject, relation, value, want):
         ("memware #22", "feature", "the no-capture fix", True),  # what a PR contains
         ("issue 38", "root cause", "derive files measurements", True),
         ("memware ci", "status", "Failing.", True),
-        ("the deploy", "status", "a blue-green rollout", False),  # not a status word
-        ("memware 0.4.0", "known issue", "a real bug", False),  # "issue" with no number
+        ("the deploy", "status", "a blue-green rollout", True),  # a status relation, any value
+        ("memware 0.4.0", "known issue", "a real bug", True),
+        ("memware", "open issues", "the digest header", True),
+        ("the release", "blocker", "notarisation", True),
+        ("memware", "build status", "green", True),
+        ("card t_cd03d14d", "status", "review", True),
+        ("de-orphan card t_09736013", "status", "archived", True),
+        ("backfill", "progress", "83%", True),
+        ("graph_health scan", "status", "clean 0 for three weeks", True),
+        ("PR", "status", "open and green", True),
+        ("PR #125", "status", "opened", True),
+        ("PR #211", "status", "review", True),
+        ("sidebar", "default state", "open", False),  # a setting word: config
+        ("circuit breaker", "initial state", "closed", False),
+        ("memware repo", "state management", "a reducer", False),  # a status word among others
+        ("health check", "path", "/healthz", False),
         ("memware issue tracker", "host", "github", False),
     ],
 )
 def test_status(subject, relation, value, want):
     assert v.is_status(subject, relation, value) is want
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value",
+    [
+        ("ruff", "line length", "100"),
+        ("db connection pool", "size", "20"),
+        ("api", "page size", "50"),
+        ("sentry", "sample rate", "0.1"),
+        ("gunicorn", "worker count", "4"),
+        ("k8s pod", "memory request", "512Mi"),
+        ("model", "context length", "200000 tokens"),
+        ("sidebar", "default state", "open"),
+        ("circuit breaker", "initial state", "closed"),
+    ],
+)
+def test_durable_config_classifies_as_nothing(subject, relation, value):
+    assert v.classify(subject, relation, value) is None
 
 
 def test_classify_names_one_class_or_none():
@@ -90,6 +136,7 @@ def test_a_person_is_anyone_derive_is_not():
     assert v.human_stated(0.9, "memware:session/s/turn/1")
     assert v.human_stated(0.5, "eric, in chat")
     assert v.human_stated(0.5, None)
+    assert v.human_stated(0.5, "memware:session/s/turn/1", confirmed=1)  # a person confirmed it
     assert v.volatility({**_row("memware test suite", "test count", "91 tests"), **DERIVED}) == (
         v.MEASUREMENT
     )
@@ -137,7 +184,8 @@ def test_older_version_compares_as_versions():
 
 def test_the_gate_orders_its_reasons_and_honours_the_window():
     now = datetime(2026, 9, 16, 12, tzinfo=UTC)
-    gate = v.Gate(("memware",), "0.6.1", "pyproject.toml", volatile_days=3, now=now)
+    declared = (v.Declared("memware", "0.6.1", "pyproject.toml"),)
+    gate = v.Gate(("memware",), declared, volatile_days=3, now=now)
     young = {
         **_row("memware test suite", "test count", "230 tests", "2026-09-15T12:00:00Z"),
         **DERIVED,
@@ -153,6 +201,42 @@ def test_the_gate_orders_its_reasons_and_honours_the_window():
     assert gate.verdict(wrong) == v.Verdict(v.CONTRADICTED, "pyproject.toml says 0.6.1")
     assert str(gate.verdict(wrong)) == "contradicted: pyproject.toml says 0.6.1"
     assert v.Gate().verdict(old) == v.Verdict(v.MEASUREMENT, "a quantity measured once")
+    assert v.Gate().verdict({**old, "confirmed": 1}) is None  # a person kept it
+    # a reader holding only a hit: its mark and the window, no manifest
+    assert gate.admits_hit(None, None) and gate.admits_hit("measurement", "2026-09-15T12:00:00Z")
+    assert not gate.admits_hit("measurement", "2026-09-01T12:00:00Z")
+    assert not v.Gate().admits_hit("status", "2026-09-16T11:59:00Z")
+
+
+def test_the_gate_picks_the_version_the_subject_names():
+    declared = (
+        v.Declared("widgetry", "1.2.3", "pyproject.toml"),
+        v.Declared("gadgetry", "0.3.0", "package.json"),
+    )
+    gate = v.Gate(("app", "widgetry", "gadgetry"), declared)
+    assert gate.declared_for("widgetry wheel") == declared[0]
+    assert gate.declared_for("gadgetry ui") == declared[1]
+    assert gate.declared_for("app") is None  # two versions, and the subject names neither
+    assert v.Gate(("app",), declared[:1]).declared_for("app") == declared[0]  # the only one
+    row = {**_row("gadgetry", "version", "0.3.0"), **DERIVED}
+    assert gate.verdict(row) is None
+    assert gate.verdict({**row, "subject": "widgetry"}) == v.Verdict(
+        v.CONTRADICTED, "pyproject.toml says 1.2.3"
+    )
+
+
+@pytest.mark.parametrize(
+    "version, want",
+    [
+        ("0.0.0", True),
+        ("0.0.0-development", True),
+        ("v0.0", True),
+        ("0.0.1", False),
+        ("1.0.0", False),
+    ],
+)
+def test_a_placeholder_version_is_not_a_version(version, want):
+    assert v.is_placeholder(version) is want
 
 
 @pytest.mark.parametrize(
@@ -165,6 +249,7 @@ def test_the_gate_orders_its_reasons_and_honours_the_window():
         ("1.5", 1.5),
         (-3, 0.0),
         ("soon", 0.0),
+        ("7d", 0.0),
         (True, 0.0),
     ],
 )
@@ -172,11 +257,28 @@ def test_window_days_reads_a_number_or_nothing(raw, want):
     assert v.window_days({"inject": {"volatile_days": raw}}) == want
 
 
+@pytest.mark.parametrize(
+    "raw, want",
+    [
+        ("7", 7.0),
+        ("2.5", 2.5),
+        ("0", 0.0),
+        (3, 3.0),
+        ("7d", None),
+        ("-3", None),
+        (True, None),
+        ("nan", None),
+    ],
+)
+def test_parse_days_takes_a_non_negative_number_only(raw, want):
+    assert v.parse_days(raw) == want
+
+
 def test_the_manifest_reader(tmp_path):
+    D = v.Declared
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "widgetry"\nversion = "1.2.3"\n')
-    assert _manifest(tmp_path) == _manifest(tmp_path)
     m = _manifest(tmp_path)
-    assert (m.names, m.version, m.path) == (("widgetry",), "1.2.3", "pyproject.toml")
+    assert (m.names, m.declared) == (("widgetry",), (D("widgetry", "1.2.3", "pyproject.toml"),))
 
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "widgetry"\ndynamic = ["version"]\n'
@@ -186,16 +288,26 @@ def test_the_manifest_reader(tmp_path):
     (tmp_path / "src" / "widgetry" / "__init__.py").write_text(
         '"""doc"""\n\n__version__ = "2.0.0"\n'
     )
-    assert _manifest(tmp_path).version == "2.0.0"
-    assert _manifest(tmp_path).path == "src/widgetry/__init__.py"
+    assert _manifest(tmp_path).declared == (D("widgetry", "2.0.0", "src/widgetry/__init__.py"),)
 
-    npm, cargo, broken = tmp_path / "npm", tmp_path / "cargo", tmp_path / "broken"
-    for d in (npm, cargo, broken):
+    npm, cargo, broken, scm, poetry = (
+        tmp_path / d for d in ("npm", "cargo", "broken", "scm", "poetry")
+    )
+    for d in (npm, cargo, broken, scm, poetry):
         d.mkdir()
     (npm / "package.json").write_text('{"name": "gadgetry", "version": "0.3.0"}')
     (cargo / "Cargo.toml").write_text('[package]\nname = "crabby"\nversion = "4.5.6"\n')
     (broken / "pyproject.toml").write_text("[project\nname = ")
-    assert _manifest(npm) == type(m)(("gadgetry",), "0.3.0", "package.json")
-    assert _manifest(cargo) == type(m)(("crabby",), "4.5.6", "Cargo.toml")
+    (scm / "pyproject.toml").write_text(
+        '[project]\nname = "scmtool"\ndynamic = ["version"]\n[tool.setuptools_scm]\n'
+    )
+    (scm / "package.json").write_text('{"name": "scmtool-ui", "version": "0.0.0"}')
+    (poetry / "pyproject.toml").write_text('[tool.poetry]\nname = "poet"\nversion = "0.0.0"\n')
+    assert _manifest(npm) == type(m)(("gadgetry",), (D("gadgetry", "0.3.0", "package.json"),))
+    assert _manifest(cargo) == type(m)(("crabby",), (D("crabby", "4.5.6", "Cargo.toml"),))
     assert _manifest(broken) == type(m)(())
-    assert resolve_project(cargo).version == "4.5.6" and "crabby" in resolve_project(cargo).names
+    # a computed version and a placeholder declare nothing to check a belief against
+    assert _manifest(scm) == type(m)(("scmtool", "scmtool-ui"), ())
+    assert _manifest(poetry) == type(m)(("poet",), ())
+    project = resolve_project(cargo)
+    assert project.declared == (D("crabby", "4.5.6", "Cargo.toml"),) and "crabby" in project.names

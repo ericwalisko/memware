@@ -37,7 +37,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NamedTuple
 
 from memware.config import get_dotted, load_config
 from memware.index import _subject_terms
@@ -70,35 +70,62 @@ def wordset(words: str) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 # the three classes
 # ---------------------------------------------------------------------------
+# A false positive costs more than a false negative. At derive it only means a weaker ledger,
+# but at injection it silently hides a durable fact someone relied on. So a relation with a
+# setting word is config whatever else it says, and a noun that names a setting as often as a
+# measurement ("size", "count", "length", "rate") is a measurement only beside a counted thing.
 _QUANTITY = re.compile(
     r"^(?:~|≈|<=?|>=?|about|approx\.?|approximately|around|roughly|nearly|almost|over|under"
     r"|at least|at most|more than|less than|fewer than)?\s*"
     r"[-+]?\d[\d,_]*(?:\.\d+)?"
     r"(?:\s*(?:/|of|out of)\s*\d[\d,_]*(?:\.\d+)?)?"  # "3 of 5", "3/5"
-    r"\s*(?:%|[a-z]{1,3}\b)?"  # "83%", "340ms", "1.2gb", "4.2m"
+    r"\s*(?:%|[a-z]{1,3}\b)?"  # "83%", "340ms", "1.2gb", "4.2m", "512Mi"
     r"(?:\s+[a-z][a-z-]*){0,2}\s*$",  # "91 tests", "4.2 million rows"
     re.I,
 )
 
-MEASURE_NOUNS = wordset(
-    """
-    count counts total totals number numbers row rows size sizes rate rates percentage percent
-    pct share ratio duration durations latency length usage coverage cardinality throughput
-    runtime elapsed time times speed score scores accuracy average avg mean median sum amount
-    volume frequency p50 p90 p95 p99 tests files lines records items entries accounts users
-    sessions turns beliefs documents pages commits downloads installs stars views visitors hits
-    errors failures removed deleted added processed remaining pending passed failed skipped loc
-    memory disk bytes
-    """
-)
 SETTING_NOUNS = wordset(
     """
-    limit limits max maximum min minimum timeout timeouts port ports threshold cap ceiling floor
-    budget default defaults interval ttl retention window concurrency batch chunk pool quota
-    setting settings pinned pin required allowed expiry backoff target keep parallelism
-    capacity
+    limit limits max maximum min minimum default defaults initial desired pool page line sample
+    batch chunk buffer window request worker workers timeout timeouts retry retries cap ceiling
+    floor budget interval ttl retention concurrency parallel parallelism quota setting settings
+    configured pinned pin required allowed expiry backoff target keep capacity port ports
+    threshold per replicas heap context
     """
 )
+"""A relation with one of these names a configured value: "page size", "sample rate", "worker
+count", "memory request", "context length", "default state"."""
+IDENTIFIER_NOUNS = wordset("id ids uid gid pid key index code sha hash name number")
+"""A number under one of these identifies something ("user id", "issue number"); it counts nothing."""
+MEASURE_NOUNS = wordset(
+    """
+    percentage percent pct ratio coverage cardinality throughput latency p50 p90 p95 p99 elapsed
+    runtime took accuracy average avg mean median removed deleted added processed remaining
+    pending passed failed skipped succeeded null usage uptime downtime utilization backlog lag
+    """
+)
+"""Nouns that are a measurement whenever the value is a bare quantity: "null rate", "p95 latency",
+"disk usage", "rows removed"."""
+AMBIGUOUS_MEASURES = wordset(
+    """
+    count counts total totals size sizes rate rates length lengths duration durations time times
+    speed score scores sum amount volume frequency memory disk bytes
+    """
+)
+"""Nouns that name a setting as often as a measurement ("pool size", "line length"): a measurement
+only beside a counted thing, in the relation or the value ("row count", "size: 4.2 million rows")."""
+COUNTED_NOUNS = wordset(
+    """
+    row rows record records test tests duplicate duplicates account accounts file files entry
+    entries item items user users session sessions turn turns belief beliefs document documents
+    commit commits lines error errors failure failures occurrence occurrences event events message
+    messages run runs job jobs task tasks download downloads install installs star stars view
+    views visitor visitors hit hits check checks pages samples requests issues tickets customers
+    orders transactions
+    """
+)
+"""What a data quantity counts: a relation naming one ("rows backfilled", "test count") with a
+bare quantity is a measurement."""
 
 _VERSION = re.compile(r"^v?\d+(?:\.\d+){1,3}(?:[-+.]?[0-9a-z]+(?:\.[0-9a-z]+)*)?$", re.I)
 VERSION_NOUNS = frozenset({"version", "versions", "release", "tag"})
@@ -111,7 +138,7 @@ MOVING = wordset(
 PINNING = wordset(
     """
     pinned pin pins required requires minimum min maximum max supported compatible locked lock
-    constraint floor ceiling target targets declared
+    constraint floor ceiling target targets declared desired default
     """
 )
 
@@ -120,57 +147,33 @@ _TRACKED = re.compile(
     r"|\b(?:pr|prs|pull request|mr|merge request|issue|ticket|run|job|check|workflow)\s*#?\d+\b",
     re.I,
 )
-STATUS_RELATIONS = wordset(
-    "status state result results outcome conclusion checks ci verdict progress stage phase"
+STATUS_NOUNS = wordset(
+    "status state progress stage phase result results outcome conclusion verdict health"
 )
-STATUS_VALUES = frozenset(
+STATUS_FILLER = wordset(
+    "current currently overall latest last build ci review merge deploy deployment release pr check checks run the of"
+)
+"""Words a relation made only of status words may also carry: "build status", "current state"."""
+_OPEN_ISSUE = re.compile(
+    r"^(?:(?:known|open|outstanding|current|active|remaining)\s+)?(?:issue|issues|bug|bugs|blocker|blockers)$"
+)
+"""Relations that name what is wrong right now: "known issue", "open issue", "blocker"."""
+STATUS_VALUES = wordset(
+    """
+    open opened closed merged unmerged draft pending passing passed failing failed green red
+    running queued blocked approved done complete completed success successful succeeded
+    cancelled canceled skipped broken fixed resolved unresolved landed stale started waiting ready
+    reverted abandoned flaky errored archived
+    """
+) | frozenset(
     {
-        "open",
-        "opened",
-        "closed",
-        "merged",
-        "unmerged",
-        "draft",
-        "pending",
-        "passing",
-        "passed",
-        "failing",
-        "failed",
-        "green",
-        "red",
-        "running",
-        "queued",
-        "blocked",
         "in progress",
         "in review",
-        "approved",
         "changes requested",
-        "done",
-        "complete",
-        "completed",
-        "success",
-        "successful",
-        "succeeded",
-        "cancelled",
-        "canceled",
-        "skipped",
-        "broken",
-        "fixed",
-        "resolved",
-        "unresolved",
-        "landed",
-        "stale",
         "not started",
-        "started",
-        "waiting",
         "on hold",
-        "ready",
         "ready for review",
-        "reverted",
-        "abandoned",
-        "flaky",
         "timed out",
-        "errored",
     }
 )
 
@@ -181,12 +184,17 @@ def names_setting(relation: str) -> bool:
 
 
 def is_measurement(relation: str, value: str) -> bool:
-    """A bare quantity under a measurement noun, and no setting noun beside it."""
+    """A bare quantity that measures something: under a measurement noun ("null rate"), a counted
+    noun ("rows backfilled"), or an ambiguous one beside a counted noun ("row count", "size: 4.2
+    million rows"). Never under a setting or identifier noun."""
+    if not _QUANTITY.match(value.strip()):
+        return False
     words = _words(relation)
-    return (
-        bool(_QUANTITY.match(value.strip()))
-        and bool(words & MEASURE_NOUNS)
-        and not words & SETTING_NOUNS
+    if words & (SETTING_NOUNS | IDENTIFIER_NOUNS):
+        return False
+    return bool(
+        words & (MEASURE_NOUNS | COUNTED_NOUNS)
+        or (words & AMBIGUOUS_MEASURES and _words(value) & COUNTED_NOUNS)
     )
 
 
@@ -205,10 +213,20 @@ def is_moving_version(subject: str, relation: str, value: str) -> bool:
 
 
 def is_status(subject: str, relation: str, value: str) -> bool:
+    """About a numbered PR, issue, ticket or run; or a relation made only of status words
+    ("status", "build status", "progress", "known issue"), whatever the value; or a status word
+    under a status noun. A setting word makes it config: "default state", "initial state"."""
     if _TRACKED.search(f"{subject} {relation}"):
         return True
+    words = _words(relation)
+    if words & SETTING_NOUNS:
+        return False
+    if _OPEN_ISSUE.match(" ".join(re.findall(r"[a-z]+", relation.lower()))):
+        return True
+    if words & STATUS_NOUNS and words <= STATUS_NOUNS | STATUS_FILLER:
+        return True
     state = " ".join(re.findall(r"[a-z]+", value.lower()))
-    return bool(_words(relation) & STATUS_RELATIONS) and state in STATUS_VALUES
+    return bool(words & STATUS_NOUNS) and state in STATUS_VALUES
 
 
 def classify(subject: str, relation: str, value: str) -> str | None:
@@ -223,20 +241,29 @@ def classify(subject: str, relation: str, value: str) -> str | None:
     return None
 
 
-def human_stated(reliability: object, source: object) -> bool:
-    """A person asserted it: reliability above derive's, or a source that is not a session
-    pointer (``remember`` and ``memware assert`` take free text, or none)."""
+def human_stated(reliability: object, source: object, confirmed: object = False) -> bool:
+    """A person asserted it: reliability above derive's, a source that is not a session pointer
+    (``remember`` and ``memware assert`` take free text, or none), or a person confirmed the
+    derived belief since (``confirmed``, from the ``confirmation`` table: the same value
+    asserted again, or a review approval)."""
     try:
         above = float(str(reliability)) > DERIVED_RELIABILITY
     except ValueError:
         above = False
-    return above or not str(source or "").startswith(DERIVED_SOURCE)
+    return bool(confirmed) or above or not str(source or "").startswith(DERIVED_SOURCE)
+
+
+def row_human_stated(row: Any) -> bool:
+    """:func:`human_stated` for a belief row; ``confirmed`` counts when the query selected it."""
+    columns = row.keys()  # a sqlite3.Row: `in` would search its values, not its column names
+    confirmed = row["confirmed"] if "confirmed" in columns else False
+    return human_stated(row["reliability"], row["source"], confirmed)
 
 
 def volatility(row: Any) -> str | None:
     """The mark a belief row carries in ``memware beliefs``, recall and the MCP tools: its class
-    when derive wrote it, None when a person stated it or it is durable."""
-    if human_stated(row["reliability"], row["source"]):
+    when derive wrote it, None when a person stated or confirmed it, or it is durable."""
+    if row_human_stated(row):
         return None
     return classify(str(row["subject"]), str(row["relation"]), str(row["value"]))
 
@@ -326,15 +353,22 @@ class Verdict:
         return f"{label(self.reason)}: {self.detail}"
 
 
+def parse_days(raw: object) -> float | None:
+    """A non-negative number of days, or None for anything else (``7d``, ``-3``, ``true``)."""
+    if isinstance(raw, bool):
+        return None
+    try:
+        days = float(str(raw).strip())
+    except ValueError:
+        return None
+    return days if days >= 0 and days == days and days != float("inf") else None
+
+
 def window_days(cfg: dict[str, Any] | None = None) -> float:
     """``inject.volatile_days``: a volatile derived belief younger than this many days is still
-    injected. 0, the default, never injects one; so does anything that is not a number."""
-    raw = get_dotted(cfg if cfg is not None else load_config(), WINDOW_KEY)
-    try:
-        days = float(str(raw))
-    except ValueError:
-        return 0.0
-    return days if days > 0 else 0.0
+    injected. 0, the default, never injects one. ``memware config`` refuses a value that is not a
+    non-negative number; one written by hand reads as 0."""
+    return parse_days(get_dotted(cfg if cfg is not None else load_config(), WINDOW_KEY)) or 0.0
 
 
 def _age_days(ts: object, now: datetime) -> float | None:
@@ -347,27 +381,52 @@ def _age_days(ts: object, now: datetime) -> float | None:
     return (now - t).total_seconds() / 86400.0
 
 
+class Declared(NamedTuple):
+    """A version a manifest declares, with the package name beside it."""
+
+    name: str
+    version: str
+    path: str
+    """The file it was read from, relative to the project root."""
+
+
+def is_placeholder(version: str) -> bool:
+    """``0.0.0`` and its tagged forms (``0.0.0-development``): a stand-in some release tooling
+    writes, never a version to check a belief against."""
+    return bool(re.match(r"^v?0+(?:\.0+){1,3}(?:$|[-+])", version.strip()))
+
+
 @dataclass(frozen=True)
 class Gate:
-    """What an unsolicited injection leaves out, for one project. ``names`` and ``version`` come
-    from :func:`memware.digest.resolve_project`; with no ``version`` only the classes apply."""
+    """What an unsolicited injection leaves out, for one project. ``names`` and ``declared`` come
+    from :func:`memware.digest.resolve_project`; with nothing declared only the classes apply."""
 
     names: tuple[str, ...] = ()
-    version: str | None = None
-    manifest: str | None = None
+    declared: tuple[Declared, ...] = ()
     volatile_days: float = 0.0
     now: datetime | None = None
 
+    def declared_for(self, subject: str) -> Declared | None:
+        """The version to check a belief about ``subject`` against: the manifest whose package
+        name the subject names, else the only one declared. Two that the subject does not tell
+        apart check nothing."""
+        terms = _subject_terms(subject)
+        named = [d for d in self.declared if d.name and _subject_terms(d.name) & terms]
+        if named:
+            return named[0]
+        return self.declared[0] if len(self.declared) == 1 else None
+
     def verdict(self, row: Any) -> Verdict | None:
         """Why ``row`` (a belief row) is left out, or None to inject it."""
-        if human_stated(row["reliability"], row["source"]):
+        if row_human_stated(row):
             return None
         subject, relation, value = str(row["subject"]), str(row["relation"]), str(row["value"])
-        if self.version:
-            ruled = manifest_rule(subject, relation, value, self.names, self.version)
+        declared = self.declared_for(subject)
+        if declared is not None:
+            ruled = manifest_rule(subject, relation, value, self.names, declared.version)
             if ruled is not None:
                 reason, named = ruled
-                where = f"{self.manifest or 'the manifest'} says {self.version}"
+                where = f"{declared.path} says {declared.version}"
                 if reason == OLDER_VERSION:
                     return Verdict(reason, f"names {named}, {where}")
                 return Verdict(reason, where)
@@ -379,6 +438,16 @@ class Gate:
             if age is not None and age < self.volatile_days:
                 return None
         return Verdict(cls, DESCRIBE[cls])
+
+    def admits_hit(self, volatile: str | None, valid_from: str | None) -> bool:
+        """For a reader that has only a recall hit (the Hermes provider): its ``volatile`` mark,
+        honouring the window. No manifest rule: a hit does not say which project it is in."""
+        if volatile is None:
+            return True
+        if not self.volatile_days:
+            return False
+        age = _age_days(valid_from, self.now or datetime.now(UTC))
+        return age is not None and age < self.volatile_days
 
 
 DESCRIBE = {

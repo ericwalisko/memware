@@ -33,9 +33,10 @@ from pathlib import Path
 
 from memware.config import get_dotted, load_config
 from memware.index import _subject_terms, fts_query
+from memware.ledger import confirmed_sql
 from memware.store import Store
 from memware.term import ellipsis
-from memware.volatile import Gate, window_days
+from memware.volatile import Declared, Gate, is_placeholder, window_days
 
 MAX_DIR_NAME = 200
 """Claude Code cuts a longer project directory name here and appends a hash of the path."""
@@ -119,17 +120,15 @@ class Project:
     """Every directory whose sessions belong to the project."""
     names: tuple[str, ...]
     """Directory and package names a belief's subject can name the project by."""
-    version: str | None = None
-    """The version the manifest declares, the ground truth a version belief is checked against."""
-    manifest: str | None = None
-    """The file ``version`` was read from, relative to ``root``."""
+    declared: tuple[Declared, ...] = ()
+    """The versions the root's manifests declare, each with its package name: the ground truth a
+    version belief is checked against."""
 
 
 @dataclass(frozen=True)
 class Manifest:
     names: tuple[str, ...]
-    version: str | None = None
-    path: str | None = None
+    declared: tuple[Declared, ...] = ()
 
 
 _DUNDER_VERSION = re.compile(r"""^__version__\s*(?::\s*str\s*)?=\s*["']([^"']+)["']""", re.M)
@@ -152,31 +151,34 @@ def _get(data: object, *keys: str) -> object:
 
 
 def _manifest(root: Path) -> Manifest:
-    """Package names and the first declared version from ``pyproject.toml`` (``project``, a
-    hatch ``[tool.hatch.version] path`` holding ``__version__``, or poetry), ``package.json`` and
-    ``Cargo.toml``, in that order. A file read, never a build tool: the prompt hook calls this."""
+    """Package names, and every version declared with its package name, from the manifests at
+    ``root``: ``pyproject.toml`` (``project.version``, a hatch ``[tool.hatch.version] path``
+    holding ``__version__``, or poetry), ``package.json`` and ``Cargo.toml``. A version a build
+    tool computes (``dynamic`` with no file to read, setuptools-scm) is not declared, and neither
+    is a ``0.0.0`` placeholder. Only the root is read, not a monorepo's nested packages. A file
+    read, never a build tool: the prompt hook calls this."""
     names: list[str] = []
-    found: list[tuple[str, str]] = []
+    declared: list[Declared] = []
 
-    def version(value: object, where: str) -> None:
-        if isinstance(value, str) and value.strip():
-            found.append((value.strip(), where))
+    def declare(name: object, version: object, where: str) -> None:
+        if isinstance(version, str) and version.strip() and not is_placeholder(version):
+            declared.append(Declared(name if isinstance(name, str) else "", version.strip(), where))
 
     py = _toml(root / "pyproject.toml")
-    for name in (_get(py, "project", "name"), _get(py, "tool", "poetry", "name")):
-        if isinstance(name, str):
-            names.append(name)
-            break
-    version(_get(py, "project", "version"), "pyproject.toml")
+    py_name = _get(py, "project", "name") or _get(py, "tool", "poetry", "name")
+    if isinstance(py_name, str):
+        names.append(py_name)
+    declare(py_name, _get(py, "project", "version"), "pyproject.toml")
     hatch = _get(py, "tool", "hatch", "version", "path")
-    if isinstance(hatch, str) and not found:
+    if isinstance(hatch, str) and not declared:
         try:
             m = _DUNDER_VERSION.search((root / hatch).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             m = None
         if m:
-            version(m.group(1), hatch)
-    version(_get(py, "tool", "poetry", "version"), "pyproject.toml")
+            declare(py_name, m.group(1), hatch)
+    if not declared:
+        declare(py_name, _get(py, "tool", "poetry", "version"), "pyproject.toml")
     try:
         pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -184,13 +186,13 @@ def _manifest(root: Path) -> Manifest:
     if isinstance(pkg, dict):
         if isinstance(pkg.get("name"), str):
             names.append(pkg["name"])
-        version(pkg.get("version"), "package.json")
+        declare(pkg.get("name"), pkg.get("version"), "package.json")
     cargo = _toml(root / "Cargo.toml")
-    if isinstance(_get(cargo, "package", "name"), str):
-        names.append(str(_get(cargo, "package", "name")))
-    version(_get(cargo, "package", "version"), "Cargo.toml")
-    first = found[0] if found else (None, None)
-    return Manifest(tuple(names), first[0], first[1])
+    cargo_name = _get(cargo, "package", "name")
+    if isinstance(cargo_name, str):
+        names.append(cargo_name)
+    declare(cargo_name, _get(cargo, "package", "version"), "Cargo.toml")
+    return Manifest(tuple(names), tuple(declared))
 
 
 def resolve_project(cwd: Path) -> Project:
@@ -204,7 +206,7 @@ def resolve_project(cwd: Path) -> Project:
             break
     else:
         m = _manifest(cwd)
-        return Project(cwd, (cwd,), tuple(dict.fromkeys([cwd.name, *m.names])), m.version, m.path)
+        return Project(cwd, (cwd,), tuple(dict.fromkeys([cwd.name, *m.names])), m.declared)
     checkouts = [cwd, root]
     names = [root.name]
     common = _common_dir(root / ".git")
@@ -220,17 +222,13 @@ def resolve_project(cwd: Path) -> Project:
     m = _manifest(root)
     names += m.names
     return Project(
-        root,
-        tuple(_unique(checkouts)),
-        tuple(dict.fromkeys(n for n in names if n)),
-        m.version,
-        m.path,
+        root, tuple(_unique(checkouts)), tuple(dict.fromkeys(n for n in names if n)), m.declared
     )
 
 
 def injection_gate(project: Project, cfg: dict[str, object] | None = None) -> Gate:
     """The gate both unsolicited readers apply for ``project``: the prompt hook and the digest."""
-    return Gate(project.names, project.version, project.manifest, window_days(cfg))
+    return Gate(project.names, project.declared, window_days(cfg))
 
 
 def transcript_dirs(project: Project, transcript_path: str | None = None) -> list[Path]:
@@ -298,8 +296,8 @@ def project_beliefs(conn: sqlite3.Connection, names: Iterable[str]) -> list[sqli
     terms = {t.strip('"') for t in q.split(" OR ")}
     try:
         rows = conn.execute(
-            "SELECT b.id, b.subject, b.relation, b.value, b.valid_from, b.reliability, b.source "
-            "FROM belief_fts "
+            "SELECT b.id, b.subject, b.relation, b.value, b.valid_from, b.reliability, b.source, "
+            f"{confirmed_sql('b')} FROM belief_fts "
             "JOIN belief b ON b.id = belief_fts.rowid "
             "WHERE belief_fts MATCH ? AND b.valid_to IS NULL AND b.status = 'committed' "
             "ORDER BY b.valid_from DESC, b.id DESC",

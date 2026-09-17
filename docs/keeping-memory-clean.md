@@ -152,12 +152,17 @@ version that its manifest overrules. To see them, and to retract them for good:
 memware beliefs --stale                     # each with its reason and why
 memware beliefs retract --stale             # dry run: what would be retracted
 memware beliefs retract --stale --apply     # retract them (rows are kept, reasons recorded)
-memware beliefs retract 12 15 --apply       # or just these ids
+memware beliefs retract 12 15 --apply       # or just these current beliefs, by id
 ```
 
-Neither form reopens what a retracted belief had superseded: that value is older still. Run
-`--stale` from inside the project, or pass `--cwd DIR`, so the manifest rules apply to it. A
-belief a person stated is never listed.
+Neither form reopens what a retracted belief had superseded: that value is older still. An id
+that names a belief no longer current is refused. Run `--stale` from inside the project, or pass
+`--cwd DIR`, so the manifest rules apply to it. A belief a person stated is never listed.
+
+**Keeping one the gate got wrong.** If `--stale` lists a fact you rely on, state it yourself:
+`memware assert SUBJECT RELATION VALUE` with the same value (or `remember` from an agent)
+records a confirmation beside the derived belief, and from then on it is injected and no longer
+listed. Nothing about the derived row changes.
 
 **A dangling citation is not the same thing.** Re-indexing a transcript (a `memware sync` that
 re-reads a file whose turns were re-parsed) can renumber a session's turn ids while the session

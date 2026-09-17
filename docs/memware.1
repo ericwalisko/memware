@@ -85,8 +85,8 @@ has not asked about yet, one line each, such as whether
 .B derive
 may run; nothing when there is none. Once per store, it also says how many beliefs injection
 leaves out (see
-.BR "beliefs \-\-stale" ),
-reading the store that one time and never creating it.
+.BR "beliefs \-\-stale" );
+the store records that it did, and a store that is not there is never created.
 .B \-\-from\-hook
 prints Claude Code hook JSON with a
 .BR systemMessage ,
@@ -128,22 +128,28 @@ derived belief that was a measurement, a moving version or a status when recorde
 List the current beliefs the prompt hook and the digest leave out, each with its reason and
 why: a derived
 .B measurement
-(a count, total, percentage, rate, size or duration),
+(a quantity that measures or counts something: a null rate, a row count, rows backfilled),
 .B moving_version
 (the version a branch, build or install is currently at) or
 .B status
-(of a numbered PR, issue, ticket or run, including what it contains); and, inside a project whose
+(of a numbered PR, issue, ticket or run, including what it contains, or under a relation made
+only of status words such as status, progress or known issue). A setting word in the relation
+(limit, max, default, initial, pool, page, line, sample, batch, worker, request, timeout, and
+the like) makes it config, never either. And, inside a project whose
 .IR pyproject.toml ,
 .I package.json
 or
 .I Cargo.toml
-declares a version, a belief about the project's version that differs from it
+declares a version at its root, a belief about the project's version that differs from the one
+declared for the package the subject names
 .RB ( contradicted )
 or that names an older version beside the project's name
 .RB ( older_version ).
-A belief a person stated (reliability above 0.5, or a source that is not a
+A computed version and a 0.0.0 placeholder are never checked against. A belief a person stated
+(reliability above 0.5, or a source that is not a
 .I memware:session/
-pointer) is never left out.
+pointer) is never left out, and neither is a derived belief a person confirmed by asserting the
+same value again or approving it in review.
 .B \-\-cwd
 names the project; the default is the current directory. See
 .B inject.volatile_days
@@ -153,7 +159,8 @@ under
 .BI "beliefs retract " "\-\-stale | ID ..."
 Retract what
 .B beliefs \-\-stale
-lists, or the committed beliefs with these ids. Nothing is written without
+lists, or the current committed beliefs with these ids; an id naming a superseded belief is
+refused, and nothing is written. Nothing is written without
 .BR \-\-apply .
 Rows are kept, each with its reason; nothing a retracted belief superseded is reopened.
 Give ids before any flag.
@@ -313,12 +320,9 @@ path globs (see
 and
 .BR inject.volatile_days :
 a derived measurement, moving version or status is injected while younger than this many days.
-The default, 0, never injects one.
-.TP
-.I <home>/notices.json
-The one\-time notices
-.B notice
-has given.
+The default, 0, never injects one;
+.B config
+refuses a value that is not a number of days, 0 or more.
 .TP
 .I <home>/ignore-markers.txt
 Content signatures for transcripts that must never be indexed or mirrored.

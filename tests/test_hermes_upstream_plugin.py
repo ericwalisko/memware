@@ -102,6 +102,21 @@ def test_prefetch_injects_only_the_latest_value(provider):
     assert "8443" in block and "8080" not in block
 
 
+def test_prefetch_leaves_out_what_memware_marks_volatile(provider):
+    """The upstream copy reads the mark memware puts on a hit, so a derived measurement is not
+    injected; the header claims only the date."""
+    from memware.ledger import assert_belief
+    from memware.store import Store
+
+    with Store(provider._db) as s:
+        for relation, value in (("test count", "91 tests"), ("license", "MIT")):
+            assert_belief(s, "memware repo", relation, value, source="memware:session/s/turn/1")
+    block = provider.prefetch("memware repo")
+    assert "MIT" in block and "91 tests" not in block
+    assert block.startswith("Known facts from the memware ledger, each with the date")
+    assert "currently valid" not in block + provider.system_prompt_block()
+
+
 def test_a_turn_is_captured_and_recallable(provider, tmp_path):
     provider.sync_turn(
         "what does the deploy script do",

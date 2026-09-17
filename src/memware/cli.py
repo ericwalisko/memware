@@ -7,7 +7,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -44,17 +43,17 @@ from memware.ledger import (
     Retraction,
     approve,
     assert_belief,
+    confirmed_sql,
     current,
     history,
     orphaned_count,
-    plan_belief_retraction,
     reject,
     retract,
     stale_turn_count,
 )
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
-from memware.store import Store
-from memware.volatile import REASONS, Gate, label, older_version
+from memware.store import Store, now_iso
+from memware.volatile import REASONS, WINDOW_KEY, Gate, label, older_version, parse_days
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -534,7 +533,7 @@ def cmd_context(a: argparse.Namespace) -> int:
         rows = {
             r["id"]: r
             for r in s.conn.execute(
-                f"SELECT * FROM belief WHERE id IN ({','.join('?' * len(hits))})",
+                f"SELECT *, {confirmed_sql()} FROM belief WHERE id IN ({','.join('?' * len(hits))})",
                 [h.id for h in hits],
             )
         }
@@ -801,10 +800,11 @@ def _cascade(
         counts.append(("sessions with no turn left", len(plan.sessions)))
     counts.append((("beliefs retracted", "beliefs to retract")[n], len(plan.retract)))
     if by_session:
-        counts.append((("predecessors reopened", "predecessors to reopen")[n], len(plan.reopen)))
-    counts.append((("predecessors relinked", "predecessors to relink")[n], len(plan.relink)))
-    if by_session:
-        counts.append(("human-stated beliefs kept", len(plan.kept)))
+        counts += [
+            (("predecessors reopened", "predecessors to reopen")[n], len(plan.reopen)),
+            (("predecessors relinked", "predecessors to relink")[n], len(plan.relink)),
+            ("human-stated beliefs kept", len(plan.kept)),
+        ]
     width = max(len(label) for label, _ in counts)
     print("\n".join(f"{label.rjust(width)} : {value:,}" for label, value in counts))
     if records:
@@ -917,6 +917,31 @@ def cmd_prune(a: argparse.Namespace) -> int:
     return 0
 
 
+def _not_retractable(s: Store, ids: list[int]) -> list[str]:
+    """Why each of ``ids`` cannot be retracted by id: no committed belief, or one that is no
+    longer current. A superseded belief reaches no prompt already, and retracting it would move
+    the end of its interval, which is history."""
+    marks = ",".join("?" * len(ids))
+    rows = {
+        r["id"]: r
+        for r in s.conn.execute(
+            f"SELECT id, status, valid_to, superseded_by FROM belief WHERE id IN ({marks})", ids
+        )
+    }
+    out = []
+    for i in ids:
+        r = rows.get(i)
+        if r is None or r["status"] != "committed":
+            out.append(f"no committed belief with id {i}")
+        elif r["valid_to"] is not None:
+            by = f" by #{r['superseded_by']}" if r["superseded_by"] else ""
+            out.append(
+                f"belief {i} is not current: it was superseded{by} at {r['valid_to']}, and "
+                "retract by id only acts on current beliefs"
+            )
+    return out
+
+
 def _beliefs_retract(a: argparse.Namespace) -> int:
     ids = _retract_ids(a) or []
     if a.orphaned + a.stale + bool(ids) != 1:
@@ -940,13 +965,9 @@ def _beliefs_retract(a: argparse.Namespace) -> int:
         else:
             why = f"retracted by id (memware beliefs retract {' '.join(map(str, ids))})"
             chosen = dict.fromkeys(ids, why)
-            found = {r["id"] for r in plan_belief_retraction(s, chosen).retract}
-            missing = [str(i) for i in ids if i not in found]
-            if missing:
-                print(
-                    f"no committed belief with id {', '.join(missing)}; nothing written",
-                    file=sys.stderr,
-                )
+            refused = _not_retractable(s, ids)
+            if refused:
+                print("\n".join([*refused, "nothing written"]), file=sys.stderr)
                 return 2
         plan = retract(s, reason="", apply=a.apply, beliefs=chosen)
     _cascade(a, plan, a.apply, by_session=False)
@@ -1084,14 +1105,13 @@ def _print_stats(r: dict[str, Any]) -> None:
 
 def _injection_status(s: Store, gate: Gate) -> dict[str, Any]:
     """Current beliefs the injection gate leaves out, by reason, and what decided it: the window
-    and, for the project in the current directory, the manifest version."""
+    and, for the project in the current directory, the versions its manifests declare."""
     left_out = dict.fromkeys(REASONS, 0)
     for row in _stale(s, gate):
         left_out[row["reason"]] += 1
     return {
         "volatile_days": gate.volatile_days,
-        "manifest": gate.manifest,
-        "manifest_version": gate.version,
+        "manifests": [d._asdict() for d in gate.declared],
         "left_out": left_out,
     }
 
@@ -1112,8 +1132,11 @@ def _injection_lines(i: dict[str, Any]) -> list[tuple[str, str]]:
             else "0: a derived measurement, moving version or status is never injected",
         ),
     ]
-    if i["manifest_version"]:
-        lines.append(("manifest version here", f"{i['manifest_version']} ({i['manifest']})"))
+    if i["manifests"]:
+        declared = "; ".join(
+            f"{d['name'] or '(no name)'} {d['version']} ({d['path']})" for d in i["manifests"]
+        )
+        lines.append(("manifest versions here", declared))
     return lines
 
 
@@ -1336,27 +1359,25 @@ def _maybe_setup_hint(a: argparse.Namespace) -> None:
 
 
 STALE_NOTICE = "stale-beliefs"
-"""The key in ``<home>/notices.json`` that records the stale-belief notice was given."""
+"""The key in the store's ``notice`` table that records the stale-belief notice was given."""
 
 
 def _stale_notice(a: argparse.Namespace, cwd: object) -> list[str]:
     """Once per store: how many beliefs injection now leaves out, and the command that lists
-    them. The first run records that it ran whatever it finds, so the store is read once."""
-    from memware.config import memware_home
-
-    marker = memware_home() / "notices.json"
-    try:
-        seen = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        seen = {}
-    if not isinstance(seen, dict) or STALE_NOTICE in seen:
-        return []
+    them. The marker is a row in the store's own ``notice`` table, claimed before the count, so
+    two sessions starting together give it once, and nothing in the memware home (a file that
+    will not parse, a directory that takes no write) can repeat it or keep it from firing. A
+    store that is not there is never created."""
     if a.db == ":memory:" or not Path(a.db).expanduser().exists():
         return []  # no store yet: nothing was ever injected, and a hook must not create one
     with Store(a.db) as s:
+        claimed = s.conn.execute(
+            "INSERT OR IGNORE INTO notice(key, shown_at, version) VALUES (?,?,?)",
+            (STALE_NOTICE, now_iso(), __version__),
+        ).rowcount
+        if not claimed:
+            return []
         n = len(_stale(s, injection_gate(resolve_project(Path(str(cwd or os.getcwd()))))))
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({**seen, STALE_NOTICE: __version__}) + "\n", encoding="utf-8")
     if not n:
         return []
     return [
@@ -1373,8 +1394,8 @@ def cmd_notice(a: argparse.Namespace) -> int:
     """What the person should hear at session start, for someone who only uses the plugin: they
     never type a memware command, so they never see what `stats` prints. The plugin runs this in
     the foreground at session start, and Claude Code shows the ``systemMessage`` to them. The
-    consent hints read the config file. The stale-belief notice reads the store once, ever, and
-    never creates it. Whatever goes wrong, it prints nothing and exits 0: it cannot fail a session
+    consent hints read the config file. The stale-belief notice opens the store to claim its
+    one-time marker, counts only the first time, and never creates a store. Whatever goes wrong, it prints nothing and exits 0: it cannot fail a session
     start."""
     try:
         from memware.config import config_path, get_dotted
@@ -1570,8 +1591,16 @@ def cmd_config(a: argparse.Namespace) -> int:
         val: object = a.value
         if a.key.endswith("keep_days"):
             val = [int(x) for x in a.value.replace(",", " ").split()]
-        elif a.key.endswith("_days") and re.fullmatch(r"\d+(?:\.\d+)?", a.value):
-            val = float(a.value) if "." in a.value else int(a.value)
+        elif a.key == WINDOW_KEY:
+            days = parse_days(a.value)
+            if days is None:
+                print(
+                    f"{WINDOW_KEY} takes a number of days, 0 or more (0 never injects a volatile "
+                    f"belief); got {a.value!r}, nothing written",
+                    file=sys.stderr,
+                )
+                return 2
+            val = int(days) if days.is_integer() else days
         elif a.value.lower() in ("true", "false"):
             val = a.value.lower() == "true"
         user = load_user_config()  # write the one key; defaults stay defaults, not choices

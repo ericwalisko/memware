@@ -88,20 +88,33 @@ and the digest leave out:
 
 | reason | what | example |
 |---|---|---|
-| `measurement` | a derived bare quantity under a measurement noun; a setting noun ("retry limit", "batch size") is never one | `memware test suite test count: 91 tests` |
+| `measurement` | a derived bare quantity under a measurement noun ("null rate", "p95 latency", "disk usage"), counting something ("row count", "rows backfilled"), or an ambiguous noun ("size", "count", "length", "rate") with a counted thing in the value ("size: 4.2 million rows") | `memware test suite test count: 91 tests` |
 | `moving_version` | a derived version of something named current, built, installed, deployed or on a branch, not pinned or required | `memware main branch current version: 0.4.0` |
-| `status` | a derived belief about a numbered PR, issue, ticket or run, or a status word under a status relation | `memware #22 feature: the no-capture fix` |
+| `status` | a derived belief about a numbered PR, issue, ticket or run; a relation made only of status words ("status", "build status", "progress", "known issue", "blocker"), whatever the value | `card t_cd03d14d status: review`, `memware 0.4.0 known issue: …` |
 | `contradicted` | inside a project whose manifest declares a version: a belief about the project's own version that differs | `built memware wheel version: 0.5.0` in a 0.6.1 checkout |
-| `older_version` | the same: a belief naming an older version beside the project's name | `memware 0.4.0 known issue: …` |
+| `older_version` | the same: a belief naming an older version beside the project's name | `memware 0.4.0 config format: toml` |
+
+A setting word in the relation makes a belief config, never a measurement or a status:
+`ruff line length: 100`, `db connection pool size: 20`, `api page size: 50`, `sentry sample rate:
+0.1`, `gunicorn worker count: 4`, `k8s pod memory request: 512Mi`, `sidebar default state: open`.
+The words are limit, max, min, default, initial, desired, pool, page, line, sample, batch, chunk,
+buffer, window, request, worker, timeout, retries, context and their like; a number under an
+identifier ("user id", "issue number") counts nothing either.
 
 The manifest is `pyproject.toml` (`project.version`, a hatch `[tool.hatch.version] path` holding
-`__version__`, or poetry), `package.json` or `Cargo.toml`, read from the project the hook's `cwd`
-is in. The classification is regex and word lists: no model call and no network, because the
-prompt hook runs it on every prompt.
+`__version__`, or poetry), `package.json` or `Cargo.toml`, read from the root of the project the
+hook's `cwd` is in; a monorepo's nested packages are not read. A belief is checked against the
+manifest whose package name its subject names, or the only one declared. A version a build tool
+computes (a `dynamic` version with no file to read, setuptools-scm) and a `0.0.0` placeholder
+are never checked against. The classification is regex and word lists: no model call and no
+network, because the prompt hook runs it on every prompt.
 
 A person stating a fact is a decision to keep it. A belief whose reliability is above derive's
 0.5, or whose source is not a `memware:session/` pointer (`remember`, `memware assert`), is
-never left out.
+never left out. Neither is a derived belief a person has confirmed: asserting the same value
+again, through `memware assert` or `remember`, or approving it in `memware review`, records a
+confirmation beside it (the belief row keeps its session source), and from then on it is
+injected. That is how to keep a fact the gate left out.
 
 `memware config inject.volatile_days N` injects a `measurement`, `moving_version` or `status`
 belief while it is younger than N days. The default is 0, never: the reported version belief
@@ -112,7 +125,10 @@ Nothing is hidden. `memware beliefs`, `recall` and the MCP tools still return th
 each with its date and `volatile` naming its class. `memware beliefs --stale` lists what is left
 out and why, `memware beliefs retract --stale` (a dry run until `--apply`) retracts it, and
 `memware stats` counts it by reason. The session-start notice tells an upgrading user once how
-many beliefs are no longer injected.
+many beliefs are no longer injected; the store records that it did.
+
+The Hermes provider's `prefetch` applies the class rule and the window through each hit's
+`volatile` mark. It has no project directory, so the manifest rules do not apply there.
 
 ## Hermes Agent
 

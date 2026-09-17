@@ -279,13 +279,14 @@ def search_beliefs(
     ("decision", "recovery", "model") match almost any prompt, and a belief about
     the wrong subject is noise, not memory.
     """
+    from memware.ledger import confirmed_sql
     from memware.volatile import volatility
 
     q = fts_query(query)
     if not q:
         return []
     rows = store.conn.execute(
-        "SELECT b.*, -bm25(belief_fts, 3.0, 1.0, 1.0) AS rel FROM belief_fts "
+        f"SELECT b.*, {confirmed_sql('b')}, -bm25(belief_fts, 3.0, 1.0, 1.0) AS rel FROM belief_fts "
         "JOIN belief b ON b.id = belief_fts.rowid "
         "WHERE belief_fts MATCH ? AND b.valid_to IS NULL AND b.status='committed' "
         "ORDER BY rel DESC LIMIT 100",

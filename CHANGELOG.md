@@ -27,20 +27,38 @@ All notable changes to this project are documented here. The format follows
   wheel version: 0.5.0` and `memware test suite test count: 91 tests` reached every session under
   "Known facts (currently valid…)" long after the repository moved on. None of them is an orphan,
   so `retract --orphaned` and `prune` never touched them. Both unsolicited readers now leave out:
-  - a derived belief `memware.volatile` classifies as a measurement, a moving version or a
-    status. It is left out by default; `memware config inject.volatile_days N` injects one while
-    it is younger than N days. The default is 0 (never) because the reported version belief was
-    one day old and already wrong, so no multi-day window would have kept it out;
+  - a derived belief `memware.volatile` classifies as a **measurement** (a bare quantity under a
+    measurement noun such as "null rate" or "p95 latency", or counting something: "row count",
+    "rows backfilled", "size: 4.2 million rows"), a **moving version** (the version something is
+    currently at, built or deployed as) or a **status** (a numbered PR, issue, ticket or run; a
+    relation made only of status words such as "status", "build status", "progress", "known
+    issue" or "blocker", whatever the value). A setting word in the relation makes it config,
+    never volatile: `line length: 100`, `pool size: 20`, `sample rate: 0.1`, `worker count: 4`,
+    `memory request: 512Mi`, `default state: open`. It is left out by default; `memware config
+    inject.volatile_days N` injects one while it is younger than N days. The default is 0
+    (never) because the reported version belief was one day old and already wrong, so no
+    multi-day window would have kept it out;
   - inside a project whose manifest declares a version (`pyproject.toml`, including a hatch
     `[tool.hatch.version] path`; `package.json`; `Cargo.toml`), a belief about the project's own
     version that differs from it (**contradicted**), and a belief naming an older version of
-    the project beside its name, such as `memware 0.4.0 known issue` (**older version**).
+    the project beside its name, such as `memware 0.4.0 config format` (**older version**).
+    Each manifest's version is checked against the beliefs whose subject names its package; a
+    version a build tool computes (setuptools-scm) and a `0.0.0` placeholder are never checked
+    against. Only the project root's manifests are read, not a monorepo's nested packages.
   A person stating a fact is a decision to keep it: a belief with reliability above derive's
   0.5, or a source that is not a `memware:session/` pointer (`remember`, `memware assert`), is
-  exempt from all of it. Nothing is deleted or hidden: a left-out belief stays in `memware
+  exempt from all of it. So is a derived belief a person has since confirmed, by asserting the
+  same value (`memware assert`, `remember`) or approving it in `memware review`: that is how a
+  fact the gate left out is kept. The confirmation is a row beside the belief; the belief row
+  keeps its session source. Nothing is deleted or hidden: a left-out belief stays in `memware
   beliefs`, `recall` and the MCP tools, which now mark it with `volatile` (its class). The
   classification is regex and word lists, no model and no network, because the prompt hook runs
   it on every prompt.
+- **The Hermes provider applies the same rule.** Its `prefetch` leaves out a belief memware
+  marks `volatile` (honouring `inject.volatile_days`) and its header no longer claims facts are
+  currently valid. The staged upstream copy gets the equivalent change and still works against a
+  memware that predates the mark. Neither has a project directory, so the manifest rules apply
+  only to the Claude Code hooks.
 
 ### Added
 - **`memware beliefs --stale`** lists the current beliefs injection leaves out, each with its
@@ -48,13 +66,17 @@ All notable changes to this project are documented here. The format follows
   (`pyproject.toml says 0.6.1`). `--cwd DIR` names the project whose manifest is checked.
 - **`memware beliefs retract` takes `--stale` or belief ids**, as a dry run unless `--apply`, as
   `--orphaned` does. Rows are kept and each retraction records its reason. Neither reopens what
-  a retracted belief had superseded, because that value is older still; a predecessor is
-  relinked to the next belief that survives, as `--orphaned` does.
+  a retracted belief had superseded, because that value is older still. An id that names a
+  belief no longer current is refused with the reason and nothing is written: it reaches no
+  prompt already, and retracting it would move the end of its interval.
 - **`memware stats` counts the beliefs injection leaves out, by reason** (`injection.left_out`
-  under `--json`), with the window and the manifest version it read.
+  under `--json`), with the window and the manifest versions it read.
 - **An upgrading user is told once.** The session-start notice says how many beliefs are no
-  longer injected and names `memware beliefs --stale`. It reads the store once, records that in
-  `<home>/notices.json`, and never creates a store.
+  longer injected and names `memware beliefs --stale`. The marker is a row in the store's own
+  `notice` table, claimed before the count, so a memware home that takes no write cannot repeat
+  it or keep it from firing. It never creates a store.
+- **`memware config inject.volatile_days`** refuses a value that is not a number of days, 0 or
+  more (`7d`, `-3`), exits 2 and writes nothing.
 
 ### Changed
 - **The injected blocks say what they are.** The prompt hook's header is now `Known facts from
