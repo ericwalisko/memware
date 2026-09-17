@@ -1189,7 +1189,9 @@ class _Withheld(io.TextIOBase):
         return len(data)
 
     def flush(self) -> None:
-        self._stream.flush()
+        # also called when the wrapper is collected, by which time the wrapped stream may be closed
+        with contextlib.suppress(ValueError):
+            self._stream.flush()
 
     def isatty(self) -> bool:
         return bool(self._stream.isatty())
