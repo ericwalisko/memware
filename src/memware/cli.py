@@ -44,6 +44,7 @@ from memware.ingest import (
 )
 from memware.ledger import (
     Policy,
+    Redaction,
     Retraction,
     approve,
     assert_belief,
@@ -58,7 +59,7 @@ from memware.ledger import (
 from memware.residue import FileCheck
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.scan import ScanReport, TranscriptHit, scan
-from memware.store import Scrubbed, Store, now_iso
+from memware.store import SHORT_WAIT_MS, Scrubbed, Store, now_iso
 from memware.volatile import REASONS, WINDOW_KEY, Gate, label, older_version, parse_days
 
 
@@ -521,6 +522,19 @@ def cmd_recall(a: argparse.Namespace) -> int:
     return 0
 
 
+def _hook_store(db: str) -> Store | None:
+    """The store for a foreground hook, which Claude Code gives 5 or 10 seconds. An open waits for
+    the write lock only when an upgrade adds a table, and a hook waits :data:`SHORT_WAIT_MS` for it.
+    When another writer holds the lock past that, it returns None: the hook has nothing to say this
+    time, and the next open, a sync's or a command's, creates the table."""
+    try:
+        return Store(db, busy_timeout_ms=SHORT_WAIT_MS)
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e) or "busy" in str(e):
+            return None
+        raise
+
+
 def cmd_context(a: argparse.Namespace) -> int:
     """Prompt-time helper: print the beliefs whose subject the prompt names, less what the
     injection gate leaves out (memware.volatile)."""
@@ -529,7 +543,10 @@ def cmd_context(a: argparse.Namespace) -> int:
     if not prompt.strip():
         return 0
     gate = injection_gate(resolve_project(Path(str(payload.get("cwd") or os.getcwd()))))
-    with Store(a.db) as s:
+    store = _hook_store(a.db) if a.from_hook else Store(a.db)
+    if store is None:
+        return 0
+    with store as s:
         # Injection is not retrieval: nobody asked for these, so they must not gain activation
         # or count as used — use_count means an agent or a person retrieved the belief. Ranked
         # past k, so a left-out belief makes room for the next one rather than a shorter block.
@@ -574,7 +591,10 @@ def cmd_digest(a: argparse.Namespace) -> int:
     if a.db != ":memory:" and not Path(a.db).expanduser().exists():
         return 0  # no store yet: nothing to say, and a hook must not create one
     session, transcript = payload.get("session_id"), payload.get("transcript_path")
-    with Store(a.db) as s:
+    store = _hook_store(a.db) if a.from_hook else Store(a.db)
+    if store is None:
+        return 0
+    with store as s:
         block = digest(
             s,
             Path(str(cwd)).expanduser(),
@@ -761,7 +781,6 @@ _CASCADE_COLS = [
 _PRUNE_COUNTS = {
     "sources_pruned": ("sources un-indexed", "sources to un-index"),
     "turns_removed": ("turns removed", "turns to remove"),
-    "beliefs_holding_text": ("beliefs holding the text", "beliefs holding the text"),
 }
 
 
@@ -888,6 +907,19 @@ def _source_notes(s: Store, a: argparse.Namespace, r: Pruned) -> list[str]:
     return notes
 
 
+def _redaction_line(red: Redaction, applied: bool) -> str:
+    """How many beliefs a prune redacts and their ids: never the text."""
+    if not red.beliefs:
+        return "0"
+    ids = ", ".join(str(i) for i in red.beliefs)
+    retracted = (
+        f"; {len(red.retracted):,} committed, {'now retracted' if applied else 'to retract'}"
+        if red.retracted
+        else ""
+    )
+    return f"{len(red.beliefs):,} (ids {ids}){retracted}"
+
+
 def _scrubbed_line(r: Pruned) -> str:
     """How the store file was rewritten after an applied prune, or why it was not."""
     if r.scrub_error:
@@ -968,10 +1000,11 @@ def _scrub_notes(a: argparse.Namespace, r: Pruned, dest: str | None) -> tuple[li
             f"the store file still holds copies of the text no row accounts for "
             f"({_left_line(left)}). To finish, {close}: {_finish_command(a)}"
         )
-    if r.beliefs_holding:
+    if left is not None and left.beliefs:
         notes.append(
-            f"{_plural(r.beliefs_holding, 'belief', 'hold')} the text in a subject, relation or "
-            "value, and prune keeps belief rows, so the store file still holds it there"
+            f"{_plural(left.beliefs, 'belief', 'hold')} the text past the start of a field: "
+            "--turns-starting-with redacts only a leading match, and --turns-containing redacts "
+            "it anywhere"
         )
     if left is not None and left.other_rows:
         where = ", ".join(f"{n:,} {w}" for w, n in left.other_rows.items())
@@ -1148,9 +1181,18 @@ def cmd_prune(a: argparse.Namespace) -> int:
     head: dict[str, Any] = {"turns_removed": r.turns}
     if not turn_flags:
         head = {"sources_pruned": len(r.sources), **head}
-    if r.beliefs_holding is not None:
-        head["beliefs_holding_text"] = r.beliefs_holding
+    if r.redaction is not None:
+        head["beliefs_redacted"] = r.redaction.beliefs
+        head["beliefs_retracted_by_redaction"] = r.redaction.retracted
+        head["confirmation_sources_redacted"] = r.redaction.confirmations
     lines = []
+    if r.redaction is not None:
+        lines.append(
+            (
+                "beliefs redacted" if r.applied else "beliefs to redact",
+                _redaction_line(r.redaction, r.applied),
+            )
+        )
     failed = False
     if r.applied:
         from memware.config import get_dotted, load_config
@@ -1794,9 +1836,11 @@ def _stale_notice(a: argparse.Namespace, cwd: object) -> list[str]:
         return []  # no store yet: nothing was ever injected, and a hook must not create one
     if _notice_given(a.db, STALE_NOTICE):
         return []
-    with Store(a.db) as s:
+    store = _hook_store(a.db)
+    if store is None:
+        return []  # locked mid-upgrade: the next session start says it
+    with store as s:
         n = len(_stale(s, injection_gate(resolve_project(Path(str(cwd or os.getcwd()))))))
-        s.conn.execute("PRAGMA busy_timeout = 250")
         try:
             claimed = s.conn.execute(
                 "INSERT OR IGNORE INTO notice(key, shown_at, version) VALUES (?,?,?)",
@@ -2436,7 +2480,8 @@ def build_parser() -> argparse.ArgumentParser:
             "A TEXT left out comes from --value-file, a prompt that does not echo, or stdin; `-`\n"
             "reads stdin. Run a removal from a plain terminal, not inside a Claude Code session:\n"
             "the command line lands in that session's transcript. Without --apply nothing is\n"
-            "written. A retracted belief keeps its row. Exit: 0 done · 1 the store file still\n"
+            "written. A belief holding the TEXT has it replaced with [removed] and keeps its row.\n"
+            "Exit: 0 done · 1 the store file still\n"
             "holds removed text (the scrub did not finish) · 2 bad usage"
         ),
     )

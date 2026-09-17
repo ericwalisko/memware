@@ -122,7 +122,8 @@ turn. The dry run lists, before anything is written:
 A retracted belief is closed at its own start (`status` `retracted`, `valid_to` equal to
 `valid_from`). It leaves `recall`, the prompt hook, the digest, `memware beliefs` and the
 `beliefs current` count, and it stays in the history of its key (`memware beliefs SUBJECT
-RELATION`) with when and why it was retracted. No belief row is deleted.
+RELATION`) with when and why it was retracted. No belief row is deleted. A prune rewrites one
+only to redact the text it removes ([Removing a value](#removing-a-value-a-token-a-password)).
 
 Runs un-indexed some other way leave their beliefs behind: an earlier `memware prune`, a sync
 that skipped a transcript it had indexed before (because of a marker, the no-capture list or a
@@ -256,10 +257,10 @@ reported clean.
 memware prune --turns-containing          # asks for the text; nothing written
 ```
 
-It counts the turns that hold the value anywhere, matched literally and case-sensitively, and the
-`beliefs holding the text`. A belief whose subject, relation or value holds it keeps it: prune
-retracts beliefs from sessions it empties but never deletes or rewrites a belief row, and no
-command rewrites a belief's text yet.
+It counts the turns that hold the value anywhere, matched literally and case-sensitively, and
+lists the `beliefs to redact` by id, never by text: every belief whose subject, relation, value or
+source holds the value, whatever its status, and whether derive filed it or a person stated it.
+Removing a secret outranks the rule that memware never retracts what a person stated.
 
 **2. Apply.**
 
@@ -269,6 +270,12 @@ memware prune --turns-containing --apply
 
 The turns are deleted, and the value leaves the store file, not only every query:
 
+- Each belief that holds the value has it replaced with `[removed]`, and its key follows when the
+  subject or relation changed. A committed one is also retracted, with the reason `memware prune:
+  text redacted (value withheld)`. Nothing else about the row changes: its id, `valid_from`,
+  `valid_to` and supersession links stay, no older value is reopened, and a belief already
+  retracted keeps its retraction. No belief row is deleted; a prune rewrites one only to redact
+  the text it removes. A person's confirmation that quoted the value is redacted the same way.
 - A retraction the prune records gives the command as `--turns-containing (value withheld)`. A
   retraction reason that memware 0.6.0 or 0.6.1 wrote with the value in it is rewritten the same
   way.

@@ -4,7 +4,8 @@ A derived belief cites ``memware:session/<id>/turn/<n>``. When that session leav
 by ``memware prune`` or by a sync that honours a marker, the belief loses its evidence and must
 stop reaching prompts. These pin the cascade from prune, the one-shot for beliefs that are
 already orphaned, the supersession repair, the dry-run default, and that no belief row is ever
-deleted. Every store here is synthetic, under the test's own tmp dir.
+deleted: a prune rewrites one only to redact the text it removes. Every store here is synthetic,
+under the test's own tmp dir.
 """
 
 from __future__ import annotations
@@ -423,3 +424,21 @@ def test_plain_output_is_the_records_only(db, capsys):
     _, out, _ = _run(capsys, "--db", db, "prune", "--containing", MARKER, "--plain")
     lines = out.splitlines()
     assert [line.split("\t")[0] for line in lines] == ["retract", "retract", "reopen", "keep"]
+
+
+def test_a_prune_rewrites_a_belief_only_to_redact_its_text(db, capsys):
+    """No belief row is ever deleted, and a prune rewrites one only to replace the text it selects
+    with ``[removed]`` (decided on #40): every other belief keeps its subject, relation and value."""
+    with Store(db) as s:
+        noted = assert_belief(
+            s, "eval harness", "marker", f"prompts carry {MARKER}", reliability=0.9
+        ).belief_id
+    before = _beliefs(db)
+    code, _, _ = _run(capsys, "--db", db, "prune", "--containing", MARKER, "--apply")
+    after = _beliefs(db)
+    assert code == 0 and after.keys() == before.keys()
+    assert after[noted]["value"] == "prompts carry [removed]"
+    fields = ("subject", "relation", "value")
+    for i, row in before.items():
+        if i != noted:
+            assert [after[i][f] for f in fields] == [row[f] for f in fields]

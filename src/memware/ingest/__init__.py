@@ -14,9 +14,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from memware.ledger import Retraction, apply_retraction, plan_retraction
+from memware.ledger import Redaction, Retraction, apply_retraction, plan_retraction, redact
 from memware.passage import index_turn
-from memware.residue import FileCheck, beliefs_holding, check_file, file_windows, value_tokens
+from memware.residue import FileCheck, check_file, file_windows, value_tokens
 from memware.store import Scrubbed, Store, now_iso
 
 WITHHELD = "(value withheld)"
@@ -349,10 +349,9 @@ class Pruned:
     missing: tuple[str, ...] = ()
     """Sources ``containing`` could not read because the transcript file is gone. Their turns
     may still be indexed, and only a turn selector reaches them."""
-    beliefs_holding: int | None = None
-    """Beliefs, in any status, whose subject, relation or value holds the selector's text, matched
-    as the selector matches. Prune keeps every belief row, so their text stays in the store file.
-    None for a ``glob`` alone, which has no text."""
+    redaction: Redaction | None = None
+    """The beliefs that hold the selector's text, matched as the selector matches, which the prune
+    redacts (:func:`memware.ledger.redact`). None for a ``glob`` alone, which has no text."""
     reasons_redacted: int = 0
     """Retraction reasons that held the text and now read :data:`WITHHELD` in its place. A prune in
     memware 0.6.0 and 0.6.1 wrote its whole command line into each reason."""
@@ -436,7 +435,8 @@ def prune(
     literally and case-sensitively, and a turn selector takes no other selector.
 
     Without ``apply`` nothing is written and the result is what would happen. With it, the
-    deletes, the retraction, and the rewrite of any retraction reason holding the text commit
+    deletes, the retraction, the redaction of every belief holding the text
+    (:func:`memware.ledger.redact`), and the rewrite of any retraction reason holding it commit
     together. Sessions are read before the delete: a deleted turn no longer says which session it
     came from. ``reason`` is recorded as it is given, so it must not hold the text.
 
@@ -452,7 +452,6 @@ def prune(
     if turn_selectors and not turn_selectors[0]:
         raise ValueError("an empty turn selector would match every turn")
     text = turns_containing or turns_starting_with or containing
-    holding = None if text is None else beliefs_holding(store.conn, text)
     if turns_containing is not None:
         sources: list[str] = []
         doomed, args = "instr(text, ?) > 0", [turns_containing]
@@ -463,7 +462,7 @@ def prune(
         sources, scanned, missing = _matching_sources(store, glob, containing)
         doomed, args = f"source IN ({','.join('?' * len(sources))})", sources
     conn = store.conn
-    redacted = 0
+    redacted, redaction = 0, None
     conn.execute("BEGIN IMMEDIATE" if apply else "BEGIN")
     try:
         counts = dict.fromkeys(sources, 0)
@@ -492,14 +491,17 @@ def prune(
         plan = plan_retraction(store, emptied)
         if apply:
             apply_retraction(store, plan, reason=reason)
-            if text:
-                # as given, and as a 0.6.x prune's command line quoted it (repr escapes a backslash)
-                for form in dict.fromkeys([text, repr(text)[1:-1]]):
-                    redacted += conn.execute(
-                        "UPDATE retraction SET reason = replace(reason, ?1, ?2) "
-                        "WHERE instr(reason, ?1) > 0",
-                        (form, WITHHELD),
-                    ).rowcount
+        if text:
+            # after the retraction, so a belief it retracted keeps that retraction
+            redaction = redact(store, text, prefix=turns_starting_with is not None, apply=apply)
+        if apply and text:
+            # as given, and as a 0.6.x prune's command line quoted it (repr escapes a backslash)
+            for form in dict.fromkeys([text, repr(text)[1:-1]]):
+                redacted += conn.execute(
+                    "UPDATE retraction SET reason = replace(reason, ?1, ?2) "
+                    "WHERE instr(reason, ?1) > 0",
+                    (form, WITHHELD),
+                ).rowcount
     except BaseException:
         conn.execute("ROLLBACK")
         raise
@@ -513,12 +515,15 @@ def prune(
         apply,
         scanned,
         tuple(missing),
-        holding,
+        redaction,
         redacted,
     )
     if not apply:
         return result
-    return _scrub_after(store, result, text, bool(turns or sources or redacted), progress)
+    rewrote = bool(redaction and (redaction.beliefs or redaction.confirmations))
+    return _scrub_after(
+        store, result, text, bool(turns or sources or redacted or rewrote), progress
+    )
 
 
 def _scrub_after(

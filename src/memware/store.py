@@ -253,6 +253,17 @@ class Store:
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), isolation_level=None)
+        try:
+            self._open()
+        except BaseException:
+            self.conn.close()  # a store that could not open, say locked mid-upgrade, holds nothing
+            raise
+
+    def _open(self) -> None:
+        """Set the connection up and bring the schema current. On a current store this takes no
+        write lock. The first open after an upgrade that adds a table does, and waits for it as
+        long as this connection waits: a short-wait open raises "database is locked" instead of
+        stalling, and the next open creates the table."""
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")

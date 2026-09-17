@@ -74,9 +74,11 @@ def _confirm(store: Store, row: sqlite3.Row, source: str | None) -> None:
     """Record that a person stated a belief derive wrote. The belief row is not touched: its
     source still says where derive read it."""
     if not human_stated(row["reliability"], row["source"]):
-        store.conn.execute(
+        # Written in the transaction that writes the belief, which already holds the lock, so it
+        # never waits on its own; outside one it waits briefly and is skipped when busy.
+        store.try_write(
             "INSERT OR IGNORE INTO confirmation(belief_id, confirmed_at, source) VALUES (?,?,?)",
-            (row["id"], now_iso(), source),
+            [(row["id"], now_iso(), source)],
         )
 
 
@@ -534,7 +536,8 @@ def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
     """Carry out ``plan``. The caller holds the write transaction and planned inside it.
 
     A retracted belief is closed at its own start, as a rejected candidate is, and keeps its
-    row, so ``history`` still shows it. No belief row is deleted."""
+    row, so ``history`` still shows it. No belief row is deleted; a prune rewrites one only to
+    redact its text (:func:`redact`)."""
     conn, ts = store.conn, now_iso()
     notes: dict[int, list[str]] = {}
     for p in plan.reopen:
@@ -559,6 +562,92 @@ def apply_retraction(store: Store, plan: Retraction, *, reason: str) -> None:
             "INSERT OR REPLACE INTO retraction(belief_id, retracted_at, reason) VALUES (?,?,?)",
             (r["id"], ts, "; ".join([why, *notes.get(r["id"], [])])),
         )
+
+
+REDACTED = "[removed]"
+"""What ``memware prune --apply`` writes in a belief in place of the text it removes."""
+
+REDACT_REASON = "memware prune: text redacted (value withheld)"
+"""The retraction reason of a committed belief a prune redacted."""
+
+_REDACTABLE = ("subject", "relation", "value", "source")
+
+
+@dataclass(frozen=True)
+class Redaction:
+    """What :func:`redact` does, or would do. Ids only: the text is usually a secret."""
+
+    beliefs: list[int]
+    """Beliefs, in any status, whose subject, relation, value or source holds the text."""
+    retracted: list[int]
+    """Those that were committed, which the redaction retracts."""
+    confirmations: list[int]
+    """Beliefs whose confirmation source holds the text."""
+
+
+def _redacted(text: str | None, removed: str, prefix: bool) -> str | None:
+    if text is None:
+        return None
+    if prefix:
+        return REDACTED + text[len(removed) :] if text.startswith(removed) else text
+    return text.replace(removed, REDACTED)
+
+
+def redact(store: Store, text: str, *, prefix: bool = False, apply: bool = False) -> Redaction:
+    """Replace ``text`` with :data:`REDACTED` in every belief row that holds it, whatever its
+    status, human-stated or derived: removing a secret outranks the rule that a prune never touches
+    what a person stated. Matching is literal and case-sensitive, anywhere in a field, or with
+    ``prefix`` only at its start, as the prune's selector matches turns. The subject, relation,
+    value and free-text source are rewritten, and the key follows a rewritten subject or relation.
+    A confirmation's source is rewritten the same way.
+
+    A committed belief is also retracted, with :data:`REDACT_REASON`, by its status alone: its
+    ``valid_to``, ``superseded_by`` and every other link stay as they are, and no predecessor is
+    reopened, because the value was not shown wrong, only secret. A belief already retracted
+    keeps its retraction. No row is deleted and none is merged, even one the redaction makes
+    identical to another. ``belief_fts`` follows through its update trigger.
+
+    Without ``apply`` nothing is written. The caller holds the write transaction."""
+    conn = store.conn
+    op = "= 1" if prefix else "> 0"
+    held = " OR ".join(f"instr(coalesce({c}, ''), ?1) {op}" for c in _REDACTABLE)
+    rows = conn.execute(
+        f"SELECT id, key, status, {', '.join(_REDACTABLE)} FROM belief WHERE {held} ORDER BY id",
+        (text,),
+    ).fetchall()
+    confirmations = conn.execute(
+        f"SELECT belief_id, source FROM confirmation WHERE instr(coalesce(source, ''), ?1) {op} "
+        "ORDER BY belief_id",
+        (text,),
+    ).fetchall()
+    plan = Redaction(
+        [int(r["id"]) for r in rows],
+        [int(r["id"]) for r in rows if r["status"] == "committed"],
+        [int(c["belief_id"]) for c in confirmations],
+    )
+    if not apply:
+        return plan
+    ts = now_iso()
+    for r in rows:
+        new = {c: _redacted(r[c], text, prefix) for c in _REDACTABLE}
+        rekeyed = (new["subject"], new["relation"]) != (r["subject"], r["relation"])
+        key = make_key(str(new["subject"]), str(new["relation"])) if rekeyed else r["key"]
+        conn.execute(
+            "UPDATE belief SET subject=?, relation=?, value=?, source=?, key=? WHERE id=?",
+            (new["subject"], new["relation"], new["value"], new["source"], key, r["id"]),
+        )
+        if r["status"] == "committed":
+            conn.execute("UPDATE belief SET status='retracted' WHERE id=?", (r["id"],))
+            conn.execute(
+                "INSERT OR IGNORE INTO retraction(belief_id, retracted_at, reason) VALUES (?,?,?)",
+                (r["id"], ts, REDACT_REASON),
+            )
+    for c in confirmations:
+        conn.execute(
+            "UPDATE confirmation SET source=? WHERE belief_id=?",
+            (_redacted(c["source"], text, prefix), c["belief_id"]),
+        )
+    return plan
 
 
 def retract(

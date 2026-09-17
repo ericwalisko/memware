@@ -65,9 +65,21 @@ All notable changes to this project are documented here. The format follows
   committed. On a 50,000-turn store a matching prune takes 3–4 s instead of 1.2 s, and one
   matching nothing 1.1 s instead of 0.65 s. Standard error names each scrub step, and says where
   copies may remain that memware never changes: backups made before now and the transcript files.
-  The dry run counts the beliefs whose subject, relation or value holds the text, because prune
-  keeps every belief row. `--json` adds `beliefs_holding_text`, `retraction_reasons_redacted`,
-  `store_scrubbed`, `scrub_error`, `left_in_store` and `backup_dest`.
+  `--json` adds `beliefs_redacted`, `beliefs_retracted_by_redaction`,
+  `confirmation_sources_redacted`, `retraction_reasons_redacted`, `store_scrubbed`, `scrub_error`,
+  `left_in_store` and `backup_dest`.
+- **An applied `memware prune` with a text selector redacts that text in beliefs.** A belief that
+  quoted a pasted secret kept it: prune never rewrote a belief row. Now every belief whose subject,
+  relation, value or free-text source holds the text, matched as the selector matches turns, has
+  it replaced with `[removed]`, in any status (committed, candidate, rejected, retracted,
+  superseded) and whether derive filed it or a person stated it, because removing a secret
+  outranks the rule that a person's belief is never retracted. The key follows a rewritten subject
+  or relation. A committed belief is also retracted, with the reason `memware prune: text redacted
+  (value withheld)`, by its status alone: its id, `valid_from`, `valid_to` and supersession links
+  stay, and no older value is reopened. A belief already retracted keeps its retraction. A
+  confirmation's source that quoted the text is redacted too. No belief row is deleted, and none
+  is merged, even one redaction makes identical to another. The dry run lists the beliefs it would
+  redact by id, never by text.
 - **A prune never prints or records its text.** The notes a selector that matched nothing prints
   said `no turn contains 'VALUE'`; they now say `the text`. A text selector written without its
   text asks for it without echoing it, or reads `--value-file` or stdin. A value is one line:
@@ -81,6 +93,12 @@ All notable changes to this project are documented here. The format follows
   skipped when the lock is not free, and the scrub never waits for a reader while holding the
   lock: with a reader held during a 150,000-turn prune, Hermes prefetch took at most 0.33 s
   (10.6 s before).
+- **A hook never waits out a schema upgrade.** The first open after an upgrade that adds a table
+  (this release adds `notice` and `confirmation`) takes the write lock. From the prompt hook, the
+  session-start digest or the notice, with another writer holding the lock, that open waited 12 s,
+  past the hooks' 5 s and 10 s timeouts. A hook now waits 250 ms, says nothing that time, and the
+  next open, a sync's or any command's, adds the tables. The notice's own write and a person's
+  confirmation follow the same rule for writes nothing depends on.
 - **A prune does not report a live row's search term as a copy it failed to remove.** Pruning
   `hunter2` while a turn says `Hunter2` left the term `hunter2` on an index page for that turn;
   the check now counts turns and beliefs that hold the text in another case and reports them,

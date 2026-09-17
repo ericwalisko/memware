@@ -24,7 +24,8 @@ from a plain terminal rather than inside a Claude Code session: a command run in
 written into its transcript, which memware indexes. Leave the value off the command line; the
 commands ask for it without echoing it. `memware prune --apply` removes the turns holding it,
 scrubs the store file and its write-ahead log, checks the file afterwards, and exits 1 when copies
-remain. It keeps belief rows, which can still hold the value. `memware scan` is read-only and
+remain. It never deletes a belief row, but it redacts the value in every belief that holds it,
+and retracts the current ones. `memware scan` is read-only and
 counts what is left in the transcripts, the store and the backups. memware never changes a
 transcript or a backup, and cannot reach synced-folder history, Time Machine or blocks an SSD
 keeps: rotate a leaked credential.

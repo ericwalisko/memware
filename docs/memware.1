@@ -202,8 +202,14 @@ from a prompt that does not echo it, or from standard input; a text of
 reads standard input. Run a removal from a plain terminal: a command run inside a Claude Code
 session is written into that session's transcript. Without
 .B \-\-apply
-it is a dry run: it prints what it would remove and retract, and the beliefs whose subject,
-relation or value holds the text (prune keeps belief rows), and writes nothing. A selector that
+it is a dry run: it prints what it would remove and retract, and the ids of the beliefs it would
+redact, and writes nothing. With
+.B \-\-apply
+every belief whose subject, relation, value or source holds the text, in any status and whether
+or not a person stated it, has the text replaced with
+.BR [removed] ,
+and a committed one is retracted; no belief row is deleted, and none is rewritten but to redact
+the text. A selector that
 matches nothing says on standard error what it searched and which selector reaches the text
 instead. With
 .BR \-\-apply ,

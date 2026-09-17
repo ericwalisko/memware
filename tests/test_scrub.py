@@ -20,7 +20,7 @@ from memware import backup as bk
 from memware.cli import main
 from memware.derive import source_pointer
 from memware.ingest import prune, sync_tree
-from memware.ledger import assert_belief
+from memware.ledger import Policy, assert_belief, make_key
 from memware.store import Store
 
 VALUE = "HUNTER2SECRET"
@@ -353,25 +353,179 @@ def test_a_dry_run_scrubs_nothing(tmp_path, capsys):
     assert db.read_bytes() == before
 
 
-def test_the_dry_run_counts_the_beliefs_that_hold_the_text(tmp_path, capsys):
-    """Prune keeps belief rows, retracted or not, so a belief naming the value keeps it in the
-    file. The count is how a person learns that before applying."""
+def _links(db: Path) -> dict[int, tuple]:
+    with Store(db) as s:
+        return {
+            r["id"]: (r["valid_from"], r["valid_to"], r["superseded_by"], r["reliability"])
+            for r in s.conn.execute("SELECT * FROM belief")
+        }
+
+
+def test_the_dry_run_lists_the_beliefs_to_redact_by_id_and_apply_redacts_them(tmp_path, capsys):
+    """Eric's decision on #40: a prune redacts the text in every belief that holds it, a person's
+    included, and retracts the committed ones. Ids and links stay; nothing is deleted."""
     db = _db(tmp_path)
     with Store(db) as s:
-        assert_belief(s, "deploy", "api token", f"is {VALUE}")
-        assert_belief(s, f"{VALUE} rotation", "is due", "on friday")
-        assert_belief(s, "deploy", "region", "us-east-1")
+        stated = assert_belief(s, "deploy", "api token", f"is {VALUE}", reliability=0.9).belief_id
+        subject = assert_belief(s, f"{VALUE} rotation", "is due", "on friday").belief_id
+        other = assert_belief(s, "deploy", "region", "us-east-1").belief_id
+    before, links = _dump_beliefs(db), _links(db)
 
-    code, out, _ = _run(capsys, "--db", str(db), "prune", "--turns-containing", VALUE, "--json")
-    assert code == 0 and json.loads(out)["beliefs_holding_text"] == 2
-    code, out, _ = _run(capsys, "--db", str(db), "prune", "--turns-containing", VALUE)
-    assert "beliefs holding the text : 2" in out
+    code, out, err = _run(capsys, "--db", str(db), "prune", "--turns-containing", VALUE, "--json")
+    r = json.loads(out)
+    assert code == 0 and r["beliefs_redacted"] == [stated, subject]
+    assert r["beliefs_retracted_by_redaction"] == [stated, subject]
+    code, out, err = _run(capsys, "--db", str(db), "prune", "--turns-containing", VALUE)
+    assert f"beliefs to redact : 2 (ids {stated}, {subject}); 2 committed, to retract" in out
+    assert VALUE not in out + err and _dump_beliefs(db) == before  # a dry run writes nothing
 
     code, out, err = _run(capsys, "--db", str(db), "prune", "--turns-containing", VALUE, "--apply")
-    assert code == 0 and "turns removed : 1" in out
-    assert "text left in the store : " in out and "2 beliefs" in out
-    assert "2 beliefs hold the text in a subject, relation or value" in err
-    assert _counts(db)[0] > 0  # the belief rows still hold it: the decision in the PR
+    assert (
+        code == 0
+        and f"beliefs redacted : 2 (ids {stated}, {subject}); 2 committed, now retracted" in out
+    )
+    after = _dump_beliefs(db)
+    assert after.keys() == before.keys() and _links(db) == links  # no row deleted, no link moved
+    assert (after[stated]["value"], after[stated]["status"]) == ("is [removed]", "retracted")
+    assert after[subject]["subject"] == "[removed] rotation"
+    assert after[subject]["key"] == make_key("[removed] rotation", "is due")  # rekeyed
+    assert after[other] == before[other]
+    with Store(db) as s:
+        reasons = dict(s.conn.execute("SELECT belief_id, reason FROM retraction").fetchall())
+    assert reasons == {
+        stated: "memware prune: text redacted (value withheld)",
+        subject: reasons[subject],
+    }
+    assert _counts(db) == (0, 0)
+    code, out, _ = _run(capsys, "--db", str(db), "beliefs", "--json")
+    assert [b["id"] for b in json.loads(out)] == [other]
+
+
+def _dump_beliefs(db: Path) -> dict[int, dict]:
+    with Store(db) as s:
+        return {r["id"]: dict(r) for r in s.conn.execute("SELECT * FROM belief")}
+
+
+def test_a_prefix_selector_redacts_only_a_leading_match(tmp_path, capsys):
+    db = _db(tmp_path)
+    prefix = "the api token is"
+    with Store(db) as s:
+        leading = assert_belief(s, "note", "first", f"{prefix} {VALUE}").belief_id
+        inside = assert_belief(s, "note", "second", f"we said {prefix} rotated").belief_id
+    code, out, err = _run(
+        capsys, "--db", str(db), "prune", "--turns-starting-with", prefix, "--apply"
+    )
+    beliefs = _dump_beliefs(db)
+    assert code == 0 and beliefs[leading]["value"] == f"[removed] {VALUE}"
+    assert beliefs[inside]["value"] == f"we said {prefix} rotated"
+    assert "1 belief holds the text past the start of a field" in err
+
+
+def test_redaction_merges_nothing_when_it_makes_two_rows_identical(tmp_path, capsys):
+    db = _db(tmp_path)
+    with Store(db) as s:
+        a = assert_belief(s, "svc", "token", VALUE, policy=Policy.AUTO).belief_id
+        b = assert_belief(s, "svc", "token", "[removed]", policy=Policy.AUTO).belief_id
+    code, _, _ = _run(capsys, "--db", str(db), "prune", "--turns-containing", VALUE, "--apply")
+    beliefs = _dump_beliefs(db)
+    assert code == 0 and set(beliefs) >= {a, b} and beliefs[a]["value"] == beliefs[b]["value"]
+
+
+def plant_everywhere(db: Path) -> dict[str, int]:
+    """Put the value in every place in the store it can reach in practice, besides the turn the
+    corpus holds: a derived belief, a person's belief and its free-text source, a superseded
+    predecessor, a belief already retracted, a retraction reason an older prune wrote, a pending
+    review's candidate, a rejected candidate, and a confirmation's source. Returns the ids."""
+    from memware.ledger import reject
+
+    ids = {}
+    with Store(db) as s:
+        turn = s.conn.execute(
+            "SELECT id, session FROM turn WHERE instr(text, ?) > 0", (VALUE,)
+        ).fetchone()
+        pointer = source_pointer(turn["session"], turn["id"])
+        ids["derived"] = assert_belief(s, "api", "token", f"is {VALUE}", source=pointer).belief_id
+        ids["stated"] = assert_belief(
+            s, f"{VALUE} vault", "owned by", "platform", reliability=0.9, source=f"said {VALUE}"
+        ).belief_id
+        ids["predecessor"] = assert_belief(
+            s, "db", "password", f"old {VALUE}", valid_from="2026-01-01T00:00:00Z", reliability=0.9
+        ).belief_id
+        ids["successor"] = assert_belief(
+            s, "db", "password", "rotated", valid_from="2026-02-01T00:00:00Z", reliability=0.9
+        ).belief_id
+        ids["retracted"] = assert_belief(s, "old", "secret", f"was {VALUE}").belief_id
+        ids["older_prune"] = assert_belief(s, "old", "session fact", "plain").belief_id
+        for key, reason in (
+            ("retracted", "manual"),
+            ("older_prune", f"memware prune --turns-containing {VALUE!r}"),
+        ):
+            s.conn.execute(
+                "UPDATE belief SET status='retracted', valid_to=valid_from WHERE id=?", (ids[key],)
+            )
+            s.conn.execute(
+                "INSERT INTO retraction(belief_id, retracted_at, reason) VALUES (?, '2026-03-01T00:00:00Z', ?)",
+                (ids[key], reason),
+            )
+        assert_belief(s, "cache", "ttl", "60", reliability=0.9)
+        pending = assert_belief(s, "cache", "ttl", f"{VALUE} seconds", reliability=0.2)
+        ids["candidate"], ids["review"] = pending.belief_id, pending.review_id
+        assert_belief(s, "queue", "size", "10", reliability=0.9)
+        rejected = assert_belief(s, "queue", "size", f"{VALUE} items", reliability=0.2)
+        reject(s, rejected.review_id)
+        ids["rejected"] = rejected.belief_id
+        derived_port = assert_belief(s, "port", "is", "5432", source=pointer).belief_id
+        assert_belief(s, "port", "is", "5432", source=f"confirmed {VALUE}", reliability=0.9)
+        ids["confirmed"] = derived_port
+    return ids
+
+
+def test_a_value_planted_everywhere_it_can_reach_leaves_the_store(tmp_path, capsys):
+    """After ``prune --apply``, the store check reports the value nowhere: not in the file, its
+    log or its search index, in no row of any table, in any case."""
+    from memware.residue import check_file
+
+    db = _db(tmp_path)
+    ids = plant_everywhere(db)
+    with Store(db) as s:
+        assert (
+            s.conn.execute(
+                "SELECT count(*) FROM confirmation WHERE instr(source, ?)", (VALUE,)
+            ).fetchone()[0]
+            == 1
+        )
+        statuses = {
+            k: s.conn.execute("SELECT status FROM belief WHERE id=?", (v,)).fetchone()[0]
+            for k, v in ids.items()
+            if k != "review"
+        }
+    assert statuses["rejected"] == "rejected" and statuses["candidate"] == "candidate"
+    before = check_file(db, VALUE)
+    assert before.beliefs == 6 and before.other_rows == {
+        "passage.text": 1,
+        "confirmation.source": 1,
+        "retraction.reason": 1,
+    }
+    links = _links(db)
+
+    code, out, err = _run(
+        capsys, "--db", str(db), "prune", "--turns-containing", VALUE, "--apply", "--json"
+    )
+    r = json.loads(out)
+    assert code == 0 and r["turns_removed"] == 1 and r["retraction_reasons_redacted"] == 1
+    assert r["confirmation_sources_redacted"] == [ids["confirmed"]]
+    left = check_file(db, VALUE)
+    assert (left.occurrences, left.occurrences_any_case, left.wal_occurrences or 0) == (0, 0, 0)
+    assert (left.rows, left.turns_any_case, left.beliefs_any_case, left.other_rows) == (0, 0, 0, {})
+    assert left.index_tokens == {"passage_fts": 0, "belief_fts": 0} == left.deleted_tokens
+    assert not left.found and _links(db) == links
+    beliefs = _dump_beliefs(db)
+    assert beliefs[ids["candidate"]]["status"] == "candidate"  # a pending review stays pending
+    assert beliefs[ids["rejected"]]["status"] == "rejected"
+    assert beliefs[ids["stated"]]["status"] == "retracted"  # a person's belief too
+    with Store(db) as s:
+        reasons = dict(s.conn.execute("SELECT belief_id, reason FROM retraction").fetchall())
+    assert reasons[ids["retracted"]] == "manual"  # already retracted: keeps its own retraction
 
 
 def test_a_glob_prune_counts_no_beliefs(tmp_path, capsys):
@@ -633,3 +787,52 @@ def test_pruning_a_value_another_live_turn_holds_in_another_case_is_not_a_leftov
     assert left["leftover"] is False and left["occurrences"] > 0  # the live turn's index term
     assert (left["turns"], left["turns_any_case"]) == (0, 1)
     assert left["live_term_rows"]["passage_fts"] == 1 and left["term_is_value"] is True
+
+
+@pytest.mark.parametrize(
+    ("argv", "limit"),
+    [
+        (["context", "--from-hook"], 10),
+        (["digest", "--from-hook"], 5),
+        (["notice", "--from-hook"], 5),
+    ],
+)
+def test_a_hook_opening_a_store_mid_upgrade_under_a_held_lock_returns_in_time(
+    tmp_path, capsys, monkeypatch, argv, limit
+):
+    """Merged with #39: the first open after the upgrade creates the ``notice`` and
+    ``confirmation`` tables, which takes the write lock. With another writer holding it, each hook
+    waited 12 s, past its timeout. A hook now waits a quarter second, says nothing this time, and
+    the next open creates the tables."""
+    import io
+    import time
+
+    db = _db(tmp_path)
+    with Store(db) as s:
+        assert_belief(s, "deploy", "region", "us-east-1")
+        s.conn.execute("DROP TABLE notice")  # a store written before #39
+        s.conn.execute("DROP TABLE confirmation")
+    payload = {
+        "prompt": "which deploy region",
+        "cwd": str(tmp_path),
+        "session_id": "s1",
+        "source": "startup",
+    }
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    locker = sqlite3.connect(db, isolation_level=None)
+    locker.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.perf_counter()
+        code = main(["--db", str(db), *argv])
+        took = time.perf_counter() - started
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+    out = capsys.readouterr()
+    assert code == 0 and took < 2.0 < limit, took
+    assert "Traceback" not in out.err
+
+    code, _, _ = _run(capsys, "--db", str(db), "beliefs")  # an ordinary command upgrades it
+    with Store(db) as s:
+        tables = {r[0] for r in s.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert code == 0 and {"notice", "confirmation"} <= tables

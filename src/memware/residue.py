@@ -71,13 +71,14 @@ def file_occurrences(
 
 
 def beliefs_holding(conn: sqlite3.Connection, text: str, *, any_case: bool = False) -> int:
-    """Beliefs, in any status, whose subject, relation or value holds ``text``, matched literally
-    and case-sensitively, or with ASCII case folded as SQLite folds it. Retracting a belief keeps its
-    row, so this is what still carries the text in the store once every turn holding it is gone."""
-    col = "lower({})" if any_case else "{}"
+    """Beliefs, in any status, whose subject, relation, value or source holds ``text``, matched
+    literally and case-sensitively, or with ASCII case folded as SQLite folds it. A prune redacts
+    these (:func:`memware.ledger.redact`), so after one this counts what it could not reach, such
+    as a text past the start of a field that ``--turns-starting-with`` left."""
+    col = "lower(coalesce({}, ''))" if any_case else "coalesce({}, '')"
     arg = "lower(?1)" if any_case else "?1"
     where = " OR ".join(
-        f"instr({col.format(c)}, {arg}) > 0" for c in ("subject", "relation", "value")
+        f"instr({col.format(c)}, {arg}) > 0" for c in ("subject", "relation", "value", "source")
     )
     return int(conn.execute(f"SELECT count(*) FROM belief WHERE {where}", (text,)).fetchone()[0])
 
