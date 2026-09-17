@@ -27,24 +27,34 @@ All notable changes to this project are documented here. The format follows
   wheel version: 0.5.0` and `memware test suite test count: 91 tests` reached every session under
   "Known facts (currently valid…)" long after the repository moved on. None of them is an orphan,
   so `retract --orphaned` and `prune` never touched them. Both unsolicited readers now leave out:
-  - a derived belief `memware.volatile` classifies as a **measurement** (a bare quantity under a
-    measurement noun such as "null rate" or "p95 latency", or counting something: "row count",
-    "rows backfilled", "size: 4.2 million rows"), a **moving version** (the version something is
-    currently at, built or deployed as) or a **status** (a numbered PR, issue, ticket or run; a
-    relation made only of status words such as "status", "build status", "progress", "known
-    issue" or "blocker", whatever the value). A setting word in the relation makes it config,
-    never volatile: `line length: 100`, `pool size: 20`, `sample rate: 0.1`, `worker count: 4`,
-    `memory request: 512Mi`, `default state: open`. It is left out by default; `memware config
-    inject.volatile_days N` injects one while it is younger than N days. The default is 0
-    (never) because the reported version belief was one day old and already wrong, so no
-    multi-day window would have kept it out;
+  - a derived belief `memware.volatile` classifies, **unambiguously**, as a **measurement** (a
+    count or total of rows, records, tests, files, lines, commits, duplicates, accounts, users or
+    downloads; a magnitude or a comma-grouped number of 1,000 or more beside one; an "N of M"
+    over one; a relation that is exactly progress, coverage or null rate), a **moving version**
+    (a version called current, latest, built, installed, deployed, released or on main) or a
+    **status** (a relation that is exactly status, state or progress, with a status word for a
+    value or an instance for a subject: `card t_cd03d14d status: review`, `graph_health scan
+    status: …`). Precision over recall: hiding a durable fact silently removes something someone
+    relied on, while a stale belief that slips through is the old behaviour and `memware beliefs
+    retract ID` removes it. So a qualifier (slo, sla, target, threshold, budget, commitment,
+    fail under, min, max, limit, default, initial, final, required, desired, every, schedule,
+    check, and their like) always means durable, and anything in doubt is durable:
+    `api p99 latency slo: 200ms`, `ci status check: required`, `order state machine final state:
+    completed`, `main branch python version: 3.12`. `tests/data/volatility_cases.jsonl` holds 115
+    labeled cases: none of the 69 durable ones is left out, and the 13 volatile ones the narrow
+    rules miss are kept there, marked, so the tradeoff is explicit. The derive prompt carries
+    the fuzzy judgment for new beliefs, where the model sees the excerpt. It is left out by
+    default; `memware config inject.volatile_days N` injects one while it is younger than N days.
+    The default is 0 (never) because the reported version belief was one day old and already
+    wrong, so no multi-day window would have kept it out;
   - inside a project whose manifest declares a version (`pyproject.toml`, including a hatch
     `[tool.hatch.version] path`; `package.json`; `Cargo.toml`), a belief about the project's own
     version that differs from it (**contradicted**), and a belief naming an older version of
     the project beside its name, such as `memware 0.4.0 config format` (**older version**).
-    Each manifest's version is checked against the beliefs whose subject names its package; a
-    version a build tool computes (setuptools-scm) and a `0.0.0` placeholder are never checked
-    against. Only the project root's manifests are read, not a monorepo's nested packages.
+    A declared version is checked only against beliefs whose subject names the package that
+    declares it, never another package's; a version a build tool computes (setuptools-scm) and
+    a `0.0.0` placeholder are never checked against. Only the project root's manifests are
+    read, not a monorepo's nested packages.
   A person stating a fact is a decision to keep it: a belief with reliability above derive's
   0.5, or a source that is not a `memware:session/` pointer (`remember`, `memware assert`), is
   exempt from all of it. So is a derived belief a person has since confirmed, by asserting the
@@ -73,8 +83,9 @@ All notable changes to this project are documented here. The format follows
   under `--json`), with the window and the manifest versions it read.
 - **An upgrading user is told once.** The session-start notice says how many beliefs are no
   longer injected and names `memware beliefs --stale`. The marker is a row in the store's own
-  `notice` table, claimed before the count, so a memware home that takes no write cannot repeat
-  it or keep it from firing. It never creates a store.
+  `notice` table, so a memware home that takes no write cannot repeat it or keep it from
+  firing. Once it is recorded, a session start only reads it, taking no lock; the one write
+  waits at most a quarter second for another writer. It never creates a store.
 - **`memware config inject.volatile_days`** refuses a value that is not a number of days, 0 or
   more (`7d`, `-3`), exits 2 and writes nothing.
 

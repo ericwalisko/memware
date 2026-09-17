@@ -1,0 +1,115 @@
+{"subject": "api", "relation": "p99 latency slo", "value": "200ms", "expect": "durable", "from": "review-2", "why": "an SLO is a target, not a reading"}
+{"subject": "api", "relation": "error rate slo", "value": "0.1%", "expect": "durable", "from": "review-2", "why": "an SLO is a target, not a reading"}
+{"subject": "checkout service SLA", "relation": "uptime commitment", "value": "99.9%", "expect": "durable", "from": "review-2", "why": "a commitment is a promise, not a measurement"}
+{"subject": "pytest-cov", "relation": "fail under coverage", "value": "90%", "expect": "durable", "from": "review-2", "why": "a threshold the build enforces"}
+{"subject": "nightly backup cron", "relation": "runs every", "value": "6 hours", "expect": "durable", "from": "review-2", "why": "a schedule"}
+{"subject": "memware digest", "relation": "sessions listed", "value": "5", "expect": "durable", "from": "review-2", "why": "a setting: how many are listed"}
+{"subject": "memware context hook", "relation": "beliefs injected", "value": "6", "expect": "durable", "from": "review-2", "why": "a setting: how many are injected"}
+{"subject": "ci matrix", "relation": "jobs", "value": "6", "expect": "durable", "from": "review-2", "why": "the matrix definition, not a tally"}
+{"subject": "github branch protection", "relation": "status checks", "value": "test, lint", "expect": "durable", "from": "review-2", "why": "configuration of required checks"}
+{"subject": "ci", "relation": "status check", "value": "required", "expect": "durable", "from": "review-2", "why": "a policy"}
+{"subject": "load balancer", "relation": "health check", "value": "/healthz", "expect": "durable", "from": "review-2", "why": "configuration: the health check path"}
+{"subject": "order state machine", "relation": "final state", "value": "completed", "expect": "durable", "from": "review-2", "why": "a design fact about the machine"}
+{"subject": "card lifecycle", "relation": "review state", "value": "requires two approvals", "expect": "durable", "from": "review-2", "why": "a process rule"}
+{"subject": "release process", "relation": "release state", "value": "tag then publish", "expect": "durable", "from": "review-2", "why": "a process rule"}
+{"subject": "deploy pipeline", "relation": "stage", "value": "production", "expect": "durable", "from": "review-2", "why": "pipeline structure"}
+{"subject": "main branch", "relation": "python version", "value": "3.12", "expect": "durable", "from": "review-2", "why": "debatable; the Python a branch targets rarely moves"}
+{"subject": "feature flag dark_mode", "relation": "state", "value": "enabled", "expect": "durable", "from": "review-2", "why": "debatable; a configured flag"}
+{"subject": "rollout", "relation": "percentage", "value": "10%", "expect": "durable", "from": "review-2", "why": "debatable; a configured rollout"}
+{"subject": "digware PR #82", "relation": "merged date", "value": "2026-07-25", "expect": "durable", "from": "review-2", "why": "a historical date stays true"}
+{"subject": "ruff", "relation": "line length", "value": "100", "expect": "durable", "from": "review-1", "why": "a linter setting"}
+{"subject": "db connection pool", "relation": "size", "value": "20", "expect": "durable", "from": "review-1", "why": "a pool setting"}
+{"subject": "api", "relation": "page size", "value": "50", "expect": "durable", "from": "review-1", "why": "a pagination setting"}
+{"subject": "sentry", "relation": "sample rate", "value": "0.1", "expect": "durable", "from": "review-1", "why": "a sampling setting"}
+{"subject": "gunicorn", "relation": "worker count", "value": "4", "expect": "durable", "from": "review-1", "why": "a server setting"}
+{"subject": "k8s pod", "relation": "memory request", "value": "512Mi", "expect": "durable", "from": "review-1", "why": "a resource request"}
+{"subject": "model", "relation": "context length", "value": "200000 tokens", "expect": "durable", "from": "review-1", "why": "a model property"}
+{"subject": "sidebar", "relation": "default state", "value": "open", "expect": "durable", "from": "review-1", "why": "a default"}
+{"subject": "circuit breaker", "relation": "initial state", "value": "closed", "expect": "durable", "from": "review-1", "why": "an initial state"}
+{"subject": "memware repo", "relation": "license", "value": "MIT", "expect": "durable", "from": "card", "why": "the license the card keeps injecting"}
+{"subject": "memware ingest worker", "relation": "retry limit", "value": "5", "expect": "durable", "from": "card", "why": "the retry limit the card keeps injecting"}
+{"subject": "ingest worker", "relation": "retry limit", "value": "5", "expect": "durable", "from": "issue-38", "why": "a configured limit"}
+{"subject": "project", "relation": "python requirement", "value": ">=3.11", "expect": "durable", "from": "review-1", "why": "a requirement; derive may still refuse the vague subject"}
+{"subject": "memware release automation", "relation": "publishes to", "value": "PyPI", "expect": "durable", "from": "hub-session", "why": "how releases work"}
+{"subject": "PR #24", "relation": "title", "value": "memware 0.5.0", "expect": "durable", "from": "hub-session", "why": "a title stays what it was"}
+{"subject": "PR #210", "relation": "merged date", "value": "2026-09-06", "expect": "durable", "from": "hub-session", "why": "a historical date stays true"}
+{"subject": "Boston Review", "relation": "issue date", "value": "October 1990", "expect": "durable", "from": "hub-session", "why": "a historical date stays true"}
+{"subject": "kanban card t_4e9c5530", "relation": "board", "value": "wiki", "expect": "durable", "from": "hub-session", "why": "which board a card is on"}
+{"subject": "ingest worker", "relation": "batch size", "value": "500", "expect": "durable", "from": "probe", "why": "a setting beside a size"}
+{"subject": "ruff", "relation": "pinned version", "value": "0.16.5", "expect": "durable", "from": "probe", "why": "a pin, not where something is"}
+{"subject": "staging api", "relation": "port", "value": "8443", "expect": "durable", "from": "probe", "why": "configuration"}
+{"subject": "the staging table", "relation": "join key", "value": "account_id", "expect": "durable", "from": "probe", "why": "schema"}
+{"subject": "staging table", "relation": "max row count", "value": "10000", "expect": "durable", "from": "probe", "why": "a limit"}
+{"subject": "python", "relation": "minimum version", "value": "3.11", "expect": "durable", "from": "probe", "why": "a requirement"}
+{"subject": "memware", "relation": "version", "value": "0.6.1", "expect": "durable", "from": "probe", "why": "no qualifier and no manifest to compare with"}
+{"subject": "health check", "relation": "path", "value": "/healthz", "expect": "durable", "from": "probe", "why": "configuration"}
+{"subject": "memware issue tracker", "relation": "host", "value": "github", "expect": "durable", "from": "probe", "why": "where issues live"}
+{"subject": "memware repo", "relation": "state management", "value": "a reducer", "expect": "durable", "from": "probe", "why": "architecture"}
+{"subject": "staging db", "relation": "user id", "value": "1204", "expect": "durable", "from": "probe", "why": "an identifier counts nothing"}
+{"subject": "digest bug", "relation": "issue number", "value": "38", "expect": "durable", "from": "probe", "why": "an identifier counts nothing"}
+{"subject": "admin table", "relation": "rows per page", "value": "50", "expect": "durable", "from": "probe", "why": "a pagination setting"}
+{"subject": "memware 0.6.0", "relation": "release date", "value": "2026-09-15", "expect": "durable", "from": "probe", "why": "a historical date stays true"}
+{"subject": "the deploy", "relation": "status", "value": "a blue-green rollout", "expect": "durable", "from": "probe", "why": "not a status word and not an instance"}
+{"subject": "api", "relation": "health", "value": "ok", "expect": "durable", "from": "probe", "why": "health is not a status relation here"}
+{"subject": "the engine", "relation": "pinned version", "value": "0.11.0", "expect": "durable", "from": "probe", "why": "a pin"}
+{"subject": "the proxy", "relation": "address", "value": "127.0.0.1:3119", "expect": "durable", "from": "probe", "why": "configuration"}
+{"subject": "the deriver", "relation": "model", "value": "deepseek-v4-flash", "expect": "durable", "from": "probe", "why": "configuration"}
+{"subject": "issue 38", "relation": "root cause", "value": "derive files measurements", "expect": "durable", "from": "probe", "why": "a finding stays true"}
+{"subject": "memware", "relation": "first released version", "value": "0.1.0", "expect": "durable", "from": "probe", "why": "a historical version"}
+{"subject": "raft cluster", "relation": "quorum", "value": "3 of 5", "expect": "durable", "from": "probe", "why": "an N of M rule, not progress"}
+{"subject": "model", "relation": "context length", "value": "200,000 tokens", "expect": "durable", "from": "probe", "why": "a comma-grouped property, not a count"}
+{"subject": "saas plan", "relation": "user count", "value": "5", "expect": "durable", "from": "probe", "why": "a plan's included users"}
+{"subject": "build system", "relation": "state", "value": "hatchling", "expect": "durable", "from": "probe", "why": "not a status word; build is not the head noun"}
+{"subject": "memware 0.6.1", "relation": "config format", "value": "json", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "names the current version, not an older one"}
+{"subject": "memware", "relation": "ruff version", "value": "0.16.5", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "another package's version"}
+{"subject": "memware", "relation": "python version", "value": "3.11", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "another package's version"}
+{"subject": "ruff", "relation": "version", "value": "0.16.5", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "the subject does not name the package"}
+{"subject": "memware", "relation": "version", "value": "v0.6.1", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "the declared version"}
+{"subject": "memware 0.10.0", "relation": "planned feature", "value": "scan", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "a newer version, compared as a version"}
+{"subject": "dynpkg 1.2.0", "relation": "fixed in", "value": "x", "expect": "durable", "project": {"names": ["dynpkg", "dynpkg-ui"], "declared": [["dynpkg-ui", "1.4.0", "package.json"]]}, "from": "review-2", "why": "dynpkg declares no version (setuptools-scm); dynpkg-ui's 1.4.0 is not its version"}
+{"subject": "the table", "relation": "row count", "value": "4.2 million rows", "expect": "measurement", "from": "issue-38", "why": "the row count derive filed"}
+{"subject": "staging table", "relation": "row count", "value": "4.2 million", "expect": "measurement", "from": "issue-38", "why": "a row count"}
+{"subject": "staging table", "relation": "duplicate rows removed", "value": "10,671", "expect": "measurement", "from": "issue-38", "why": "a tally of one run"}
+{"subject": "staging table", "relation": "null rate", "value": "83%", "expect": "measurement", "from": "issue-38", "why": "a data-quality reading"}
+{"subject": "memware test suite", "relation": "test count", "value": "91 tests", "expect": "measurement", "from": "hub-session", "why": "a test count, wrong a day later"}
+{"subject": "built memware wheel", "relation": "version", "value": "0.5.0", "expect": "moving_version", "from": "hub-session", "why": "what was built, no manifest here"}
+{"subject": "built memware wheel", "relation": "version", "value": "0.5.0", "expect": "contradicted", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "hub-session", "why": "pyproject.toml says 0.6.1"}
+{"subject": "memware main branch", "relation": "current version", "value": "0.4.0", "expect": "moving_version", "from": "hub-session", "why": "where main was"}
+{"subject": "memware main branch", "relation": "current version", "value": "0.4.0", "expect": "contradicted", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "hub-session", "why": "pyproject.toml says 0.6.1"}
+{"subject": "memware 0.4.0", "relation": "known issue", "value": "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder", "expect": "older_version", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "hub-session", "why": "names 0.4.0 inside a 0.6.1 project"}
+{"subject": "memware 0.4.0", "relation": "known issue", "value": "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder", "expect": "status", "miss": true, "from": "hub-session", "why": "outside the project nothing says 0.4.0 is old, and 'known issue' is not an exact status relation"}
+{"subject": "card t_cd03d14d", "relation": "status", "value": "review", "expect": "status", "from": "hub-session", "why": "a card's lane"}
+{"subject": "Card", "relation": "status", "value": "blocked", "expect": "status", "from": "hub-session", "why": "a card's lane"}
+{"subject": "de-orphan card t_09736013", "relation": "status", "value": "archived", "expect": "status", "from": "hub-session", "why": "a card's lane"}
+{"subject": "PR", "relation": "status", "value": "open and green", "expect": "status", "from": "hub-session", "why": "a PR's state"}
+{"subject": "PR #125", "relation": "status", "value": "opened", "expect": "status", "from": "hub-session", "why": "a PR's state"}
+{"subject": "PR #211", "relation": "status", "value": "review", "expect": "status", "from": "hub-session", "why": "a PR's state"}
+{"subject": "graph_health scan", "relation": "status", "value": "clean 0 for three weeks", "expect": "status", "from": "hub-session", "why": "a scan's latest result"}
+{"subject": "backfill", "relation": "progress", "value": "83%", "expect": "measurement", "from": "review-1", "why": "progress of one run"}
+{"subject": "memware test suite", "relation": "test count", "value": "230 tests", "expect": "measurement", "from": "probe", "why": "a test count"}
+{"subject": "memware ingest queue", "relation": "row count", "value": "4,200", "expect": "measurement", "from": "probe", "why": "a row count"}
+{"subject": "staging table", "relation": "size", "value": "4.2 million rows", "expect": "measurement", "from": "probe", "why": "rows with a magnitude"}
+{"subject": "staging table", "relation": "rows backfilled", "value": "3 of 5", "expect": "measurement", "from": "probe", "why": "N of M over rows"}
+{"subject": "memware", "relation": "code coverage", "value": "91%", "expect": "measurement", "from": "probe", "why": "exactly coverage"}
+{"subject": "github repo", "relation": "total downloads", "value": "1,204", "expect": "measurement", "from": "probe", "why": "a download tally"}
+{"subject": "the api", "relation": "latest release", "value": "v2.1.0", "expect": "moving_version", "from": "probe", "why": "the latest release"}
+{"subject": "python", "relation": "installed version", "value": "3.11.9", "expect": "moving_version", "from": "probe", "why": "what is installed"}
+{"subject": "memware PR #12", "relation": "state", "value": "merged", "expect": "status", "from": "probe", "why": "a PR's state"}
+{"subject": "memware ci", "relation": "status", "value": "failing", "expect": "status", "from": "probe", "why": "a status word"}
+{"subject": "memware", "relation": "current status", "value": "green", "expect": "status", "from": "probe", "why": "current status, a status word"}
+{"subject": "nightly backup job", "relation": "status", "value": "stalled for two days", "expect": "status", "from": "probe", "why": "a job's latest state"}
+{"subject": "memware", "relation": "version", "value": "0.5.0", "expect": "contradicted", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "pyproject.toml says 0.6.1"}
+{"subject": "memware 0.4.0", "relation": "config format", "value": "toml", "expect": "older_version", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "names 0.4.0"}
+{"subject": "memware@0.5.2", "relation": "regression", "value": "context hook slow", "expect": "older_version", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "names 0.5.2"}
+{"subject": "memware #22", "relation": "feature", "value": "the no-capture fix", "expect": "status", "miss": true, "from": "hub-session", "why": "what a PR contains; 'feature' is not a status relation"}
+{"subject": "memware ci", "relation": "checks passed", "value": "3 of 5", "expect": "measurement", "miss": true, "from": "probe", "why": "'checks' is a qualifier"}
+{"subject": "api", "relation": "p95 latency", "value": "340ms", "expect": "measurement", "miss": true, "from": "probe", "why": "latency is not an accumulating count"}
+{"subject": "memware host", "relation": "disk usage", "value": "1.2 GB", "expect": "measurement", "miss": true, "from": "probe", "why": "usage is not an accumulating count"}
+{"subject": "api", "relation": "error rate", "value": "2%", "expect": "measurement", "miss": true, "from": "probe", "why": "a rate is not an accumulating count"}
+{"subject": "ingest queue", "relation": "run count", "value": "12", "expect": "measurement", "miss": true, "from": "probe", "why": "runs are not on the accumulating list"}
+{"subject": "kanban boards", "relation": "open card count", "value": "305", "expect": "measurement", "miss": true, "from": "hub-session", "why": "cards are not on the accumulating list"}
+{"subject": "kanban review 2026-09-16", "relation": "boards audited", "value": "18 boards, 454 open cards total, 76 audited", "expect": "measurement", "miss": true, "from": "hub-session", "why": "not a bare quantity"}
+{"subject": "memware", "relation": "build status", "value": "green", "expect": "status", "miss": true, "from": "probe", "why": "'build status' is not exactly status"}
+{"subject": "memware", "relation": "open issues", "value": "the digest header", "expect": "status", "miss": true, "from": "probe", "why": "'open issues' is not a status relation"}
+{"subject": "the release", "relation": "blocker", "value": "notarisation", "expect": "status", "miss": true, "from": "probe", "why": "'blocker' is not a status relation"}
+{"subject": "load balancer health check", "relation": "status", "value": "failing", "expect": "status", "miss": true, "from": "probe", "why": "'check' in the subject is a qualifier"}

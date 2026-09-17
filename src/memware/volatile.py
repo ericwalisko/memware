@@ -3,38 +3,49 @@
 A belief closes only when a later value supersedes it, which is right for a decision and wrong
 for a snapshot. A row count, the version a branch was at, a PR's status: each was true the day
 it was written and is wrong a day later, while nothing ever supersedes it. This module names
-those classes with no model call, so ``derive`` rejects them before they are written and the
-two unsolicited readers (the prompt hook and the session-start digest) leave out the ones an
-older store already holds.
+those classes with no model call, so ``derive``'s gate rejects them and the unsolicited readers
+(the prompt hook, the session-start digest, the Hermes provider) leave out the ones a store
+already holds.
 
-Three classes, each decided from the triple alone:
+**Precision over recall.** Hiding a durable fact is a new harm: it silently removes something
+someone relied on, and nothing tells them. A stale belief that slips through is the old
+behaviour, and ``memware beliefs retract ID`` removes it. So only unambiguous cases are volatile,
+and anything in doubt is durable. The fuzzy judgment belongs to derive's prompt, where the model
+sees the excerpt; this sees only a triple. ``tests/data/volatility_cases.jsonl`` is the labeled
+corpus: no durable case may classify volatile, and the volatile cases these rules miss are kept
+there, marked, so the tradeoff stays visible.
 
-* **measurement**: a bare quantity (a number with an optional unit or magnitude word, or an
-  "N of M" figure) under a relation that is a measurement noun ("row count", "test count",
-  "null rate"). A relation that names a setting ("retry limit", "batch size") is never a
-  measurement: a configured number stays true until someone changes it.
-* **moving version**: a version string for something named as current, built, installed,
-  deployed or on a branch, and not as pinned or required.
-* **status**: anything about a numbered PR, issue, ticket or run ("PR #12", "memware #22"),
-  including what it contains, or a status word ("merged", "failing") under a status relation.
+A qualifier anywhere in the subject or relation always means durable: slo, sla, target,
+threshold, budget, commitment, fail under, min, max, limit, default, initial, final, required,
+desired, every, schedule, check, and words like them (:data:`QUALIFIERS`). Past that:
 
-Two rules need the project a session runs in, whose manifest (``pyproject.toml``,
-``package.json``, ``Cargo.toml``) declares a version, and apply to beliefs whose subject names
-that project:
+* **measurement**: a bare quantity that is one of: a count, total or "number of" over an
+  accumulating noun (rows, records, tests, files, lines, commits, duplicates, accounts, users,
+  downloads); a magnitude word or a comma-grouped number of 1,000 or more beside such a noun;
+  an "N of M" figure over one, or over a completion word ("backfilled", "passed"); or a relation
+  that is exactly progress, coverage or null rate.
+* **moving version**: a version string under a version noun that the subject or relation calls
+  current, latest, built, installed, deployed, released, or on main.
+* **status**: a relation that is exactly status, state or progress, whose value is a status word
+  (open, merged, review, blocked, failing, archived, …) or whose subject names an instance (an
+  id such as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card).
 
-* **contradicted**: a belief about the project's own version whose value is not the manifest's.
-* **older version**: a belief that names an older version of the project beside its name
-  ("memware 0.4.0 known issue") is history once the manifest is newer.
+Two rules need the project a session runs in, and apply to a belief whose subject names the
+package that declares the version (``pyproject.toml``, ``package.json``, ``Cargo.toml``):
+
+* **contradicted**: a belief about that package's own version whose value is not the declared one.
+* **older version**: a belief that names an older version of the package beside its name
+  ("memware 0.4.0 known issue") is history once the declared version is newer.
 
 A person stating a fact is a decision to keep it. A belief with reliability above what derive
-writes, or a source that is not a ``memware:session/`` pointer, is exempt from all of it. Nothing
-here writes: a left-out belief stays in ``memware beliefs``, recall and the MCP tools, marked.
+writes, a source that is not a ``memware:session/`` pointer, or a confirmation by a person since,
+is exempt from all of it. Nothing here writes: a left-out belief stays in ``memware beliefs``,
+recall and the MCP tools, marked.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
@@ -70,132 +81,91 @@ def wordset(words: str) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 # the three classes
 # ---------------------------------------------------------------------------
-# A false positive costs more than a false negative. At derive it only means a weaker ledger,
-# but at injection it silently hides a durable fact someone relied on. So a relation with a
-# setting word is config whatever else it says, and a noun that names a setting as often as a
-# measurement ("size", "count", "length", "rate") is a measurement only beside a counted thing.
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+QUALIFIERS = wordset(
+    """
+    slo sla target targets threshold thresholds budget commitment committed goal expected fail
+    under min minimum max maximum limit limits cap ceiling floor quota default defaults initial
+    final first original required require requires desired every schedule scheduled cron check
+    checks policy rule allowed pinned pin configured setting settings config per page shown
+    displayed listed visible keep kept retained retention ttl timeout timeouts interval window
+    pool batch chunk buffer sample request worker workers context capacity plan included
+    """
+)
+"""A word that makes a belief a rule, a target or a setting, whatever else it says: "p99 latency
+slo", "uptime commitment", "fail under coverage", "final state", "runs every", "status check"."""
+
 _QUANTITY = re.compile(
     r"^(?:~|≈|<=?|>=?|about|approx\.?|approximately|around|roughly|nearly|almost|over|under"
     r"|at least|at most|more than|less than|fewer than)?\s*"
     r"[-+]?\d[\d,_]*(?:\.\d+)?"
     r"(?:\s*(?:/|of|out of)\s*\d[\d,_]*(?:\.\d+)?)?"  # "3 of 5", "3/5"
-    r"\s*(?:%|[a-z]{1,3}\b)?"  # "83%", "340ms", "1.2gb", "4.2m", "512Mi"
+    r"\s*(?:%|[a-z]{1,3}\b)?"  # "83%", "340ms", "1.2gb", "4.2m"
     r"(?:\s+[a-z][a-z-]*){0,2}\s*$",  # "91 tests", "4.2 million rows"
     re.I,
 )
+_MAGNITUDE = re.compile(r"\b(?:thousand|million|billion|trillion)\b|\b\d{1,3}(?:,\d{3})+\b", re.I)
+"""A magnitude word, or a comma-grouped number (so 1,000 or more)."""
+_N_OF_M = re.compile(r"^\s*\d[\d,]*\s*(?:of|/|out of)\s*\d[\d,]*\b", re.I)
 
-SETTING_NOUNS = wordset(
-    """
-    limit limits max maximum min minimum default defaults initial desired pool page line sample
-    batch chunk buffer window request worker workers timeout timeouts retry retries cap ceiling
-    floor budget interval ttl retention concurrency parallel parallelism quota setting settings
-    configured pinned pin required allowed expiry backoff target keep capacity port ports
-    threshold per replicas heap context
-    """
+ACCUMULATING_PLURAL = wordset(
+    "rows records tests files lines commits duplicates accounts users downloads"
 )
-"""A relation with one of these names a configured value: "page size", "sample rate", "worker
-count", "memory request", "context length", "default state"."""
-IDENTIFIER_NOUNS = wordset("id ids uid gid pid key index code sha hash name number")
-"""A number under one of these identifies something ("user id", "issue number"); it counts nothing."""
-MEASURE_NOUNS = wordset(
-    """
-    percentage percent pct ratio coverage cardinality throughput latency p50 p90 p95 p99 elapsed
-    runtime took accuracy average avg mean median removed deleted added processed remaining
-    pending passed failed skipped succeeded null usage uptime downtime utilization backlog lag
-    """
+ACCUMULATING = ACCUMULATING_PLURAL | wordset(
+    "row record test file line commit duplicate account user download"
 )
-"""Nouns that are a measurement whenever the value is a bare quantity: "null rate", "p95 latency",
-"disk usage", "rows removed"."""
-AMBIGUOUS_MEASURES = wordset(
-    """
-    count counts total totals size sizes rate rates length lengths duration durations time times
-    speed score scores sum amount volume frequency memory disk bytes
-    """
+"""Nouns a store, a suite or a repository accumulates: a count of them is a snapshot."""
+COUNT_WORDS = wordset("count counts total totals tally")
+COMPLETION_WORDS = wordset(
+    "passed failed done completed complete processed migrated backfilled removed deleted imported indexed remaining succeeded synced"
 )
-"""Nouns that name a setting as often as a measurement ("pool size", "line length"): a measurement
-only beside a counted thing, in the relation or the value ("row count", "size: 4.2 million rows")."""
-COUNTED_NOUNS = wordset(
-    """
-    row rows record records test tests duplicate duplicates account accounts file files entry
-    entries item items user users session sessions turn turns belief beliefs document documents
-    commit commits lines error errors failure failures occurrence occurrences event events message
-    messages run runs job jobs task tasks download downloads install installs star stars view
-    views visitor visitors hit hits check checks pages samples requests issues tickets customers
-    orders transactions
-    """
-)
-"""What a data quantity counts: a relation naming one ("rows backfilled", "test count") with a
-bare quantity is a measurement."""
+EXACT_MEASURES = frozenset({"progress", "coverage", "null rate", "test coverage", "code coverage"})
 
 _VERSION = re.compile(r"^v?\d+(?:\.\d+){1,3}(?:[-+.]?[0-9a-z]+(?:\.[0-9a-z]+)*)?$", re.I)
 VERSION_NOUNS = frozenset({"version", "versions", "release", "tag"})
-MOVING = wordset(
-    """
-    current currently latest newest built build installed install deployed running main master
-    head trunk branch wheel sdist published shipped live now today
-    """
-)
-PINNING = wordset(
-    """
-    pinned pin pins required requires minimum min maximum max supported compatible locked lock
-    constraint floor ceiling target targets declared desired default
-    """
-)
+MOVING = wordset("current currently latest newest built installed deployed released")
+_ON_MAIN = re.compile(r"\bon (?:main|master)\b", re.I)
 
-_TRACKED = re.compile(
-    r"(?:^|[\s(])#\d+\b"
-    r"|\b(?:pr|prs|pull request|mr|merge request|issue|ticket|run|job|check|workflow)\s*#?\d+\b",
-    re.I,
-)
-STATUS_NOUNS = wordset(
-    "status state progress stage phase result results outcome conclusion verdict health"
-)
-STATUS_FILLER = wordset(
-    "current currently overall latest last build ci review merge deploy deployment release pr check checks run the of"
-)
-"""Words a relation made only of status words may also carry: "build status", "current state"."""
-_OPEN_ISSUE = re.compile(
-    r"^(?:(?:known|open|outstanding|current|active|remaining)\s+)?(?:issue|issues|bug|bugs|blocker|blockers)$"
-)
-"""Relations that name what is wrong right now: "known issue", "open issue", "blocker"."""
-STATUS_VALUES = wordset(
+STATUS_RELATIONS = frozenset({"status", "state", "progress"})
+_STATUS_LEAD = wordset("current overall latest")
+STATUS_VALUE_WORDS = wordset(
     """
-    open opened closed merged unmerged draft pending passing passed failing failed green red
-    running queued blocked approved done complete completed success successful succeeded
-    cancelled canceled skipped broken fixed resolved unresolved landed stale started waiting ready
-    reverted abandoned flaky errored archived
+    open opened closed merged unmerged review reviewing blocked failing failed passing passed
+    archived done pending green red draft queued running cancelled canceled approved rejected
+    stale stuck waiting started complete completed progress
     """
-) | frozenset(
-    {
-        "in progress",
-        "in review",
-        "changes requested",
-        "not started",
-        "on hold",
-        "ready for review",
-        "timed out",
-    }
 )
+_STATUS_FILLER = wordset("and but still now in not yet")
+INSTANCE_NOUNS = wordset(
+    "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
+)
+_INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
 
 
 def names_setting(relation: str) -> bool:
-    """Whether the relation names a configured value ("retry limit", "batch size")."""
-    return bool(_words(relation) & SETTING_NOUNS)
+    """Whether the relation names a configured value ("retry limit", "worker count")."""
+    return bool(set(_tokens(relation)) & QUALIFIERS)
 
 
-def is_measurement(relation: str, value: str) -> bool:
-    """A bare quantity that measures something: under a measurement noun ("null rate"), a counted
-    noun ("rows backfilled"), or an ambiguous one beside a counted noun ("row count", "size: 4.2
-    million rows"). Never under a setting or identifier noun."""
-    if not _QUANTITY.match(value.strip()):
+def _qualified(subject: str, relation: str) -> bool:
+    return bool(set(_tokens(f"{subject} {relation}")) & QUALIFIERS)
+
+
+def is_measurement(subject: str, relation: str, value: str) -> bool:
+    """An unambiguous measurement; see the module docstring. A qualifier makes it durable."""
+    if not _QUANTITY.match(value.strip()) or _qualified(subject, relation):
         return False
-    words = _words(relation)
-    if words & (SETTING_NOUNS | IDENTIFIER_NOUNS):
-        return False
-    return bool(
-        words & (MEASURE_NOUNS | COUNTED_NOUNS)
-        or (words & AMBIGUOUS_MEASURES and _words(value) & COUNTED_NOUNS)
-    )
+    rel = _tokens(relation)
+    words = set(rel) | set(_tokens(value))
+    if " ".join(rel) in EXACT_MEASURES:
+        return True
+    counted = (set(rel) & COUNT_WORDS or "number of" in " ".join(rel)) and words & ACCUMULATING
+    grouped = _MAGNITUDE.search(value) and words & ACCUMULATING_PLURAL
+    fraction = _N_OF_M.match(value) and set(rel) & (ACCUMULATING | COMPLETION_WORDS)
+    return bool(counted or grouped or fraction)
 
 
 def is_version(value: str) -> bool:
@@ -203,36 +173,50 @@ def is_version(value: str) -> bool:
 
 
 def is_moving_version(subject: str, relation: str, value: str) -> bool:
-    words = _words(f"{subject} {relation}")
+    """A version string under a version noun called current, latest, built, installed, deployed,
+    released or on main; not one a qualifier pins ("minimum version", "first released version")."""
+    text = f"{subject} {relation}"
+    words = set(_tokens(text))
     return (
         is_version(value)
         and bool(words & VERSION_NOUNS)
-        and bool(words & MOVING)
-        and not words & PINNING
+        and bool(words & MOVING or _ON_MAIN.search(text))
+        and not words & QUALIFIERS
     )
 
 
+def _status_value(value: str) -> bool:
+    words = _tokens(value)
+    return (
+        bool(words)
+        and set(words) <= STATUS_VALUE_WORDS | _STATUS_FILLER
+        and bool(set(words) & STATUS_VALUE_WORDS)
+    )
+
+
+def _names_instance(subject: str) -> bool:
+    words = _tokens(subject)
+    return bool(_INSTANCE_ID.search(subject)) or bool(words and words[-1] in INSTANCE_NOUNS)
+
+
 def is_status(subject: str, relation: str, value: str) -> bool:
-    """About a numbered PR, issue, ticket or run; or a relation made only of status words
-    ("status", "build status", "progress", "known issue"), whatever the value; or a status word
-    under a status noun. A setting word makes it config: "default state", "initial state"."""
-    if _TRACKED.search(f"{subject} {relation}"):
-        return True
-    words = _words(relation)
-    if words & SETTING_NOUNS:
+    """A relation that is exactly status, state or progress (after "current" or "overall"), with
+    a status word for a value or an instance for a subject. "final state", "status check",
+    "review state" and "default state" are not: a qualifier, or a word before the noun."""
+    if _qualified(subject, relation):
         return False
-    if _OPEN_ISSUE.match(" ".join(re.findall(r"[a-z]+", relation.lower()))):
-        return True
-    if words & STATUS_NOUNS and words <= STATUS_NOUNS | STATUS_FILLER:
-        return True
-    state = " ".join(re.findall(r"[a-z]+", value.lower()))
-    return bool(words & STATUS_NOUNS) and state in STATUS_VALUES
+    rel = _tokens(relation)
+    while rel and rel[0] in _STATUS_LEAD:
+        rel = rel[1:]
+    if len(rel) != 1 or rel[0] not in STATUS_RELATIONS:
+        return False
+    return _status_value(value) or _names_instance(subject)
 
 
 def classify(subject: str, relation: str, value: str) -> str | None:
     """The volatile class of a triple (:data:`CLASSES`), or None for a durable one. Regex and
     word lists only: it runs in ``derive``'s gate and on every prompt."""
-    if is_measurement(relation, value):
+    if is_measurement(subject, relation, value):
         return MEASUREMENT
     if is_moving_version(subject, relation, value):
         return MOVING_VERSION
@@ -300,13 +284,14 @@ OWN_VERSION_WORDS = (
     | MOVING
     | wordset(
         """
-    released package repo repository project app cli library lib dist distribution pypi npm
-    crate local checkout source tree is at on the of
-    """
+        package repo repository project app cli library lib dist distribution pypi npm crate local
+        checkout source tree is at on the of main master head trunk branch wheel sdist build
+        published shipped
+        """
     )
 )
-"""The words a belief about a project's own version may use besides the project's name. A word
-outside it names something else ("memware ruff version", "memware python version")."""
+"""The words a belief about a package's own version may use besides its name. A word outside
+it names something else ("memware ruff version", "memware python version")."""
 
 
 def _norm_version(v: str) -> str:
@@ -314,12 +299,12 @@ def _norm_version(v: str) -> str:
 
 
 def manifest_rule(
-    subject: str, relation: str, value: str, names: Iterable[str], version: str
+    subject: str, relation: str, value: str, name: str, version: str
 ) -> tuple[str, str] | None:
     """(:data:`OLDER_VERSION` or :data:`CONTRADICTED`, the version read from the belief) for a
-    belief about the project that its manifest ``version`` overrules, or None."""
-    names = [n for n in names if n]
-    terms = _subject_terms(" ".join(names))
+    belief about package ``name`` that the ``version`` it declares overrules, or None. The
+    subject must name the package: another package's version is never compared."""
+    terms = _subject_terms(name)
     if not terms or not _subject_terms(subject) & terms:
         return None
     text = f"{subject} {relation}"
@@ -328,7 +313,7 @@ def manifest_rule(
         for m in re.finditer(pattern, text, re.I):
             if older_version(m.group(1), version):
                 return OLDER_VERSION, m.group(1)
-    rest = _words(text) - _words(" ".join(names))
+    rest = _words(text) - _words(name)
     if (
         rest & VERSION_NOUNS
         and rest <= OWN_VERSION_WORDS
@@ -407,14 +392,12 @@ class Gate:
     now: datetime | None = None
 
     def declared_for(self, subject: str) -> Declared | None:
-        """The version to check a belief about ``subject`` against: the manifest whose package
-        name the subject names, else the only one declared. Two that the subject does not tell
-        apart check nothing."""
+        """The declared version to check a belief about ``subject`` against: only one whose
+        package name the subject names. A subject naming no declaring package, or a package that
+        declares no version (a computed one, a placeholder), is compared with nothing."""
         terms = _subject_terms(subject)
         named = [d for d in self.declared if d.name and _subject_terms(d.name) & terms]
-        if named:
-            return named[0]
-        return self.declared[0] if len(self.declared) == 1 else None
+        return named[0] if named else None
 
     def verdict(self, row: Any) -> Verdict | None:
         """Why ``row`` (a belief row) is left out, or None to inject it."""
@@ -423,7 +406,7 @@ class Gate:
         subject, relation, value = str(row["subject"]), str(row["relation"]), str(row["value"])
         declared = self.declared_for(subject)
         if declared is not None:
-            ruled = manifest_rule(subject, relation, value, self.names, declared.version)
+            ruled = manifest_rule(subject, relation, value, declared.name, declared.version)
             if ruled is not None:
                 reason, named = ruled
                 where = f"{declared.path} says {declared.version}"

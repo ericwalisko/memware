@@ -159,6 +159,10 @@ Neither form reopens what a retracted belief had superseded: that value is older
 that names a belief no longer current is refused. Run `--stale` from inside the project, or pass
 `--cwd DIR`, so the manifest rules apply to it. A belief a person stated is never listed.
 
+**One the gate misses.** The rules catch only unambiguous cases, so some stale beliefs are still
+injected (`api p95 latency: 340ms`, a `known issue` read outside its project). Retract one by id:
+`memware beliefs SUBJECT` shows its id, and `memware beliefs retract ID --apply` retracts it.
+
 **Keeping one the gate got wrong.** If `--stale` lists a fact you rely on, state it yourself:
 `memware assert SUBJECT RELATION VALUE` with the same value (or `remember` from an agent)
 records a confirmation beside the derived belief, and from then on it is injected and no longer

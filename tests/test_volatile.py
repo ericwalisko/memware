@@ -21,114 +21,20 @@ def _row(subject, relation, value, valid_from="2026-09-15T12:00:00Z", **kw):
     return {"subject": subject, "relation": relation, "value": value, "valid_from": valid_from}
 
 
-@pytest.mark.parametrize(
-    "relation, value, want",
-    [
-        ("row count", "4.2 million rows", True),
-        ("row count", "4.2 million", True),
-        ("duplicate rows removed", "10,671", True),
-        ("null rate", "83%", True),
-        ("test count", "91 tests", True),
-        ("checks passed", "3 of 5", True),
-        ("p95 latency", "340ms", True),
-        ("disk usage", "1.2 GB", True),
-        ("rows backfilled", "3 of 5", True),  # a counted noun
-        ("error rate", "2%", True),  # an ambiguous noun beside a counted one
-        ("size", "4.2 million rows", True),  # ... or with the counted noun in the value
-        ("retry limit", "5", False),  # a setting
-        ("batch size", "500", False),  # "size" beside a setting
-        ("max row count", "10000", False),
-        ("port", "8443", False),  # not a measurement noun
-        ("python version", "3.11", False),
-        ("row count", "about half", False),  # not a bare quantity
-        ("release date", "2026-09-15", False),
-        # the review's config cases: a setting word, or an ambiguous noun beside nothing counted
-        ("line length", "100", False),
-        ("size", "20", False),
-        ("page size", "50", False),
-        ("sample rate", "0.1", False),
-        ("worker count", "4", False),
-        ("memory request", "512Mi", False),
-        ("context length", "200000 tokens", False),
-        ("rows per page", "50", False),
-        ("user id", "1204", False),  # an identifier counts nothing
-        ("issue number", "38", False),
-    ],
-)
-def test_measurement(relation, value, want):
-    assert v.is_measurement(relation, value) is want
-
-
-@pytest.mark.parametrize(
-    "subject, relation, value, want",
-    [
-        ("built memware wheel", "version", "0.5.0", True),
-        ("memware main branch", "current version", "0.4.0", True),
-        ("the api", "latest release", "v2.1.0", True),
-        ("ruff", "pinned version", "0.16.5", False),
-        ("python", "minimum version", "3.11", False),
-        ("memware", "version", "0.6.1", False),  # no qualifier: the manifest rule's business
-        ("memware main branch", "current version", "abc123", False),  # not a version string
-    ],
-)
-def test_moving_version(subject, relation, value, want):
-    assert v.is_moving_version(subject, relation, value) is want
-
-
-@pytest.mark.parametrize(
-    "subject, relation, value, want",
-    [
-        ("memware PR #12", "state", "merged", True),
-        ("memware #22", "feature", "the no-capture fix", True),  # what a PR contains
-        ("issue 38", "root cause", "derive files measurements", True),
-        ("memware ci", "status", "Failing.", True),
-        ("the deploy", "status", "a blue-green rollout", True),  # a status relation, any value
-        ("memware 0.4.0", "known issue", "a real bug", True),
-        ("memware", "open issues", "the digest header", True),
-        ("the release", "blocker", "notarisation", True),
-        ("memware", "build status", "green", True),
-        ("card t_cd03d14d", "status", "review", True),
-        ("de-orphan card t_09736013", "status", "archived", True),
-        ("backfill", "progress", "83%", True),
-        ("graph_health scan", "status", "clean 0 for three weeks", True),
-        ("PR", "status", "open and green", True),
-        ("PR #125", "status", "opened", True),
-        ("PR #211", "status", "review", True),
-        ("sidebar", "default state", "open", False),  # a setting word: config
-        ("circuit breaker", "initial state", "closed", False),
-        ("memware repo", "state management", "a reducer", False),  # a status word among others
-        ("health check", "path", "/healthz", False),
-        ("memware issue tracker", "host", "github", False),
-    ],
-)
-def test_status(subject, relation, value, want):
-    assert v.is_status(subject, relation, value) is want
-
-
-@pytest.mark.parametrize(
-    "subject, relation, value",
-    [
-        ("ruff", "line length", "100"),
-        ("db connection pool", "size", "20"),
-        ("api", "page size", "50"),
-        ("sentry", "sample rate", "0.1"),
-        ("gunicorn", "worker count", "4"),
-        ("k8s pod", "memory request", "512Mi"),
-        ("model", "context length", "200000 tokens"),
-        ("sidebar", "default state", "open"),
-        ("circuit breaker", "initial state", "closed"),
-    ],
-)
-def test_durable_config_classifies_as_nothing(subject, relation, value):
-    assert v.classify(subject, relation, value) is None
-
-
 def test_classify_names_one_class_or_none():
+    """One of each; every other case, with its reason, is in tests/data/volatility_cases.jsonl."""
     assert v.classify("memware test suite", "test count", "91 tests") == v.MEASUREMENT
     assert v.classify("memware main branch", "current version", "0.4.0") == v.MOVING_VERSION
-    assert v.classify("memware #22", "feature", "the no-capture fix") == v.STATUS
+    assert v.classify("card t_cd03d14d", "status", "review") == v.STATUS
     assert v.classify("memware repo", "license", "MIT") is None
-    assert v.classify("memware release automation", "publishes to", "PyPI") is None
+    assert v.classify("api", "p99 latency slo", "200ms") is None  # a qualifier: durable
+
+
+@pytest.mark.parametrize(
+    "relation", ["retry limit", "worker count", "sessions listed", "runs every", "fail under"]
+)
+def test_a_qualifier_names_a_setting(relation):
+    assert v.names_setting(relation)
 
 
 def test_a_person_is_anyone_derive_is_not():
@@ -156,6 +62,7 @@ def test_a_person_is_anyone_derive_is_not():
     "subject, relation, value, want",
     [
         ("memware 0.4.0", "known issue", "no-capture leaks", (v.OLDER_VERSION, "0.4.0")),
+        ("dynpkg 1.2.0", "fixed in", "x", None),  # names another package than the declared one
         ("memware", "v0.5 known issue", "no-capture leaks", (v.OLDER_VERSION, "0.5")),  # as read
         ("memware", "known issue since 0.5", "no-capture leaks", None),  # not beside the name
         ("memware@0.5.2", "regression", "context hook slow", (v.OLDER_VERSION, "0.5.2")),
@@ -170,9 +77,8 @@ def test_a_person_is_anyone_derive_is_not():
     ],
 )
 def test_manifest_rule(subject, relation, value, want):
-    assert (
-        v.manifest_rule(subject, relation, value, ("memware", "belief-freshness"), "0.6.1") == want
-    )
+    assert v.manifest_rule(subject, relation, value, "memware", "0.6.1") == want
+    assert v.manifest_rule("dynpkg 1.2.0", "fixed in", "x", "dynpkg-ui", "1.4.0") is None
 
 
 def test_older_version_compares_as_versions():
@@ -216,8 +122,14 @@ def test_the_gate_picks_the_version_the_subject_names():
     gate = v.Gate(("app", "widgetry", "gadgetry"), declared)
     assert gate.declared_for("widgetry wheel") == declared[0]
     assert gate.declared_for("gadgetry ui") == declared[1]
-    assert gate.declared_for("app") is None  # two versions, and the subject names neither
-    assert v.Gate(("app",), declared[:1]).declared_for("app") == declared[0]  # the only one
+    assert gate.declared_for("app") is None  # the subject names no declaring package
+    # not even when only one is declared: another package's version is never compared
+    assert v.Gate(("app",), declared[:1]).declared_for("app") is None
+    dyn = v.Gate(("dynpkg", "dynpkg-ui"), (v.Declared("dynpkg-ui", "1.4.0", "package.json"),))
+    assert dyn.verdict({**_row("dynpkg 1.2.0", "fixed in", "x"), **DERIVED}) is None
+    assert dyn.verdict({**_row("dynpkg-ui 1.2.0", "fixed in", "x"), **DERIVED}) == v.Verdict(
+        v.OLDER_VERSION, "names 1.2.0, package.json says 1.4.0"
+    )
     row = {**_row("gadgetry", "version", "0.3.0"), **DERIVED}
     assert gate.verdict(row) is None
     assert gate.verdict({**row, "subject": "widgetry"}) == v.Verdict(

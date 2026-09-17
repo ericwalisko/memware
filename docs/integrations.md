@@ -86,25 +86,31 @@ later value supersedes it, and a snapshot is never superseded: a row count, the 
 was at, a PR's status each stay current in the ledger long after they are wrong. The prompt hook
 and the digest leave out:
 
-| reason | what | example |
+| reason | what (derived beliefs only, and only unambiguous ones) | example |
 |---|---|---|
-| `measurement` | a derived bare quantity under a measurement noun ("null rate", "p95 latency", "disk usage"), counting something ("row count", "rows backfilled"), or an ambiguous noun ("size", "count", "length", "rate") with a counted thing in the value ("size: 4.2 million rows") | `memware test suite test count: 91 tests` |
-| `moving_version` | a derived version of something named current, built, installed, deployed or on a branch, not pinned or required | `memware main branch current version: 0.4.0` |
-| `status` | a derived belief about a numbered PR, issue, ticket or run; a relation made only of status words ("status", "build status", "progress", "known issue", "blocker"), whatever the value | `card t_cd03d14d status: review`, `memware 0.4.0 known issue: …` |
-| `contradicted` | inside a project whose manifest declares a version: a belief about the project's own version that differs | `built memware wheel version: 0.5.0` in a 0.6.1 checkout |
-| `older_version` | the same: a belief naming an older version beside the project's name | `memware 0.4.0 config format: toml` |
+| `measurement` | a count, total or "number of" over rows, records, tests, files, lines, commits, duplicates, accounts, users or downloads; a magnitude or a comma-grouped number of 1,000 or more beside one of those; an "N of M" over one, or over a completion word ("backfilled"); a relation that is exactly progress, coverage or null rate | `memware test suite test count: 91 tests` |
+| `moving_version` | a version string the subject or relation calls current, latest, built, installed, deployed, released or on main | `memware main branch current version: 0.4.0` |
+| `status` | a relation that is exactly status, state or progress, whose value is a status word (open, merged, review, blocked, failing, archived, …) or whose subject names an instance (`#12`, `t_cd03d14d`, or ending in run, scan, build, job, PR, issue or card) | `card t_cd03d14d status: review`, `graph_health scan status: clean` |
+| `contradicted` | inside a project: a belief about a package's own version that differs from the version that package declares | `built memware wheel version: 0.5.0` in a 0.6.1 checkout |
+| `older_version` | the same: a belief naming an older version beside the package's name | `memware 0.4.0 known issue: …` |
 
-A setting word in the relation makes a belief config, never a measurement or a status:
-`ruff line length: 100`, `db connection pool size: 20`, `api page size: 50`, `sentry sample rate:
-0.1`, `gunicorn worker count: 4`, `k8s pod memory request: 512Mi`, `sidebar default state: open`.
-The words are limit, max, min, default, initial, desired, pool, page, line, sample, batch, chunk,
-buffer, window, request, worker, timeout, retries, context and their like; a number under an
-identifier ("user id", "issue number") counts nothing either.
+**Precision over recall.** Hiding a durable fact silently removes something you relied on; a
+stale belief that slips through is how memware behaved before, and `memware beliefs retract ID`
+removes it. So these rules catch only what is unambiguous, and a qualifier anywhere in the
+subject or relation always means durable: slo, sla, target, threshold, budget, commitment, fail
+under, min, max, limit, default, initial, final, required, desired, every, schedule, check, and
+their like (`api p99 latency slo: 200ms`, `ci status check: required`, `order state machine final
+state: completed`, `nightly backup cron runs every: 6 hours`). Anything else in doubt is durable
+too: `main branch python version: 3.12`, `feature flag dark_mode state: enabled`, `rollout
+percentage: 10%`. The fuzzy judgment belongs to derive's prompt, which sees the excerpt; this
+sees only a triple. `tests/data/volatility_cases.jsonl` is the labeled corpus the rules are held
+to: no durable case may be left out, and the volatile cases they miss (`api p95 latency: 340ms`,
+`memware build status: green`, a `known issue` outside its project, …) are listed there, marked.
 
 The manifest is `pyproject.toml` (`project.version`, a hatch `[tool.hatch.version] path` holding
 `__version__`, or poetry), `package.json` or `Cargo.toml`, read from the root of the project the
-hook's `cwd` is in; a monorepo's nested packages are not read. A belief is checked against the
-manifest whose package name its subject names, or the only one declared. A version a build tool
+hook's `cwd` is in; a monorepo's nested packages are not read. A belief is checked only against
+the version declared by the package its subject names, never another package's. A version a build tool
 computes (a `dynamic` version with no file to read, setuptools-scm) and a `0.0.0` placeholder
 are never checked against. The classification is regex and word lists: no model call and no
 network, because the prompt hook runs it on every prompt.

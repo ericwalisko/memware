@@ -128,20 +128,21 @@ derived belief that was a measurement, a moving version or a status when recorde
 List the current beliefs the prompt hook and the digest leave out, each with its reason and
 why: a derived
 .B measurement
-(a quantity that measures or counts something: a null rate, a row count, rows backfilled),
+(a count or total of rows, tests, files and the like, or a relation that is exactly progress,
+coverage or null rate),
 .B moving_version
-(the version a branch, build or install is currently at) or
+(a version called current, latest, built, installed, deployed, released or on main) or
 .B status
-(of a numbered PR, issue, ticket or run, including what it contains, or under a relation made
-only of status words such as status, progress or known issue). A setting word in the relation
-(limit, max, default, initial, pool, page, line, sample, batch, worker, request, timeout, and
-the like) makes it config, never either. And, inside a project whose
+(a relation that is exactly status, state or progress, with a status word for a value or an
+instance such as a PR, card or run for a subject). Only unambiguous cases count: a qualifier
+(slo, target, threshold, budget, commitment, min, max, limit, default, initial, final, required,
+every, schedule, check, and the like) always means durable. And, inside a project whose
 .IR pyproject.toml ,
 .I package.json
 or
 .I Cargo.toml
-declares a version at its root, a belief about the project's version that differs from the one
-declared for the package the subject names
+declares a version at its root, a belief about a package's version that differs from the one
+that package declares, when the subject names it
 .RB ( contradicted )
 or that names an older version beside the project's name
 .RB ( older_version ).

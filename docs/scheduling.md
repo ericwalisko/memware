@@ -176,10 +176,11 @@ chain on purpose: a model that was not chosen does not get to write into the led
   before it reaches the ledger.
 - A snapshot is rejected like an event: a measurement ("4.2 million rows", "91 tests"), the
   version a branch or build is currently at, the status of a PR, issue or run. The model is
-  asked whether the value would need re-checking to know it is still true, and a deterministic
-  gate rejects what it names a measurement, moving version or status either way, along with a
-  subject that is a generic noun with no name ("the table"). A configured number stays: "5"
-  for a retry limit is a setting.
+  asked whether the value would need re-checking to know it is still true. A deterministic
+  gate backs it only where the triple alone is unambiguous (a row or test count, a version
+  called current or built, a status word under "status"), along with a subject that is a
+  generic noun with no name ("the table"); a qualifier such as slo, target, limit or every
+  keeps a fact. A configured number stays: "5" for a retry limit is a setting.
 - Derived beliefs carry reliability 0.5, below anything a human stated, so when one
   contradicts an existing belief it lands in `memware review`, never on top of yours.
 - Exit codes: `0` done or nothing new; `2` not configured (no `claude` on PATH, or the

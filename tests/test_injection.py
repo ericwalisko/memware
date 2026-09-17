@@ -158,10 +158,10 @@ def test_the_reported_store_injects_the_license_and_the_retry_limit_and_none_of_
         ("memware test suite", "test count", "91 tests", "2026-09-09T12:00:00Z"),
         ("memware staging table", "null rate", "83%", "2026-09-09T12:00:00Z"),
         ("memware main branch", "current version", "0.7.0", "2026-09-15T12:00:00Z"),
-        ("memware #22", "feature", "the no-capture fix", "2026-09-15T12:00:00Z"),
+        ("memware PR #22", "status", "merged", "2026-09-15T12:00:00Z"),
         ("memware ci", "status", "failing", "2026-09-15T12:00:00Z"),
     ],
-    ids=["measurement", "percentage", "moving-version", "pr-contents", "status"],
+    ids=["measurement", "null-rate", "moving-version", "pr-status", "status"],
 )
 def test_a_derived_measurement_moving_version_or_status_is_left_out(
     db, app, capsys, triple, tmp_path
@@ -214,17 +214,20 @@ def test_an_older_version_named_beside_the_project_is_history(db, app, capsys, m
     assert code == 0 and json.loads(out) == []
 
 
-def test_a_known_issue_is_left_out_in_any_project(db, app, capsys, monkeypatch):
-    """A known issue is status whatever version it names, so the prompt hook leaves the reported
-    "memware 0.4.0 known issue" out from another repository too, where no manifest can."""
+def test_a_known_issue_is_history_in_its_project_and_a_documented_miss_elsewhere(
+    db, app, capsys, monkeypatch
+):
+    """Inside memware 0.6.1 the manifest ages "memware 0.4.0 known issue" out. From another
+    repository nothing says 0.4.0 is old, and "known issue" is not an exact status relation, so
+    it is injected: a miss kept on purpose (tests/data/volatility_cases.jsonl) rather than a
+    broad rule that hides durable facts."""
     _derived(db, STALE[2], LICENSE)
+    assert _injected(_context(capsys, db)) == {_line(LICENSE)}
     elsewhere = app.parent / "other-repo"
     elsewhere.mkdir()
     (elsewhere / "pyproject.toml").write_text('[project]\nname = "other"\nversion = "2.0.0"\n')
     monkeypatch.chdir(elsewhere)
-    assert _injected(_context(capsys, db)) == {_line(LICENSE)}
-    code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
-    assert [r["reason"] for r in json.loads(out)] == ["status"]
+    assert _injected(_context(capsys, db)) == {_line(LICENSE), _line(STALE[2])}
 
 
 # ── the review's cases: config is durable, status is not, whatever the words overlap ────────
@@ -268,6 +271,31 @@ def test_a_status_is_left_out_whatever_its_value(db, app, capsys, triple):
     assert code == 0 and _injected(out) == set()
     code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
     assert [r["subject"] for r in json.loads(out)] == [triple[0]]
+
+
+CORPUS = [
+    json.loads(line)
+    for line in (Path(__file__).parent / "data" / "volatility_cases.jsonl").read_text().splitlines()
+    if line
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in CORPUS if not c.get("project")],
+    ids=lambda c: f"{c['subject']}|{c['relation']}|{c['expect']}{'|miss' if c.get('miss') else ''}",
+)
+def test_the_prompt_hook_follows_the_corpus(db, app, capsys, case, tmp_path, monkeypatch):
+    """Every corpus case with no project, end to end through `memware context` run outside any
+    project: a durable case and an expected miss are injected, a volatile hit is not."""
+    elsewhere = tmp_path / "no-project"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    triple = (case["subject"], case["relation"], case["value"], "2026-09-01T00:00:00Z")
+    _derived(db, triple)
+    code, out, _ = _run(capsys, "--db", db, "context", f"what about {case['subject']}?")
+    injected = _line(triple) in _injected(out)
+    assert code == 0 and injected is (case["expect"] == "durable" or bool(case.get("miss")))
 
 
 # ── a person can keep what the gate left out ────────────────────────────────────────────────
@@ -540,6 +568,35 @@ def test_the_notice_is_held_by_the_store_not_the_home(db, app, capsys, monkeypat
         home.chmod(0o700)
     with Store(db) as s:
         assert [r[0] for r in s.conn.execute("SELECT key FROM notice")] == ["stale-beliefs"]
+
+
+def test_the_notice_takes_no_lock_once_given_and_never_waits_long(db, app, capsys, monkeypatch):
+    """Another writer holding the store: the first notice still comes within a second (its one
+    write gives up after a quarter second), and once given, a session start only reads."""
+    import sqlite3
+    import time
+
+    main(["--db", db, "config", "setup.completed_version", "0.6.1"])
+    _derived(db, *STALE)
+    holder = sqlite3.connect(db, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO notice(key, shown_at, version) VALUES ('other', 'x', 'y')")
+    try:
+        started = time.perf_counter()
+        assert _notice(monkeypatch, capsys, db, app).startswith("memware no longer injects 4")
+        assert time.perf_counter() - started < 1.0
+    finally:
+        holder.execute("ROLLBACK")
+    assert _notice(monkeypatch, capsys, db, app).startswith("memware no longer injects 4")
+    holder.execute("BEGIN IMMEDIATE")
+    holder.execute("INSERT INTO notice(key, shown_at, version) VALUES ('other', 'x', 'y')")
+    try:
+        started = time.perf_counter()
+        assert _notice(monkeypatch, capsys, db, app) == ""  # given: one read, no lock taken
+        assert time.perf_counter() - started < 0.2
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
 
 
 @pytest.mark.parametrize("bad", ["7d", "-3", "soon", "true"])

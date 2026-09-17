@@ -7,13 +7,14 @@ import argparse
 import contextlib
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
 from memware import __version__
 from memware.derive import add_arguments as _derive_arguments
-from memware.derive import cmd_derive
+from memware.derive import cmd_derive, open_readonly
 from memware.derive import status as derive_status
 from memware.digest import (
     CONTEXT_TITLE,
@@ -1362,24 +1363,45 @@ STALE_NOTICE = "stale-beliefs"
 """The key in the store's ``notice`` table that records the stale-belief notice was given."""
 
 
+def _notice_given(db: str, key: str) -> bool:
+    """Whether the store records notice ``key``, read through a handle that takes no lock. A
+    store older than the ``notice`` table has not given it."""
+    try:
+        conn = open_readonly(db)
+    except (OSError, sqlite3.Error):
+        return False
+    try:
+        return conn.execute("SELECT 1 FROM notice WHERE key=?", (key,)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
 def _stale_notice(a: argparse.Namespace, cwd: object) -> list[str]:
     """Once per store: how many beliefs injection now leaves out, and the command that lists
-    them. The marker is a row in the store's own ``notice`` table, claimed before the count, so
-    two sessions starting together give it once, and nothing in the memware home (a file that
-    will not parse, a directory that takes no write) can repeat it or keep it from firing. A
-    store that is not there is never created."""
+    them. Every session start after the first is one read that takes no lock. The first counts,
+    and records in the store's ``notice`` table that it ran, whether or not it had anything to
+    say; that write waits at most a quarter second for another writer and is skipped rather than
+    stall the session start (the next one tries again). A marker in the store, not the memware
+    home, so a home that will not parse or take a write changes nothing. A store that is not
+    there is never created."""
     if a.db == ":memory:" or not Path(a.db).expanduser().exists():
         return []  # no store yet: nothing was ever injected, and a hook must not create one
-    with Store(a.db) as s:
-        claimed = s.conn.execute(
-            "INSERT OR IGNORE INTO notice(key, shown_at, version) VALUES (?,?,?)",
-            (STALE_NOTICE, now_iso(), __version__),
-        ).rowcount
-        if not claimed:
-            return []
-        n = len(_stale(s, injection_gate(resolve_project(Path(str(cwd or os.getcwd()))))))
-    if not n:
+    if _notice_given(a.db, STALE_NOTICE):
         return []
+    with Store(a.db) as s:
+        n = len(_stale(s, injection_gate(resolve_project(Path(str(cwd or os.getcwd()))))))
+        s.conn.execute("PRAGMA busy_timeout = 250")
+        try:
+            claimed = s.conn.execute(
+                "INSERT OR IGNORE INTO notice(key, shown_at, version) VALUES (?,?,?)",
+                (STALE_NOTICE, now_iso(), __version__),
+            ).rowcount
+        except sqlite3.OperationalError:  # locked: say it now, record it next time
+            claimed = 1
+    if not n or not claimed:
+        return []  # nothing to say, or a session starting alongside said it
     return [
         f"memware no longer injects {_count(n, 'belief')} that "
         f"{'was true when recorded and needs' if n == 1 else 'were true when recorded and need'} "
@@ -1394,8 +1416,8 @@ def cmd_notice(a: argparse.Namespace) -> int:
     """What the person should hear at session start, for someone who only uses the plugin: they
     never type a memware command, so they never see what `stats` prints. The plugin runs this in
     the foreground at session start, and Claude Code shows the ``systemMessage`` to them. The
-    consent hints read the config file. The stale-belief notice opens the store to claim its
-    one-time marker, counts only the first time, and never creates a store. Whatever goes wrong, it prints nothing and exits 0: it cannot fail a session
+    consent hints read the config file. The stale-belief notice reads the store's one-time marker
+    without a lock, counts only the first time, and never creates a store. Whatever goes wrong, it prints nothing and exits 0: it cannot fail a session
     start."""
     try:
         from memware.config import config_path, get_dotted
