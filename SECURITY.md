@@ -16,6 +16,15 @@ issues.
 memware indexes conversation transcripts, which routinely contain secrets pasted into
 chats. The database is local and unencrypted by default. Treat `~/.memware/` like you
 treat the transcripts themselves, and use the ingest filters (or a pre-ingest scrubber)
-if you sync from shared machines. To remove a secret that was already indexed, follow the
-removal runbook in [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#removing-a-value-a-token-a-password):
-`memware prune` scrubs it from the store file and `memware scan` shows where copies remain.
+if you sync from shared machines.
+
+To remove a secret that was already indexed, follow the removal runbook in
+[docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#removing-a-value-a-token-a-password),
+from a plain terminal rather than inside a Claude Code session: a command run in a session is
+written into its transcript, which memware indexes. Leave the value off the command line; the
+commands ask for it without echoing it. `memware prune --apply` removes the turns holding it,
+scrubs the store file and its write-ahead log, checks the file afterwards, and exits 1 when copies
+remain. It keeps belief rows, which can still hold the value. `memware scan` is read-only and
+counts what is left in the transcripts, the store and the backups. memware never changes a
+transcript or a backup, and cannot reach synced-folder history, Time Machine or blocks an SSD
+keeps: rotate a leaked credential.

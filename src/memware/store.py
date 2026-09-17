@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from memware.residue import FTS_TABLES, deleted_terms
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS belief (
   id            INTEGER PRIMARY KEY,
@@ -185,12 +187,24 @@ def age_hours(ts: str | None, now: datetime | None = None) -> float | None:
     return ((now or datetime.now(UTC)) - t).total_seconds() / 3600.0
 
 
+BUSY_TIMEOUT_MS = 60_000
+"""How long a statement waits for another connection's write lock before failing with "database is
+locked". A scrub holds the lock for seconds at a time on a large store (VACUUM took 2.4 s at
+150,000 turns), and so does a prune's own delete; a hook's sync or a Hermes belief write that
+arrives then must wait it out, not fail and lose the write."""
+
+CHECKPOINT_WAIT_MS = 10_000
+"""How long a scrub's ``TRUNCATE`` checkpoint waits for readers to finish before it gives up."""
+
+
 @dataclass(frozen=True)
 class Scrubbed:
     """What :meth:`Store.scrub` did."""
 
     indexes: tuple[str, ...]
-    """The FTS tables rebuilt."""
+    """The FTS tables merged."""
+    rebuilt: tuple[str, ...]
+    """Those a merge left holding terms of deleted rows, which were then rebuilt."""
     wal_truncated: bool
     """False when a reader kept the write-ahead log from being emptied."""
     seconds: float
@@ -213,8 +227,8 @@ class Store:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         # WAL allows one writer at a time; wait-and-retry rather than failing a concurrent
         # write with "database is locked". Several memware processes can touch the store at
-        # once — the SessionStart catch-up, a session-end sync, and the backup cron can overlap.
-        self.conn.execute("PRAGMA busy_timeout=5000")
+        # once — the SessionStart catch-up, a session-end sync, the backup cron, and a prune.
+        self.conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         # Overwrite deleted content with zeros instead of only unlinking it, so a removed turn
         # leaves no readable copy on a free page. SQLite builds disagree on the default
         # (Anaconda's Python turns it on, Homebrew's leaves it off), so it is set, not assumed.
@@ -325,24 +339,37 @@ class Store:
         """Rewrite the file so the text of deleted rows leaves it, after a delete has committed.
 
         ``secure_delete`` zeroes what a delete frees, but not what an FTS5 index keeps: its
-        ``'delete'`` adds a tombstone and leaves the term in the segment until a merge, stored
-        lowercased, so a case-sensitive search of the file misses it. So both indexes are rebuilt
-        from their content tables, ``VACUUM`` rewrites the file without its free pages, and a
-        ``TRUNCATE`` checkpoint empties the write-ahead log, whose frames hold earlier copies of
-        pages. The checkpoint waits for readers up to the busy timeout; ``wal_truncated`` is False
-        when one was still reading.
+        ``'delete'`` adds a tombstone and leaves the term on its page until a merge. So each index is
+        merged into one segment (``'optimize'``, which drops the tombstones), checked for any term
+        no live row holds, and rebuilt from its content table if one is left. ``VACUUM`` then
+        rewrites the file without its free pages, and a ``TRUNCATE`` checkpoint empties the
+        write-ahead log, whose frames hold earlier copies of pages.
 
-        About 3 seconds for 50,000 turns (180 MB) on a laptop. ``progress`` hears each step first."""
+        Each step is its own transaction, so a writer waits for one step (at most seconds), not
+        for the whole scrub. The checkpoint waits :data:`CHECKPOINT_WAIT_MS` for readers;
+        ``wal_truncated`` is False when one was still reading. At 150,000 turns (565 MB) the
+        merge takes 0.9 s and VACUUM 2.4 s. ``progress`` hears each step first. An SQLite or OS
+        error propagates, with the delete already committed."""
         say = progress or (lambda _: None)
         started = time.perf_counter()
-        indexes = ("passage_fts", "belief_fts")
-        for table in indexes:
-            say(f"rebuilding the {table} search index")
-            self.conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+        rebuilt = []
+        for table in FTS_TABLES:
+            say(f"merging the {table} search index")
+            self.conn.execute(f"INSERT INTO {table}({table}) VALUES('optimize')")
+            if deleted_terms(self.conn, table):
+                say(f"rebuilding the {table} search index: the merge left terms of deleted rows")
+                self.conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
+                rebuilt.append(table)
         say("compacting it (VACUUM)")
         self.conn.execute("VACUUM")
-        busy = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
-        return Scrubbed(indexes, not busy, round(time.perf_counter() - started, 2))
+        self.conn.execute(f"PRAGMA busy_timeout={CHECKPOINT_WAIT_MS}")
+        try:
+            busy = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        finally:
+            self.conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        return Scrubbed(
+            FTS_TABLES, tuple(rebuilt), not busy, round(time.perf_counter() - started, 2)
+        )
 
     def _has_fts5(self) -> bool:
         row = self.conn.execute("SELECT sqlite_compileoption_used('ENABLE_FTS5')").fetchone()

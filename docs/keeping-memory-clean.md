@@ -209,12 +209,21 @@ one call and un-indexes nothing.
 
 A secret pasted into a session reaches more places than the index: the store file, its
 write-ahead log, backup snapshots, the transcript mirror and the transcript itself. Four steps,
-in this order.
+in this order, after one rule.
+
+**Run them in a plain terminal, and keep the value off the command line.** A command run inside a
+Claude Code session, a `!` command included, is written into that session's transcript. The value
+then sits in a new transcript that memware indexes at its next sync, so the removal undoes itself
+and `scan` never reaches zero. On a command line the value is also visible to other processes
+(`ps`) and kept in shell history. So leave the text out: `prune`'s text selectors and `scan` then
+ask for it at a prompt that does not echo it. `--value-file FILE` reads it from a file instead
+(keep the file out of synced folders and delete it afterwards), and `-` reads one line of
+standard input.
 
 **1. Dry run.**
 
 ```bash
-memware prune --turns-containing "the-value"          # nothing written
+memware prune --turns-containing          # asks for the text; nothing written
 ```
 
 It counts the turns that hold the value anywhere, matched literally and case-sensitively, and the
@@ -225,32 +234,51 @@ command rewrites a belief's text yet.
 **2. Apply.**
 
 ```bash
-memware prune --turns-containing "the-value" --apply
+memware prune --turns-containing --apply
 ```
 
-The turns are deleted, and then the store file is scrubbed, so the value leaves the file and not
-only every query. memware sets SQLite's `secure_delete` on every connection, which overwrites
-deleted content with zeros; builds disagree on its default, and Homebrew's Python leaves it off.
-That is not enough on its own: a full-text index keeps a deleted row's words on their page,
-lowercased, until the index merges. So the prune rebuilds both search indexes, rewrites the file
-with `VACUUM`, and empties the write-ahead log (the `-wal` file beside the store) with a `TRUNCATE`
-checkpoint. Standard error names each step as it starts. It takes a few seconds on a large store
-(4 seconds for 50,000 turns and 180 MB on a laptop), and `VACUUM` briefly needs free disk of up
-to twice the file's size.
+The turns are deleted, and the value leaves the store file, not only every query:
 
-Every `--apply` scrubs, even one that removes nothing. A store pruned by memware 0.6.1 or earlier
-still holds what that prune removed: run the same prune again and it is gone. If another process
-was partway through reading the store, the log cannot be emptied, and the prune says so (`write-ahead
-log NOT emptied`); run it again once nothing has the store open.
+- A retraction the prune records gives the command as `--turns-containing (value withheld)`. A
+  retraction reason that memware 0.6.0 or 0.6.1 wrote with the value in it is rewritten the same
+  way.
+- The store file is scrubbed. memware sets SQLite's `secure_delete` on every connection, which
+  overwrites deleted content with zeros; builds disagree on its default, and Homebrew's Python
+  leaves it off. That is not enough on its own: a full-text index keeps a deleted row's words on
+  its pages, lowercased, until the index merges. So the prune merges both search indexes, checks
+  that no term of a deleted row is left on their pages (and rebuilds an index if one is), rewrites
+  the file with `VACUUM`, and empties the write-ahead log (the `-wal` file beside the store) with a
+  `TRUNCATE` checkpoint. Standard error names each step as it starts.
+- Then it checks the file and prints `text left in the store`: the value's bytes in the file and
+  its `-wal`, the rows that still hold it (beliefs, and turns a `--turns-starting-with` keeps), and
+  search terms of deleted rows.
+
+The scrub runs when the prune removed something, or when the file still holds copies of the text
+that no row accounts for, as a prune in memware 0.6.1 and earlier left them. So on a store pruned
+before, run the same prune again: it removes nothing and scrubs what is left. `memware prune
+--scrub` rewrites the file whether or not anything is left.
+
+The prune exits 1 when the store file still holds copies no row accounts for, or the scrub did not
+finish. It says which files hold how many, and why: most often another process was reading the
+store, so the rewritten pages are still waiting in the write-ahead log. Close other memware and
+Claude Code sessions, then run the command it prints (`memware --db … prune --scrub`).
+
+On a large store this takes seconds: at 50,000 turns (190 MB) about 3–4 seconds when the prune
+removes something and 1 second when it removes nothing, and at 150,000 turns about 11 seconds.
+`VACUUM` briefly needs free disk of up to twice the file's size. Other memware processes that
+write meanwhile, a hook's sync or a Hermes memory write, wait for the store's lock for up to a
+minute rather than fail.
 
 **3. Verify.**
 
 ```bash
-memware scan "the-value" --backups          # exit 0: found nowhere it looked
-pbpaste | memware scan - --backups          # the value from stdin, out of shell history
+memware scan --backups          # asks for the value; exit 0: found nowhere it looked
 ```
 
-`scan` is read-only and prints paths and counts, never the value or text around it. It reads:
+`scan` is read-only and prints paths and counts, never the value or text around it. It counts a
+store's bytes before it opens the file, and opens it read-only, so a write-ahead log a killed
+process left behind is counted as it is and never moved into the file. A store path that is a
+symlink is followed, since SQLite keeps the `-wal` beside the file it points to. It reads:
 
 - **transcripts**: every `*.jsonl` under `backup.transcript_src` (default `~/.claude/projects`),
   walked on disk rather than taken from the index, plus any indexed transcript that lives
@@ -258,10 +286,10 @@ pbpaste | memware scan - --backups          # the value from stdin, out of shell
   why: `excluded by capture.exclude`, `excluded by no-capture list`, `excluded by ignore marker`,
   or `not synced yet`. A value escaped inside a JSON string (a quote, a backslash) is counted too.
 - **the store**: the value's bytes in the file and in its `-wal` file, as given and in any case;
-  the turns and beliefs holding it; and how many of its search terms the index pages hold,
-  counting entries a delete left behind. That last check reads the pages themselves: SQLite's own
-  vocabulary view skips deleted entries, and a page stores most terms as only the bytes that differ
-  from the term before, which a byte search cannot match.
+  the turns, beliefs and other rows holding it (a retraction's reason, say); how many of its
+  search terms the index pages hold; and how many of those only a deleted row left. The last two
+  read the pages themselves: SQLite's own vocabulary view skips deleted entries, and a page stores
+  most terms as only the bytes that differ from the term before, which a byte search cannot match.
 - **copies beside the store**: the `memware.pre-restore-*.db` files `memware restore` sets aside.
 - **with `--backups`** (or `--dest DIR`): the mirrored transcripts in `<dest>/transcripts` and every
   `.db` file in the destination.
@@ -274,8 +302,8 @@ turns are in the store check. `--json` gives the same report for a script.
 The search-term check matches a value's words, not the value, so a value made of common words
 (`correct horse`) is found in any store that has those words. Scan for the distinctive part.
 It reads only `*.jsonl` under the transcript source; Claude Code keeps other files there too, such
-as large tool output under `<session>/tool-results/`, and `grep -rlF -- "the-value"
-~/.claude/projects` reads those.
+as large tool output under `<session>/tool-results/`. `grep -rlF -f FILE ~/.claude/projects` reads
+those with the value in FILE, off the command line.
 
 **4. Deal with what memware does not change.**
 
@@ -370,9 +398,10 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
-| remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises, `memware scan TEXT --backups` finds any holding a text |
-| remove a value pasted into a session you keep | `memware prune --turns-containing VALUE`, then again with `--apply`, then `memware scan VALUE --backups` ([runbook](#removing-a-value-a-token-a-password)) |
-| check whether a value is still stored anywhere | `memware scan VALUE --backups`: transcripts (indexed or not), the store file and its index, backups |
+| remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises, `memware scan --backups` finds any holding a text |
+| remove a value pasted into a session you keep | from a plain terminal: `memware prune --turns-containing` (it asks for the value), then again with `--apply`, then `memware scan --backups` ([runbook](#removing-a-value-a-token-a-password)) |
+| check whether a value is still stored anywhere | `memware scan --backups` (it asks for the value): transcripts (indexed or not), the store file and its index, backups |
+| rewrite the store file so removed text leaves it | `memware prune --scrub` |
 | tame a recurring/dated automation prompt | `prune --turns-starting-with PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |
 | evaluate without self-contamination | `memware-eval --corpus … --beliefs-from …` |
 | keep headless runs out of the ledger, in recall | the default (`derive.sources interactive`); `memware config derive.sources all` reads them |

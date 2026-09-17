@@ -149,25 +149,29 @@ def test_a_zero_match_says_what_was_searched_and_names_the_alternative(tmp_path,
     code, out, err = _run(capsys, "--db", db, "prune", "--turns-starting-with", "SECRET123")
     assert code == 0 and "turns to remove : 0" in out
     assert (
-        "no turn starts with 'SECRET123' (2 searched, matched literally and case-sensitively); "
+        "no turn starts with the text (2 searched, matched literally and case-sensitively); "
         "2 turns contain it past the start: try --turns-containing"
     ) in err
 
     _, _, err = _run(capsys, "--db", db, "prune", "--turns-containing", "secret123")
-    assert "no turn contains 'secret123' (2 searched" in err
+    assert "no turn contains the text (2 searched" in err
     assert "2 turns contain it in another case" in err
 
     _, _, err = _run(capsys, "--db", db, "prune", "--turns-starting-with", "NOWHERE99")
-    assert "no turn starts with or contains 'NOWHERE99' (2 searched" in err
+    assert "no turn starts with or contains the text (2 searched" in err
 
     _, _, err = _run(capsys, "--db", db, "prune", "--containing", "NOWHERE99")
     assert (
-        "no indexed source contains 'NOWHERE99': 1 transcript file read whole, "
+        "no indexed source contains the text: 1 transcript file read whole, "
         "matched literally and case-sensitively"
     ) in err
 
     _, _, err = _run(capsys, "--db", db, "prune", "--glob", "*nomatch*")
-    assert "no path of the 1 indexed source matches '*nomatch*'" in err
+    assert "no path of the 1 indexed source matches '*nomatch*'" in err  # a glob is not a secret
+
+    for argv in (["--turns-starting-with", "SECRET123"], ["--containing", "NOWHERE99"]):
+        _, out, err = _run(capsys, "--db", db, "prune", *argv)
+        assert argv[1] not in out + err  # a text never is echoed back
 
 
 def test_a_gone_transcript_is_named_and_its_turns_pointed_at(tmp_path, capsys):
@@ -175,7 +179,7 @@ def test_a_gone_transcript_is_named_and_its_turns_pointed_at(tmp_path, capsys):
     (tmp_path / "corpus" / "small.jsonl").unlink()
     code, out, err = _run(capsys, "--db", db, "prune", "--containing", "SECRET123")
     assert code == 0 and "sources to un-index : 0" in out
-    assert "no indexed source contains 'SECRET123': 0 transcript files read whole" in err
+    assert "no indexed source contains the text: 0 transcript files read whole" in err
     assert "1 indexed source not read: the transcript file is gone" in err
     assert "2 indexed turns contain it: try --turns-containing" in err
 
@@ -190,7 +194,7 @@ def test_a_prefix_names_the_turns_it_leaves_holding_the_text(tmp_path, capsys):
     code, out, err = _run(capsys, "--db", db, "prune", "--turns-starting-with", "SECRET123")
     assert "turns to remove : 1" in out
     assert (
-        "2 more turns contain 'SECRET123' past the start and are kept: "
+        "2 more turns contain the text past the start and are kept: "
         "--turns-containing selects them too"
     ) in err
     # a selector that took everything it names has nothing to add

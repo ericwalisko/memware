@@ -155,7 +155,7 @@ def test_prune_apply_retracts_and_the_belief_leaves_every_read_path(db, capsys):
     assert code == 0
     *progress, note = err.splitlines()  # the scrub's steps, then where the text may be left
     assert all(line.startswith("scrubbing the store file: ") for line in progress)
-    assert "`memware scan VALUE`" in note
+    assert "`memware scan`" in note
     assert "beliefs retracted : 2" in out and "predecessors reopened : 1" in out
 
     after = _beliefs(db)
@@ -189,7 +189,7 @@ def test_prune_apply_retracts_and_the_belief_leaves_every_read_path(db, capsys):
     assert timeline[0]["valid_to"] is None and timeline[0]["superseded_by"] is None
     assert timeline[1]["retracted_at"]
     assert timeline[1]["retracted_reason"] == (
-        f"session {EVAL} is no longer indexed (memware prune --containing '{MARKER}'); "
+        f"session {EVAL} is no longer indexed (memware prune --containing (value withheld)); "
         f"reopened #{timeline[0]['id']}"
     )
 

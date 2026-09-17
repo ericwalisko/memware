@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
-- **`memware scan VALUE` counts every place a value is still stored**
+- **`memware scan` counts every place a value is still stored**
   ([#37](https://github.com/ericwalisko/memware/issues/37)). `prune --containing` reads only
   indexed transcripts, so a transcript kept out of the index, by `capture.exclude` above all, was
   one no memware command could look inside, and verifying a removal meant leaving the tool. `scan`
@@ -15,35 +15,49 @@ All notable changes to this project are documented here. The format follows
   whether it is indexed, and if not why (`capture.exclude`, the no-capture list, an ignore
   marker, or not synced yet). Every file is read whole, and a value escaped inside a JSON string
   counts too. It checks the store file and its `-wal` for the value's bytes, as given and in any
-  case, counts the turns and beliefs holding it, and reads the search index's own pages for the
-  value's terms, deleted entries included, which SQLite's vocabulary view does not show. It also
-  reads the `pre-restore` copies beside the store, and with `--backups` the mirrored transcripts
-  and snapshot files in the backup destination. A path it cannot read is listed with the reason.
-  It prints paths and counts, never the value or the text around it, takes the value from stdin
-  as `-`, and has `--json`. Exit status: 0 nothing found, 1 found, 2 nothing found but a path
-  could not be read. It opens nothing for writing.
+  case, counts the turns, beliefs and other rows holding it, and reads the search index's own
+  pages for the value's terms, including those only a deleted row left, which SQLite's
+  vocabulary view does not show. It also reads the `pre-restore` copies beside the store, and with
+  `--backups` the mirrored transcripts and snapshot files in the backup destination. A path it
+  cannot read is listed with the reason. It is read-only: the store's bytes are counted before it
+  is opened, and it is opened so that no write-ahead log is ever checkpointed, and a symlinked
+  store is followed to its log. It prints paths and counts, never the value or the text around
+  it. The value comes from a prompt that does not echo it, `--value-file`, or stdin (`-`), so it
+  stays out of `ps`, shell history and, run outside Claude Code, any transcript. `--json` is
+  supported. Exit status: 0 nothing found, 1 found, 2 nothing found but a path could not be read.
+- **`memware prune --scrub`** rewrites the store file, removing nothing: the command a prune prints
+  when its scrub could not finish.
 
 ### Fixed
 - **An applied `memware prune` removes the text from the store file, not only from every
   query** ([#36](https://github.com/ericwalisko/memware/issues/36)). A deleted turn stayed
   readable in the file: SQLite frees a deleted row's page without zeroing it unless
   `secure_delete` is on, and builds disagree on that default (Homebrew's Python leaves it off). A
-  full-text index keeps a deleted row's words on their page, lowercased, until it merges, which
+  full-text index keeps a deleted row's words on its pages, lowercased, until it merges, which
   happens on every build and which a case-sensitive search of the file cannot see. A backup
   snapshot taken after the prune copied those index pages, and the `-wal` file kept older copies
-  of pages while another process held the store open. The store now turns `secure_delete` on for
-  every connection, and every `--apply` then rebuilds both search indexes, runs `VACUUM`, and
-  empties the write-ahead log with a `TRUNCATE` checkpoint. On a 50,000-turn, 180 MB store the
-  prune takes about 4 seconds instead of 1, and a full sync is unchanged within noise. Standard
-  error names each step as it starts. Every `--apply` scrubs, including one that removes
-  nothing, so rerunning a prune made with 0.6.1 or earlier clears what that one left. When a
-  reader keeps the log from being emptied, the prune says so. It then says where copies may
-  remain, which memware never changes: backups made before now (it names the destination) and
-  the transcript files, and it points to `memware scan`. The dry run counts the beliefs whose
-  subject, relation or value holds the text (`beliefs holding the text`), because prune keeps
-  every belief row. `--json` adds `beliefs_holding_text`, `store_scrubbed` and `backup_dest`.
-  The removal runbook in [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md#removing-a-value-a-token-a-password)
-  is rewritten around prune, scan and the copies that remain.
+  of pages while another process held the store open. And a prune that retracted a belief wrote
+  its own command line, text included, into the retraction's reason. Now the store turns
+  `secure_delete` on for every connection, a retraction's reason reads `(value withheld)` where
+  the text was (and a reason an older prune wrote is rewritten), and an applied prune scrubs the
+  file when it removed anything or copies of the text are left that no row accounts for: it
+  merges both search indexes, rebuilds one a merge left holding a deleted row's terms, runs
+  `VACUUM`, and empties the write-ahead log. It then checks the file and prints what it still
+  holds. It exits 1, naming the files and counts and printing `memware prune --scrub` to finish,
+  when copies remain or the scrub failed (a lock, a full disk); the removal itself stays
+  committed. On a 50,000-turn store a matching prune takes 3–4 s instead of 1.2 s, and one
+  matching nothing 1.1 s instead of 0.65 s. Standard error names each scrub step, and says where
+  copies may remain that memware never changes: backups made before now and the transcript files.
+  The dry run counts the beliefs whose subject, relation or value holds the text, because prune
+  keeps every belief row. `--json` adds `beliefs_holding_text`, `retraction_reasons_redacted`,
+  `store_scrubbed`, `scrub_error`, `left_in_store` and `backup_dest`.
+- **A prune never prints or records its text.** The notes a selector that matched nothing prints
+  said `no turn contains 'VALUE'`; they now say `the text`. A text selector written without its
+  text asks for it without echoing it, or reads `--value-file` or stdin.
+- **Writers wait out a long write instead of failing.** Every store connection waits up to 60 s
+  for another's write lock (was 5 s). On a 150,000-turn store the prune and its scrub held the
+  lock past 5 s, so a hook's sync failed with `database is locked` and a Hermes memory write was
+  lost; both now wait and land.
 
 ## [0.6.1] - 2026-09-16
 

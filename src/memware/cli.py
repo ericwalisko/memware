@@ -8,6 +8,8 @@ import contextlib
 import json
 import os
 import re
+import shlex
+import sqlite3
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -25,6 +27,7 @@ from memware.index import (
     search_turns_multi,
 )
 from memware.ingest import (
+    WITHHELD,
     Pruned,
     capture_disabled,
     prune,
@@ -45,8 +48,9 @@ from memware.ledger import (
     retract,
     stale_turn_count,
 )
+from memware.residue import FileCheck
 from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
-from memware.scan import DbCheck, ScanReport, TranscriptHit, scan
+from memware.scan import ScanReport, TranscriptHit, scan
 from memware.store import Scrubbed, Store
 
 
@@ -762,22 +766,23 @@ _MATCHED = "matched literally and case-sensitively"
 
 def _turn_notes(s: Store, text: str, *, prefix: bool, removed: int) -> list[str]:
     """Why a turn selector matched nothing, or, for a prefix, the turns it leaves holding the
-    text past their start. A bare 0 reads as a clean store, so a note names where the text is."""
+    text past their start. A bare 0 reads as a clean store, so a note names where the text is. The
+    text itself is never printed: it is usually a secret."""
     m = turn_matches(s, text)
     rest = m.containing - m.starting_with  # turns holding it past the start, which a prefix keeps
     if prefix and rest and removed:
         return [
-            f"{_plural(rest, 'more turn', 'contain')} {text!r} past the start and "
+            f"{_plural(rest, 'more turn', 'contain')} the text past the start and "
             f"{'is' if rest == 1 else 'are'} kept: --turns-containing selects them too"
         ]
     if prefix and rest:
         return [
-            f"no turn starts with {text!r} ({m.turns:,} searched, {_MATCHED}); "
+            f"no turn starts with the text ({m.turns:,} searched, {_MATCHED}); "
             f"{_plural(rest, 'turn', 'contain')} it past the start: try --turns-containing"
         ]
     if removed:
         return []
-    note = f"no turn {'starts with or contains' if prefix else 'contains'} {text!r} "
+    note = f"no turn {'starts with or contains' if prefix else 'contains'} the text "
     note += f"({m.turns:,} searched, {_MATCHED})"
     if m.containing_any_case:
         note += f"; {_plural(m.containing_any_case, 'turn', 'contain')} it in another case"
@@ -791,7 +796,7 @@ def _source_notes(s: Store, a: argparse.Namespace, r: Pruned) -> list[str]:
     if not r.sources and a.containing:
         within = " matching --glob" if a.glob else ""
         notes.append(
-            f"no indexed source contains {a.containing!r}: "
+            "no indexed source contains the text: "
             f"{_plural(r.scanned, 'transcript file')}{within} read whole, {_MATCHED}"
         )
     elif not r.sources:
@@ -809,28 +814,98 @@ def _source_notes(s: Store, a: argparse.Namespace, r: Pruned) -> list[str]:
     return notes
 
 
-def _scrubbed_line(done: Scrubbed) -> str:
-    log = "emptied" if done.wal_truncated else "NOT emptied, a reader held it"
+def _scrubbed_line(r: Pruned) -> str:
+    """How the store file was rewritten after an applied prune, or why it was not."""
+    if r.scrub_error:
+        return f"NOT scrubbed: {r.scrub_error}"
+    done = r.scrubbed
+    if done is None:
+        return "not rewritten: nothing was removed, and no copy of the text was left to scrub"
+    rebuilt = f", {' and '.join(done.rebuilt)} rebuilt" if done.rebuilt else ""
+    log = "emptied" if done.wal_truncated else "NOT emptied, another process was reading"
     return (
-        f"scrubbed in {done.seconds:.1f} s: {' and '.join(done.indexes)} rebuilt, "
-        f"compacted, write-ahead log {log}"
+        f"scrubbed in {done.seconds:.1f} s: search indexes merged{rebuilt}, compacted, "
+        f"write-ahead log {log}"
     )
 
 
-def _scrub_notes(r: Pruned, dest: str | None) -> list[str]:
-    """What an applied prune leaves holding the text: belief rows, a log a reader kept, backups
-    and the transcripts themselves. The scrub is real, and it ends at the store file."""
-    notes = []
+def _left_line(left: FileCheck) -> str:
+    """What the store file and its log still hold of the text: counts and places, never the text."""
+    if left.error:
+        return f"not checked: {left.error}"
+    name = Path(left.path).name
+    parts = []
+    if left.occurrences or left.occurrences_any_case:
+        parts.append(f"{left.occurrences:,} in {name} ({left.occurrences_any_case:,} in any case)")
+    if left.wal_occurrences or left.wal_occurrences_any_case:
+        parts.append(
+            f"{left.wal_occurrences or 0:,} in {name}-wal "
+            f"({left.wal_occurrences_any_case or 0:,} in any case)"
+        )
+    if left.turns:
+        parts.append(_plural(left.turns, "turn"))
+    if left.beliefs:
+        parts.append(_plural(left.beliefs, "belief"))
+    parts += [f"{n:,} {where}" for where, n in left.other_rows.items()]
+    deleted = sum(left.deleted_tokens.values())
+    if deleted:
+        parts.append(_plural(deleted, "search term") + " of deleted rows")
+    return ", ".join(parts) if parts else "nothing: its bytes, rows and search terms were checked"
+
+
+def _finish_command(a: argparse.Namespace) -> str:
+    return f"memware --db {shlex.quote(str(a.db))} prune --scrub"
+
+
+def _scrub_notes(a: argparse.Namespace, r: Pruned, dest: str | None) -> tuple[list[str], bool]:
+    """What an applied prune leaves holding the text, and whether that is a failure. The scrub
+    failing, or copies of the text no row accounts for, fail it: the removal did not reach the
+    file. Belief rows, turns a prefix keeps, backups and transcripts are reported and do not."""
+    notes, failed = [], False
+    left = r.left
+    close = "close other memware and Claude Code sessions, which can hold the store open, then run"
+    if r.scrub_error:
+        failed = True
+        notes.append(
+            f"the scrub did not finish ({r.scrub_error}). The removal is committed, so the text is "
+            "out of every query, but the store file may still hold it. To finish, "
+            f"{close}: {_finish_command(a)}"
+        )
+    elif left is not None and left.leftover:
+        failed = True
+        blocked = r.scrubbed is not None and not r.scrubbed.wal_truncated
+        why = (
+            "another process was reading the store, so the rewritten pages are still waiting in "
+            "the write-ahead log"
+            if blocked
+            else "no row accounts for them"
+        )
+        notes.append(
+            f"the store file still holds copies of the text ({_left_line(left)}): {why}. "
+            f"To finish, {close}: {_finish_command(a)}"
+        )
+    elif left is None and r.scrubbed is not None and not r.scrubbed.wal_truncated:
+        failed = True
+        notes.append(
+            "another process was reading the store, so the scrub could not empty the write-ahead "
+            f"log, and the store file may still hold removed text. To finish, {close}: "
+            f"{_finish_command(a)}"
+        )
     if r.beliefs_holding:
         notes.append(
             f"{_plural(r.beliefs_holding, 'belief', 'hold')} the text in a subject, relation or "
             "value, and prune keeps belief rows, so the store file still holds it there"
         )
-    if r.scrubbed and not r.scrubbed.wal_truncated:
+    if left is not None and left.other_rows:
+        where = ", ".join(f"{n:,} {w}" for w, n in left.other_rows.items())
+        notes.append(f"other rows still hold the text: {where}")
+    if r.reasons_redacted:
         notes.append(
-            "another process was reading the store, so its write-ahead log (the -wal file) may "
-            "still hold removed text; run the same prune again once nothing has the store open"
+            f"{_plural(r.reasons_redacted, 'retraction reason')} quoted the text, as a prune in "
+            "memware 0.6.1 and earlier recorded it, and now read (value withheld)"
         )
+    if r.scrubbed is None and r.scrub_error is None:
+        return notes, failed  # nothing was removed and nothing is left: no copy to point at
     where = (
         "backups made before now may still hold the removed text: the snapshots and mirrored "
         f"transcripts in {dest}, which memware never changes"
@@ -839,18 +914,100 @@ def _scrub_notes(r: Pruned, dest: str | None) -> list[str]:
         "still hold the removed text"
     )
     notes.append(
-        f"{where}. The transcript files are unchanged too. `memware scan VALUE"
+        f"{where}. The transcript files are unchanged too. `memware scan"
         f"{' --backups' if dest else ''}` counts every place the value is left"
     )
-    return notes
+    return notes, failed
+
+
+_ASK = "\0ask"
+"""The value argparse stores for a text option given without its text: read it from --value-file,
+a prompt that does not echo, or standard input."""
+
+_TEXT_FLAGS = ("containing", "turns_containing", "turns_starting_with")
+
+
+class _NoText(Exception):
+    """A text option could not be read; the message says why, never what."""
+
+
+def _read_text(a: argparse.Namespace, given: str | None, what: str) -> str:
+    """The text for an option or argument: as given, from ``--value-file`` when it was left out,
+    from a prompt that does not echo when standard input is a terminal, or else one line of
+    standard input. ``-`` also reads standard input. The trailing newline is dropped."""
+    import getpass
+
+    if given not in (None, _ASK, "-"):
+        return str(given)
+    if given != "-" and getattr(a, "value_file", None):
+        try:
+            text = Path(a.value_file).expanduser().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            raise _NoText(f"--value-file could not be read: {e}") from e
+        return text.removesuffix("\n").removesuffix("\r")
+    if given != "-" and sys.stdin.isatty():
+        return getpass.getpass(f"{what} (not shown): ", stream=sys.stderr)
+    return sys.stdin.readline().removesuffix("\n").removesuffix("\r")
+
+
+def _prune_texts(a: argparse.Namespace) -> None:
+    """Resolve the text selectors given without text, in place. ``--value-file`` serves exactly
+    one of them."""
+    asked = [f for f in _TEXT_FLAGS if getattr(a, f) in (_ASK, "-")]
+    if getattr(a, "value_file", None) and len([f for f in asked if getattr(a, f) == _ASK]) != 1:
+        raise _NoText("--value-file gives the text for one selector written without its text")
+    for flag in asked:
+        setattr(a, flag, _read_text(a, getattr(a, flag), "text to remove"))
+        if not getattr(a, flag):
+            raise _NoText(
+                f"--{flag.replace('_', '-')} needs a text: an empty one matches every turn"
+            )
+
+
+def _cmd_scrub(a: argparse.Namespace) -> int:
+    """``prune --scrub``: rewrite the store file and remove nothing."""
+    if a.glob or any(getattr(a, f) is not None for f in _TEXT_FLAGS):
+        print("--scrub removes nothing and takes no selector", file=sys.stderr)
+        return 2
+    if not Path(a.db).expanduser().exists():
+        print(f"no store at {a.db}", file=sys.stderr)
+        return 2
+    with Store(a.db) as s:
+        try:
+            done: Scrubbed | None = s.scrub(
+                lambda step: print(f"scrubbing the store file: {step}", file=sys.stderr)
+            )
+            error = None
+        except (sqlite3.Error, OSError) as e:
+            done, error = None, f"{type(e).__name__}: {e}"
+    r = Pruned({}, 0, Retraction([], [], [], [], []), True, scrubbed=done, scrub_error=error)
+    failed = bool(error) or (done is not None and not done.wal_truncated)
+    if a.json:
+        _out({"store_scrubbed": asdict(done) if done else None, "scrub_error": error}, True)
+    else:
+        print(f"store file : {_scrubbed_line(r)}")
+    if failed:
+        print(
+            "the scrub did not finish: close other memware and Claude Code sessions, which can "
+            f"hold the store open, then run it again: {_finish_command(a)}",
+            file=sys.stderr,
+        )
+    return 1 if failed else 0
 
 
 def cmd_prune(a: argparse.Namespace) -> int:
+    if a.scrub:
+        return _cmd_scrub(a)
+    try:
+        _prune_texts(a)
+    except _NoText as e:
+        print(e, file=sys.stderr)
+        return 2
     turn_flags = [f for f in ("turns_containing", "turns_starting_with") if getattr(a, f)]
     if not (a.glob or a.containing or turn_flags):
         print(
             "prune needs --glob, --containing, --turns-containing or --turns-starting-with; "
-            "with none it would un-index every source",
+            "with none it would un-index every source (--scrub alone rewrites the file)",
             file=sys.stderr,
         )
         return 2
@@ -861,8 +1018,9 @@ def cmd_prune(a: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    # recorded in each retraction's reason: a glob as given, a text never
     selector = " ".join(
-        f"--{flag.replace('_', '-')} {getattr(a, flag)!r}"
+        f"--{flag.replace('_', '-')} " + (repr(getattr(a, flag)) if flag == "glob" else WITHHELD)
         for flag in ("glob", "containing", "turns_containing", "turns_starting_with")
         if getattr(a, flag)
     )
@@ -889,19 +1047,28 @@ def cmd_prune(a: argparse.Namespace) -> int:
     if r.beliefs_holding is not None:
         head["beliefs_holding_text"] = r.beliefs_holding
     lines = []
-    if r.scrubbed:
+    failed = False
+    if r.applied:
         from memware.config import get_dotted, load_config
 
         dest = get_dotted(load_config(), "backup.dest")
-        head["store_scrubbed"] = asdict(r.scrubbed)
+        head["retraction_reasons_redacted"] = r.reasons_redacted
+        head["store_scrubbed"] = asdict(r.scrubbed) if r.scrubbed else None
+        head["scrub_error"] = r.scrub_error
+        head["left_in_store"] = (
+            {**asdict(r.left), "leftover": r.left.leftover} if r.left is not None else None
+        )
         head["backup_dest"] = dest
-        lines.append(("store file", _scrubbed_line(r.scrubbed)))
-        notes += _scrub_notes(r, dest)
+        lines.append(("store file", _scrubbed_line(r)))
+        if r.left is not None:
+            lines.append(("text left in the store", _left_line(r.left)))
+        more, failed = _scrub_notes(a, r, dest)
+        notes += more
     _cascade(a, r.beliefs, r.applied, head, lines)
     if notes:
         sys.stdout.flush()  # the notes explain the counts, so they follow them in a merged stream
         print("\n".join(notes), file=sys.stderr)
-    return 0
+    return 1 if failed else 0
 
 
 def _indexed_line(hit: TranscriptHit) -> str:
@@ -916,7 +1083,7 @@ def _either_case(n: int, folded: int | None) -> str:
     return f"{n:,} ({folded or 0:,} in any case)"
 
 
-def _db_block(label: str, c: DbCheck) -> list[tuple[str, str]]:
+def _db_block(label: str, c: FileCheck) -> list[tuple[str, str]]:
     """One SQLite file's counts. Never the text: only how often and where."""
     rows = [(label, c.path), ("occurrences", _either_case(c.occurrences, c.occurrences_any_case))]
     if c.wal_occurrences is not None:
@@ -927,12 +1094,16 @@ def _db_block(label: str, c: DbCheck) -> list[tuple[str, str]]:
         rows.append(("not queried", c.error))
         return rows
     held = ", ".join(f"{t} {n:,} of {c.tokens:,}" for t, n in c.index_tokens.items())
+    deleted = sum(c.deleted_tokens.values())
     rows += [
         ("turns holding it", _n(c.turns or 0)),
         ("beliefs holding it", _n(c.beliefs or 0)),
+        *[(f"{where} holding it", _n(n)) for where, n in c.other_rows.items()],
         ("search terms held", held if c.tokens else "the value makes no search term"),
-        ("free pages", _n(c.free_pages or 0)),
     ]
+    if deleted:
+        rows.append(("of deleted rows", f"{deleted:,}: `memware prune --scrub` removes them"))
+    rows.append(("free pages", _n(c.free_pages or 0)))
     return rows
 
 
@@ -963,7 +1134,11 @@ def cmd_scan(a: argparse.Namespace) -> int:
     Paths and counts only: the value is never printed, nor any text around it."""
     from memware.config import get_dotted, load_config
 
-    value = sys.stdin.readline().rstrip("\r\n") if a.value == "-" else a.value
+    try:
+        value = _read_text(a, a.value, "text to scan for")
+    except _NoText as e:
+        print(e, file=sys.stderr)
+        return 2
     if not value:
         print("scan needs a value: an empty one would match everything", file=sys.stderr)
         return 2
@@ -1017,11 +1192,11 @@ def cmd_scan(a: argparse.Namespace) -> int:
                 )
             ]
         )
-    blocks.append(
-        _db_block("store", r.store_check)
-        if r.store_check
-        else [("store", f"{r.store} (no store file)")]
-    )
+    if r.store_check:
+        blocks.append(_db_block("store", r.store_check))
+    else:
+        state = "could not be read: see below" if r.store_exists else "no store file"
+        blocks.append([("store", f"{r.store} ({state})")])
     blocks += [_db_block("pre-restore copy", c) for c in r.store_copies]
     if r.backup_dest is not None:
         blocks.append(
@@ -1988,38 +2163,60 @@ def build_parser() -> argparse.ArgumentParser:
     s = add(
         "prune",
         "un-index whole sources (--glob/--containing) or individual turns "
-        "(--turns-containing/--turns-starting-with), and retract beliefs from the sessions left "
-        "with no turn",
+        "(--turns-containing/--turns-starting-with), retract beliefs from the sessions left "
+        "with no turn, and scrub what was removed from the store file",
         epilog=(
             "Examples:\n"
             '  memware prune --containing "[memware-eval]"          dry run: what would go\n'
             '  memware prune --containing "[memware-eval]" --apply  un-index and retract\n'
-            '  memware prune --turns-containing "SECRET123"         turns holding a pasted value\n'
-            "Every TEXT is matched literally and case-sensitively. Without --apply nothing is\n"
-            "written. A retracted belief keeps its row: it leaves recall, context and `beliefs`,\n"
-            "and stays in the history of its key."
+            "  memware prune --turns-containing --apply        a pasted secret: prompts for it, unshown\n"
+            "  memware prune --turns-containing --value-file F --apply   or reads it from a file\n"
+            "  memware prune --scrub                           rewrite the store file, remove nothing\n"
+            "Every TEXT is matched literally and case-sensitively, and never printed or recorded.\n"
+            "A TEXT left out comes from --value-file, a prompt that does not echo, or stdin; `-`\n"
+            "reads stdin. Run a removal from a plain terminal, not inside a Claude Code session:\n"
+            "the command line lands in that session's transcript. Without --apply nothing is\n"
+            "written. A retracted belief keeps its row. Exit: 0 done · 1 the store file still\n"
+            "holds removed text (the scrub did not finish) · 2 bad usage"
         ),
     )
     s.add_argument("--glob", metavar="GLOB", help="un-index sources whose path matches this glob")
     s.add_argument(
         "--containing",
+        nargs="?",
+        const=_ASK,
         metavar="TEXT",
         help="un-index whole sources whose transcript file contains TEXT (read whole)",
     )
     s.add_argument(
         "--turns-containing",
+        nargs="?",
+        const=_ASK,
         metavar="TEXT",
         help="delete individual turns holding TEXT anywhere (keeps the rest of each session)",
     )
     s.add_argument(
         "--turns-starting-with",
+        nargs="?",
+        const=_ASK,
         metavar="TEXT",
         help="delete individual turns that begin with TEXT, such as a recurring harness preamble",
     )
     s.add_argument(
+        "--value-file",
+        metavar="FILE",
+        help="read the TEXT of the one text selector written without it from FILE",
+    )
+    s.add_argument(
         "--apply",
         action="store_true",
-        help="delete the turns and retract the beliefs; without it nothing is written",
+        help="delete the turns, retract the beliefs and scrub the file; without it nothing is written",
+    )
+    s.add_argument(
+        "--scrub",
+        action="store_true",
+        help="takes no selector: rewrite the store file (merge the search indexes, VACUUM, empty "
+        "the write-ahead log) and remove nothing",
     )
     s.set_defaults(fn=cmd_prune)
 
@@ -2029,17 +2226,25 @@ def build_parser() -> argparse.ArgumentParser:
         "store file and its search index, and with --backups the backup destination (read-only)",
         epilog=(
             "Examples:\n"
-            '  memware scan "SECRET123"              every transcript, the store file, its index\n'
-            '  memware scan "SECRET123" --backups    also mirrored transcripts and snapshots\n'
-            "  pbpaste | memware scan - --json      read the value from stdin, not the command line\n"
+            "  memware scan --backups                prompts for the value, unshown; then every\n"
+            "                                        transcript, the store file, its index, backups\n"
+            "  memware scan --value-file F --json    the value from a file\n"
+            "  pbpaste | memware scan - --json       the value from stdin\n"
             "Prints paths and counts, never the value or text around it. Transcripts match\n"
-            "literally and case-sensitively. Exit: 0 not found · 1 found · 2 not found, but a path\n"
-            "could not be read. See docs/keeping-memory-clean.md."
+            "literally and case-sensitively. Run it from a plain terminal: a value on the command\n"
+            "line is visible in ps and shell history, and inside a Claude Code session it lands in\n"
+            "that session's transcript. Exit: 0 not found · 1 found · 2 not found, but a path could\n"
+            "not be read. See docs/keeping-memory-clean.md."
         ),
     )
     s.add_argument(
-        "value", metavar="VALUE", help="the text to look for, or `-` to read one line from stdin"
+        "value",
+        nargs="?",
+        metavar="VALUE",
+        help="the text to look for; left out, --value-file, a prompt that does not echo, or "
+        "stdin gives it, and `-` reads stdin",
     )
+    s.add_argument("--value-file", metavar="FILE", help="read VALUE from FILE")
     s.add_argument(
         "--backups",
         action="store_true",

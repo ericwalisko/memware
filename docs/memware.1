@@ -141,30 +141,46 @@ turn. One of
 (turns holding the text anywhere) or
 .B \-\-turns\-starting\-with
 (turns that begin with it) is required, and a turn selector takes no other selector. Text is
-matched literally and case\-sensitively. Without
+matched literally and case\-sensitively, and never printed or recorded: a retraction's reason
+reads
+.IR "(value withheld)" .
+A text selector written without its text reads it from
+.BI \-\-value\-file " FILE" ,
+from a prompt that does not echo it, or from standard input; a text of
+.B \-
+reads standard input. Run a removal from a plain terminal: a command run inside a Claude Code
+session is written into that session's transcript. Without
 .B \-\-apply
 it is a dry run: it prints what it would remove and retract, and the beliefs whose subject,
-relation or value holds the text (prune keeps belief rows), and writes nothing. A selector
-that matches nothing says on standard error what it searched and which selector reaches the
-text instead. Every
-.B \-\-apply
-then scrubs the store file: it rebuilds both search indexes, runs
+relation or value holds the text (prune keeps belief rows), and writes nothing. A selector that
+matches nothing says on standard error what it searched and which selector reaches the text
+instead. With
+.BR \-\-apply ,
+a retraction reason an older prune wrote with the text in it is rewritten, and the store file is
+scrubbed when anything was removed or copies of the text are left that no row accounts for: both
+search indexes are merged (and rebuilt if a term of a deleted row is left), the file is
+compacted with
 .BR VACUUM ,
-and empties the write\-ahead log, so removed text leaves the file and not only every query,
-including what an earlier prune left behind. Standard error names each step, and says where
-copies may remain: backups made before now, and the transcript files, which memware never
-changes.
+and the write\-ahead log is emptied. The file is then checked, and what it still holds is
+printed. Standard error names each step and says where copies may remain: backups made before
+now, and the transcript files, which memware never changes.
+.B \-\-scrub
+takes no selector, removes nothing, and rewrites the store file. Exit status is 0 when done, 1
+when the store file still holds copies of the text no row accounts for or the scrub did not
+finish (it prints the command that finishes it), and 2 on bad usage. Other memware processes
+wait up to a minute for the store's lock while a prune holds it.
 .TP
-.BI "scan " VALUE
+.BI "scan " [VALUE]
 Count where a value is still stored, read\-only: every transcript under
 .B backup.transcript_src
 walked on disk, with whether each is indexed and, if not, why
 .RB ( capture.exclude ,
 the no\-capture list, an ignore marker, or not synced yet); the store file and its write\-ahead
-log, as given and in any case; the turns and beliefs holding it; the value's search terms on
-the index pages, deleted entries included; and the copies
+log, as given and in any case, counted before the store is opened read\-only, so no log is ever
+checkpointed; the turns, beliefs and other rows holding it; the value's search terms on the index
+pages, and those only deleted rows left; and the copies
 .B restore
-set aside. With
+set aside. A store path that is a symlink is followed. With
 .B \-\-backups
 (or
 .BI \-\-dest " DIR" )
@@ -172,9 +188,11 @@ it also reads the mirrored transcripts and snapshot files in the backup destinat
 .B \-\-transcript\-src
 names another tree. A
 .I VALUE
-of
+left out comes from
+.BI \-\-value\-file " FILE" ,
+a prompt that does not echo it, or standard input, and
 .B \-
-is read from standard input. Prints paths and counts, never the value or text around it. Exit
+reads standard input. Prints paths and counts, never the value or text around it. Exit
 status is 0 when nothing is found and every path was read, 1 when anything is found, and 2 when
 nothing is found but a path could not be read (each is listed with its reason).
 .TP

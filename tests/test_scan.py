@@ -20,17 +20,18 @@ import pytest
 
 from memware import backup as bk
 from memware.cli import main
-from memware.ingest import file_occurrences, prune, record_no_capture, sync_tree
+from memware.ingest import prune, record_no_capture, sync_tree
 from memware.ledger import assert_belief
-from memware.scan import (
+from memware.residue import (
     _LEAF_ROWID_MIN,
     FTS_TABLES,
     TOKENIZER,
+    file_occurrences,
     index_holds,
     leaf_terms,
-    scan,
     value_tokens,
 )
+from memware.scan import scan
 from memware.store import SCHEMA, Store
 
 VALUE = "HUNTER2SECRET"
@@ -294,6 +295,97 @@ def test_scan_writes_nothing_anywhere(tmp_path, capsys):
     assert state() == before
 
 
+def _killed_writer(db: Path, text: str) -> None:
+    """A process that wrote the value and was killed before it closed the store: the value sits in
+    the -wal only, and nothing has checkpointed it."""
+    import subprocess
+    import sys
+
+    code = (
+        "import os, sqlite3\n"
+        f"c = sqlite3.connect({str(db)!r}, isolation_level=None)\n"
+        "c.execute('PRAGMA wal_autocheckpoint=0')\n"
+        f"c.execute('INSERT INTO belief(key, subject, relation, value, valid_from, recorded_at) '"
+        f"          'VALUES (?, ?, ?, ?, ?, ?)', ('k|r', 'k', 'r', {text!r}, '2026', '2026'))\n"
+        "os._exit(0)\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_scan_counts_a_leftover_log_as_it_is_and_never_checkpoints_it(tmp_path, capsys):
+    """Review of #40: the first read-write open checkpointed a killed process's -wal into the file
+    before the bytes were counted, changed the store, and could exit 0 while the log held the
+    value. A read-only open leaves both files as they were."""
+    _, db = _setup(tmp_path)
+    _killed_writer(db, "LEFTOVER77")
+    wal = Path(f"{db}-wal")
+    assert b"LEFTOVER77" in wal.read_bytes() and b"LEFTOVER77" not in db.read_bytes()
+
+    def state():
+        return [(p.read_bytes(), p.stat().st_mtime_ns) for p in (db, wal)]
+
+    before = state()
+    code, r = _json(capsys, db, "LEFTOVER77")
+    assert code == 1
+    check = r["store_check"]
+    assert check["occurrences"] == 0 and check["wal_occurrences"] >= 1
+    assert check["beliefs"] == 1  # read through the log, as it was left
+    assert state() == before
+
+
+def test_a_symlinked_store_is_checked_where_sqlite_keeps_its_log(tmp_path, capsys):
+    """Review of #40: SQLite keeps the -wal beside the link's target, not beside the link."""
+    _, target = _setup(tmp_path)
+    link = tmp_path / "linked.db"
+    link.symlink_to(target)
+    _killed_writer(target, "LEFTOVER77")
+    assert not Path(f"{link}-wal").exists() and Path(f"{target}-wal").exists()
+
+    code, r = _json(capsys, link, "LEFTOVER77")
+    assert code == 1 and r["store"] == str(target)
+    assert r["store_check"]["wal_occurrences"] >= 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+def test_an_unreadable_store_is_not_called_missing(tmp_path, capsys):
+    _, db = _setup(tmp_path)
+    db.chmod(0)
+    try:
+        code, out, _ = _scan(capsys, db, ABSENT)
+    finally:
+        db.chmod(0o644)
+    assert code == 2
+    assert "(could not be read: see below)" in out and "no store file" not in out
+    assert f"not read : {db}" in out
+
+
+def test_the_value_can_come_from_a_file_or_a_hidden_prompt(tmp_path, capsys, monkeypatch):
+    _, db = _setup(tmp_path)
+    secret = tmp_path / "value.txt"
+    secret.write_text(VALUE + "\n")
+    code, out, err = _scan(capsys, db, "--value-file", str(secret))
+    assert code == 1 and "found in 1 transcript" in out and VALUE not in out + err
+
+    asked = []
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(
+        "getpass.getpass", lambda prompt, stream=None: asked.append(prompt) or VALUE
+    )
+    code, out, err = _scan(capsys, db)
+    assert code == 1 and asked == ["text to scan for (not shown): "] and VALUE not in out + err
+
+
+def test_a_value_ending_in_a_backslash_counts_once(tmp_path, capsys):
+    """Review of #40: the raw value matched inside its own JSON-escaped form."""
+    src, db = _setup(tmp_path)
+    value = "TOKEN77\\"
+    _write(src / "-e" / "path.jsonl", [f"the folder is {value}", f"and again {value} here"])
+    _, r = _json(capsys, db, value)
+    assert [(Path(h["path"]).name, h["occurrences"]) for h in r["transcripts"]] == [
+        ("path.jsonl", 2)
+    ]
+
+
 def test_the_value_can_come_from_stdin(tmp_path, capsys, monkeypatch):
     import io
 
@@ -330,7 +422,8 @@ def test_occurrences_count_once_across_chunk_boundaries(tmp_path, chunk_bytes):
     assert file_occurrences(p, [b"SECRET"], chunk_bytes=chunk_bytes) == 3
     assert file_occurrences(p, [b"SECRET"], any_case=True, chunk_bytes=chunk_bytes) == 4
     assert file_occurrences(p, [b"AA"], chunk_bytes=chunk_bytes) == 4  # overlapping, each counts
-    assert file_occurrences(p, [b"SECRET", b"yy", b"y"], chunk_bytes=chunk_bytes) == 6
+    # yy and y both start at one offset, which counts once
+    assert file_occurrences(p, [b"SECRET", b"yy", b"y"], chunk_bytes=chunk_bytes) == 5
 
 
 def test_the_tokenizer_is_the_one_the_schema_declares():
@@ -376,7 +469,7 @@ def test_leaf_pages_decode_to_exactly_the_terms_fts5vocab_lists(tmp_path):
             if table == "passage_fts":
                 assert pages > 50
             sample = sorted(vocab)[:: max(1, len(vocab) // 50)]
-            assert index_holds(con, table, [*sample, "zz-not-a-term"]) == len(sample)
+            assert index_holds(con, table, [*sample, "zz-not-a-term"]) == set(sample)
 
 
 def test_scan_rejects_an_empty_value(tmp_path):
