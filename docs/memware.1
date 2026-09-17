@@ -73,15 +73,20 @@ Search turns and beliefs. Pass several phrasings, fused by reciprocal rank. Flag
 .BR \-\-snippet\-tokens .
 .TP
 .B context
-Emit the currently valid beliefs whose subject the prompt names, for prompt\-time injection.
-Hook\-friendly.
+Emit the beliefs whose subject the prompt names, each with the date it was recorded, for
+prompt\-time injection. Hook\-friendly. It leaves out what
+.B beliefs \-\-stale
+lists.
 .TP
 .B notice
 Print what
 .B setup
 has not asked about yet, one line each, such as whether
 .B derive
-may run; nothing when there is none. Reads only the configuration.
+may run; nothing when there is none. Once per store, it also says how many beliefs injection
+leaves out (see
+.BR "beliefs \-\-stale" ),
+reading the store that one time and never creating it.
 .B \-\-from\-hook
 prints Claude Code hook JSON with a
 .BR systemMessage ,
@@ -90,8 +95,10 @@ which the plugin shows at session start.
 .B digest
 Print what memware holds for the project in the current directory: a line pointing at
 .BR recall ,
-the most recent sessions (date and first prompt) and the currently valid beliefs whose subject
-names the project. A git repository's checkouts and live worktrees count as one project.
+the most recent sessions (date and first prompt) and the beliefs whose subject names the
+project, each with the date it was recorded, less what
+.B beliefs \-\-stale
+lists. A git repository's checkouts and live worktrees count as one project.
 Prints nothing for a project with no indexed session. Flags:
 .BR \-k ", "
 .BR \-\-max\-chars ", "
@@ -113,7 +120,43 @@ lines from standard input, skipping blank lines and lines beginning with
 .RB \` # \(cq.
 .TP
 .BI "beliefs " "[SUBJECT [RELATION]]"
-Show current beliefs, or the full history of one key. The history keeps retracted beliefs.
+Show current beliefs, or the full history of one key. The history keeps retracted beliefs. A
+derived belief that was a measurement, a moving version or a status when recorded carries
+.BR volatile .
+.TP
+.B "beliefs \-\-stale"
+List the current beliefs the prompt hook and the digest leave out, each with its reason and
+why: a derived
+.B measurement
+(a count, total, percentage, rate, size or duration),
+.B moving_version
+(the version a branch, build or install is currently at) or
+.B status
+(of a numbered PR, issue, ticket or run, including what it contains); and, inside a project whose
+.IR pyproject.toml ,
+.I package.json
+or
+.I Cargo.toml
+declares a version, a belief about the project's version that differs from it
+.RB ( contradicted )
+or that names an older version beside the project's name
+.RB ( older_version ).
+A belief a person stated (reliability above 0.5, or a source that is not a
+.I memware:session/
+pointer) is never left out.
+.B \-\-cwd
+names the project; the default is the current directory. See
+.B inject.volatile_days
+under
+.BR FILES .
+.TP
+.BI "beliefs retract " "\-\-stale | ID ..."
+Retract what
+.B beliefs \-\-stale
+lists, or the committed beliefs with these ids. Nothing is written without
+.BR \-\-apply .
+Rows are kept, each with its reason; nothing a retracted belief superseded is reopened.
+Give ids before any flag.
 .TP
 .B "beliefs retract \-\-orphaned"
 List the committed beliefs whose cited session
@@ -154,7 +197,8 @@ runs, last run, turns not yet derived) and recall
 utilization (beliefs and turns recalled in 7 and 30 days, beliefs citing a session that is no
 longer indexed, and beliefs citing a turn id that no longer exists though the session is still
 indexed \(em a stale citation left by re\-indexing, distinct from a session that is fully
-gone), with a one\-line verdict when memory is inert, such as an empty ledger because derive has
+gone); the beliefs injection leaves out, by reason, for the project in the current directory;
+with a one\-line verdict when memory is inert, such as an empty ledger because derive has
 never run, or when beliefs have lost their session.
 .TP
 .B backup
@@ -265,7 +309,16 @@ Honoured by construction \(em memware emits no colour at all.
 Configuration, including the
 .B capture.exclude
 path globs (see
-.BR exclude ).
+.BR exclude )
+and
+.BR inject.volatile_days :
+a derived measurement, moving version or status is injected while younger than this many days.
+The default, 0, never injects one.
+.TP
+.I <home>/notices.json
+The one\-time notices
+.B notice
+has given.
 .TP
 .I <home>/ignore-markers.txt
 Content signatures for transcripts that must never be indexed or mirrored.

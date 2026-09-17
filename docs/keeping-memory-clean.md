@@ -140,6 +140,25 @@ memware beliefs retract --orphaned           # dry run: what would be retracted 
 memware beliefs retract --orphaned --apply   # retract them
 ```
 
+### Beliefs that were true when recorded
+
+Some derived beliefs keep their evidence and are still wrong: a row count, the version a branch
+was at, a PR's status. Nothing supersedes them, so they stay current in the ledger. The prompt
+hook and the digest leave them out already (see [what injection leaves
+out](integrations.md#what-injection-leaves-out)), and so does a belief about the project's
+version that its manifest overrules. To see them, and to retract them for good:
+
+```bash
+memware beliefs --stale                     # each with its reason and why
+memware beliefs retract --stale             # dry run: what would be retracted
+memware beliefs retract --stale --apply     # retract them (rows are kept, reasons recorded)
+memware beliefs retract 12 15 --apply       # or just these ids
+```
+
+Neither form reopens what a retracted belief had superseded: that value is older still. Run
+`--stale` from inside the project, or pass `--cwd DIR`, so the manifest rules apply to it. A
+belief a person stated is never listed.
+
 **A dangling citation is not the same thing.** Re-indexing a transcript (a `memware sync` that
 re-reads a file whose turns were re-parsed) can renumber a session's turn ids while the session
 stays indexed. A belief still citing the old id then points at a turn that no longer exists,
@@ -285,6 +304,7 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
+| see or retract measurements, moving versions and statuses injection leaves out | `memware beliefs --stale`; `memware beliefs retract --stale`, then again with `--apply` |
 | remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises |
 | remove a value pasted into a session you keep | `memware prune --turns-containing VALUE`, then again with `--apply` |
 | tame a recurring/dated automation prompt | `prune --turns-starting-with PREFIX --apply`; add PREFIX to `ignore-markers.txt` if it heads its own sessions |

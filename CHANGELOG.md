@@ -6,6 +6,62 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **`derive` no longer files a measurement as a durable belief, and keeps a short setting**
+  ([#38](https://github.com/ericwalisko/memware/issues/38)). The prompt rejected events,
+  predictions and intentions, but nothing rejected a dated quantity, so `the table | row count =
+  4.2 million rows` became a permanent fact while `The retry limit is now set to 5` was dropped
+  as `value too short`. The prompt now rejects measurements (counts, row totals, percentages,
+  rates, sizes, durations, "N of M" figures) and transient state (the version a branch, build or
+  install is currently at; the status of an issue, PR, run or check; what a PR contains) on the
+  same footing as events, with one test for both: would the value need re-checking to know it is
+  still true? Its vague-subject rule now has a concrete test: a determiner plus a generic noun
+  with no name ("the table", "the repo", "the worker") names nothing. The deterministic gate
+  backs both with no model call: it rejects a generic-noun subject, and a triple that
+  `memware.volatile.classify` names a measurement, a moving version or a status, so a weaker
+  model still writes less rather than wrong. A one-character value is admitted when it is a
+  number and the relation names a setting (`retry limit = 5`).
+- **The prompt hook and the session-start digest stop injecting beliefs that were true when
+  recorded and are wrong now.** A derived belief closes only when a later derive supersedes the
+  same key, which rarely happens, so `memware main branch current version: 0.4.0`, `built memware
+  wheel version: 0.5.0` and `memware test suite test count: 91 tests` reached every session under
+  "Known facts (currently valid…)" long after the repository moved on. None of them is an orphan,
+  so `retract --orphaned` and `prune` never touched them. Both unsolicited readers now leave out:
+  - a derived belief `memware.volatile` classifies as a measurement, a moving version or a
+    status. It is left out by default; `memware config inject.volatile_days N` injects one while
+    it is younger than N days. The default is 0 (never) because the reported version belief was
+    one day old and already wrong, so no multi-day window would have kept it out;
+  - inside a project whose manifest declares a version (`pyproject.toml`, including a hatch
+    `[tool.hatch.version] path`; `package.json`; `Cargo.toml`), a belief about the project's own
+    version that differs from it (**contradicted**), and a belief naming an older version of
+    the project beside its name, such as `memware 0.4.0 known issue` (**older version**).
+  A person stating a fact is a decision to keep it: a belief with reliability above derive's
+  0.5, or a source that is not a `memware:session/` pointer (`remember`, `memware assert`), is
+  exempt from all of it. Nothing is deleted or hidden: a left-out belief stays in `memware
+  beliefs`, `recall` and the MCP tools, which now mark it with `volatile` (its class). The
+  classification is regex and word lists, no model and no network, because the prompt hook runs
+  it on every prompt.
+
+### Added
+- **`memware beliefs --stale`** lists the current beliefs injection leaves out, each with its
+  reason (`measurement`, `moving_version`, `status`, `contradicted`, `older_version`) and why
+  (`pyproject.toml says 0.6.1`). `--cwd DIR` names the project whose manifest is checked.
+- **`memware beliefs retract` takes `--stale` or belief ids**, as a dry run unless `--apply`, as
+  `--orphaned` does. Rows are kept and each retraction records its reason. Neither reopens what
+  a retracted belief had superseded, because that value is older still; a predecessor is
+  relinked to the next belief that survives, as `--orphaned` does.
+- **`memware stats` counts the beliefs injection leaves out, by reason** (`injection.left_out`
+  under `--json`), with the window and the manifest version it read.
+- **An upgrading user is told once.** The session-start notice says how many beliefs are no
+  longer injected and names `memware beliefs --stale`. It reads the store once, records that in
+  `<home>/notices.json`, and never creates a store.
+
+### Changed
+- **The injected blocks say what they are.** The prompt hook's header is now `Known facts from
+  your memory ledger, each with the date it was recorded:` and the digest's `Beliefs about this
+  project from your memory ledger, each with the date it was recorded:`; each line ends
+  `(recorded YYYY-MM-DD)` instead of `(since …)`. Neither claims a fact is currently valid.
+
 ## [0.6.1] - 2026-09-16
 
 ### Changed
