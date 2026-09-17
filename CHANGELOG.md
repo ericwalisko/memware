@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-17
+
 ### Added
 - **`memware scan` counts every place a value is still stored**
   ([#37](https://github.com/ericwalisko/memware/issues/37)). `prune --containing` reads only
@@ -68,26 +70,6 @@ All notable changes to this project are documented here. The format follows
   `--json` adds `beliefs_redacted`, `beliefs_retracted_by_redaction`,
   `confirmation_sources_redacted`, `retraction_reasons_redacted`, `store_scrubbed`, `scrub_error`,
   `left_in_store` and `backup_dest`.
-- **An applied `memware prune` with a text selector redacts that text in beliefs.** A belief that
-  quoted a pasted secret kept it: prune never rewrote a belief row. Now every belief whose subject,
-  relation, value or free-text source holds the text, matched as the selector matches turns, has
-  it replaced with `[removed]`, in any status (committed, candidate, rejected, retracted,
-  superseded) and whether derive filed it or a person stated it, because removing a secret
-  outranks the rule that a person's belief is never retracted. The key follows a rewritten subject
-  or relation. A committed belief is also retracted, with the reason `memware prune: text redacted
-  (value withheld)`, by its status alone: its id, `valid_from`, `valid_to` and supersession links
-  stay, and no older value is reopened. A belief already retracted keeps its retraction. A
-  confirmation's source that quoted the text is redacted too. A source memware wrote itself
-  (derive's `memware:session/<id>/turn/<n>` pointer, the Hermes provider's `hermes built-in memory
-  (…)`, an approval's `review #N approved`) is provenance and is never matched or rewritten. An
-  open review whose candidate or incumbent is redacted is closed with the decision `redacted`, and
-  approving a redacted or retracted candidate is refused. No belief row is deleted, and none is
-  merged, even one redaction makes identical to another. The dry run lists the beliefs it would
-  redact by id. An `--apply` whose redaction would rewrite more than 20 beliefs, or any belief for
-  a text shorter than 6 characters, is refused whole: nothing is written, the counts are printed,
-  it exits 2, and `--allow-broad-redaction` applies it anyway. On a synthetic ledger of 330
-  beliefs, `api` would have redacted 157 and `memware` 310, 300 of them by rewriting derive's
-  session pointers.
 - **No prune output prints the text it removes.** The retraction a prune cascades into listed the
   beliefs it retracts as they were, so a derived `staging api key = <secret>` printed the secret,
   in the dry run and in `--apply`, in every view. Every field of those records, their keys, the
@@ -133,6 +115,13 @@ All notable changes to this project are documented here. The format follows
   `memware.volatile.classify` names a measurement, a moving version or a status, so a weaker
   model still writes less rather than wrong. A one-character value is admitted when it is a
   number and the relation names a setting (`retry limit = 5`).
+- **The Hermes provider applies the same rule.** Its `prefetch` leaves out a belief memware
+  marks `volatile` (honouring `inject.volatile_days`) and its header no longer claims facts are
+  currently valid. The staged upstream copy gets the equivalent change and still works against a
+  memware that predates the mark. Neither has a project directory, so the manifest rules apply
+  only to the Claude Code hooks.
+
+### Changed
 - **The prompt hook and the session-start digest stop injecting beliefs that were true when
   recorded and are wrong now.** A derived belief closes only when a later derive supersedes the
   same key, which rarely happens, so `memware main branch current version: 0.4.0`, `built memware
@@ -176,13 +165,26 @@ All notable changes to this project are documented here. The format follows
   beliefs`, `recall` and the MCP tools, which now mark it with `volatile` (its class). The
   classification is regex and word lists, no model and no network, because the prompt hook runs
   it on every prompt.
-- **The Hermes provider applies the same rule.** Its `prefetch` leaves out a belief memware
-  marks `volatile` (honouring `inject.volatile_days`) and its header no longer claims facts are
-  currently valid. The staged upstream copy gets the equivalent change and still works against a
-  memware that predates the mark. Neither has a project directory, so the manifest rules apply
-  only to the Claude Code hooks.
-
-### Changed
+- **An applied `memware prune` with a text selector redacts that text in beliefs.** A belief that
+  quoted a pasted secret kept it: prune never rewrote a belief row. Now every belief whose subject,
+  relation, value or free-text source holds the text, matched as the selector matches turns, has
+  it replaced with `[removed]`, in any status (committed, candidate, rejected, retracted,
+  superseded) and whether derive filed it or a person stated it, because removing a secret
+  outranks the rule that a person's belief is never retracted. The key follows a rewritten subject
+  or relation. A committed belief is also retracted, with the reason `memware prune: text redacted
+  (value withheld)`, by its status alone: its id, `valid_from`, `valid_to` and supersession links
+  stay, and no older value is reopened. A belief already retracted keeps its retraction. A
+  confirmation's source that quoted the text is redacted too. A source memware wrote itself
+  (derive's `memware:session/<id>/turn/<n>` pointer, the Hermes provider's `hermes built-in memory
+  (…)`, an approval's `review #N approved`) is provenance and is never matched or rewritten. An
+  open review whose candidate or incumbent is redacted is closed with the decision `redacted`, and
+  approving a redacted or retracted candidate is refused. No belief row is deleted, and none is
+  merged, even one redaction makes identical to another. The dry run lists the beliefs it would
+  redact by id. An `--apply` whose redaction would rewrite more than 20 beliefs, or any belief for
+  a text shorter than 6 characters, is refused whole: nothing is written, the counts are printed,
+  it exits 2, and `--allow-broad-redaction` applies it anyway. On a synthetic ledger of 330
+  beliefs, `api` would have redacted 157 and `memware` 310, 300 of them by rewriting derive's
+  session pointers.
 - **The injected blocks say what they are.** The prompt hook's header is now `Known facts from
   your memory ledger, each with the date it was recorded:` and the digest's `Beliefs about this
   project from your memory ledger, each with the date it was recorded:`; each line ends
