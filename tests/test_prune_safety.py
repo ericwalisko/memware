@@ -98,6 +98,21 @@ def test_prune_never_prints_the_text_it_removes(tmp_path, capsys, selector, text
         assert "[removed]" in out
 
 
+def test_a_redacted_subject_prints_its_key_with_the_marker_intact(tmp_path, capsys):
+    """Cosmetic finding from the final check of #40: the cascade rebuilt a retracted belief's
+    key from its already-withheld subject via ``make_key``, whose ``normalize`` strips leading
+    and trailing punctuation, eating the opening ``[`` of a ``[removed]`` marker sitting at the
+    edge of the field. It printed ``removed] is the staging api key note|says`` -- the marker
+    must survive intact."""
+    db = _store(tmp_path)
+    code, out, _ = _run(capsys, "--db", str(db), "prune", "--turns-containing", SECRET, "--json")
+    assert code == 0
+    body = json.loads(out)
+    note = next(r for r in body["retract"] if r["relation"] == "says")
+    assert note["subject"] == "[removed] is the staging api key note"
+    assert note["key"] == "[removed] is the staging api key note|says"
+
+
 def test_error_paths_withhold_the_text_too(tmp_path, capsys, monkeypatch):
     """An error that names the text, here a scrub failing with it in the message, is withheld."""
     db = _store(tmp_path)
