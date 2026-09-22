@@ -98,6 +98,53 @@ def test_prune_never_prints_the_text_it_removes(tmp_path, capsys, selector, text
         assert "[removed]" in out
 
 
+@pytest.mark.parametrize("view", [[], ["--plain"], ["--json"]])
+@pytest.mark.parametrize("text", ["e", "abc"])
+def test_short_text_dry_run_keeps_labels_and_marker_readable(tmp_path, capsys, text, view):
+    """LOW follow-up to #40: a one- to three-letter --turns-containing text shares letters with
+    the word "removed" and with memware's own labels ("beliefs to redact" holds an "e"), so the
+    output guard mangled its own words along with the value it was withholding -- turning
+    "beliefs to redact" into "b[removed]li[removed]fs to r[removed]dact" and "[removed]" itself
+    into "[r[removed]mov[removed]d]". A single clean pass must still withhold the text from a
+    value that happens to already contain the word "removed"."""
+    root = tmp_path / "corpus"
+    value = f"we found stains {text} removed easily and {text} again"
+    _write(root / "notes.jsonl", "notes", [value])
+    db = tmp_path / "s.db"
+    with Store(db) as s:
+        sync_tree(s, root, harness="generic")
+        turn = s.conn.execute("SELECT id FROM turn WHERE session='notes'").fetchone()[0]
+        assert_belief(
+            s, "cleanup note", "says", value, reliability=0.9, source=source_pointer("notes", turn)
+        )
+    code, out, err = _run(capsys, "--db", str(db), "prune", "--turns-containing", text, *view)
+    assert code == 0, err
+    expected = value.replace(text, "[removed]")  # one pass only: the marker itself stays whole
+    assert expected in out, (text, view, out)
+    if not view:
+        for label in (
+            "turns to remove",
+            "sessions with no turn left",
+            "beliefs to retract",
+            "predecessors to reopen",
+            "predecessors to relink",
+            "human-stated beliefs kept",
+            "beliefs to redact",
+            "redaction guard",
+            "action",
+            "subject",
+            "relation",
+            "value",
+            "source",
+        ):
+            assert label in out, (label, out)
+    if view == ["--json"]:
+        # the belief's lookup key is remade from the pre-redaction subject/relation, in one
+        # pass: remaking it from the already-withheld fields would eat into the marker too
+        key = json.loads(out)["retract"][0]["key"]
+        assert key == "cleanup note|says".replace(text, "[removed]"), (text, key)
+
+
 def test_error_paths_withhold_the_text_too(tmp_path, capsys, monkeypatch):
     """An error that names the text, here a scrub failing with it in the message, is withheld."""
     db = _store(tmp_path)
