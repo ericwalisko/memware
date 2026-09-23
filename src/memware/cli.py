@@ -1263,6 +1263,24 @@ def _withholding(text: str | None, *, stdout: bool = True) -> Iterator[None]:
         sys.stdout, sys.stderr = out, err
 
 
+_KEY_GUARD = "\x00"
+
+
+def _withheld_key(subject: str, relation: str, forms: list[str]) -> str:
+    """``make_key`` from an already-withheld subject/relation, printed the way a prune shows it.
+    ``make_key`` normalizes by stripping leading/trailing punctuation (:func:`memware.ledger.
+    normalize`), which otherwise eats the opening ``[`` of a ``[removed]`` marker sitting at
+    either edge of the field, printing ``removed] ...`` instead. The marker is swapped for a
+    guard character that normalize's edge-stripping does not match, so it survives, then swapped
+    back after the same case-variant safety net (:func:`_withhold`) the caller already relied on."""
+
+    def protect(text: str) -> str:
+        return text.replace(REDACTED, _KEY_GUARD)
+
+    key = str(_withhold(make_key(protect(subject), protect(relation)), forms))
+    return key.replace(_KEY_GUARD, REDACTED)
+
+
 def _withheld_plan(plan: Retraction, text: str | None) -> Retraction:
     """A retraction plan as a prune prints it: every value of every belief with the text withheld
     (:func:`_withhold`), and the key made again from what is left. The plan lists beliefs as they
@@ -1277,13 +1295,7 @@ def _withheld_plan(plan: Retraction, text: str | None) -> Retraction:
             r.get("subject"),
             r.get("relation"),
         ):
-            # lowercasing can make the text again from a case variant, so withhold the key too --
-            # made from the pre-redaction subject/relation, never the already-withheld `out`:
-            # re-running _withhold on text that already holds the marker would eat into it for a
-            # one- to three-letter text (a form that is itself a substring of "removed")
-            out["key"] = _withhold(
-                make_key(str(r.get("subject")), str(r.get("relation"))), forms
-            )
+            out["key"] = _withheld_key(str(out["subject"]), str(out["relation"]), forms)
         return out
 
     return Retraction(

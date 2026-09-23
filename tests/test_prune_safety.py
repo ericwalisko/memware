@@ -145,6 +145,21 @@ def test_short_text_dry_run_keeps_labels_and_marker_readable(tmp_path, capsys, t
         assert key == "cleanup note|says".replace(text, "[removed]"), (text, key)
 
 
+def test_a_redacted_subject_prints_its_key_with_the_marker_intact(tmp_path, capsys):
+    """Cosmetic finding from the final check of #40: the cascade rebuilt a retracted belief's
+    key from its already-withheld subject via ``make_key``, whose ``normalize`` strips leading
+    and trailing punctuation, eating the opening ``[`` of a ``[removed]`` marker sitting at the
+    edge of the field. It printed ``removed] is the staging api key note|says`` -- the marker
+    must survive intact."""
+    db = _store(tmp_path)
+    code, out, _ = _run(capsys, "--db", str(db), "prune", "--turns-containing", SECRET, "--json")
+    assert code == 0
+    body = json.loads(out)
+    note = next(r for r in body["retract"] if r["relation"] == "says")
+    assert note["subject"] == "[removed] is the staging api key note"
+    assert note["key"] == "[removed] is the staging api key note|says"
+
+
 def test_error_paths_withhold_the_text_too(tmp_path, capsys, monkeypatch):
     """An error that names the text, here a scrub failing with it in the message, is withheld."""
     db = _store(tmp_path)
@@ -354,3 +369,31 @@ def test_json_stays_json_whatever_the_text(tmp_path, capsys, text):
     assert all(
         text not in str(v) for r in body["retract"] for v in r.values() if isinstance(v, str)
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["HUNTER2SECRET!", "my  pass", "Tok\tEN42x", "(sk-live_X9)"],
+)
+def test_a_printed_key_never_holds_the_text_that_normalizing_would_change(text):
+    """``make_key`` lowercases, strips edge punctuation and collapses whitespace. A key made from
+    the raw subject and only then withheld prints ``hunter2secret`` for ``HUNTER2SECRET!`` -- no
+    withheld form matches it any more. The key is made from the already-withheld fields, so the
+    text is gone before normalizing can change it."""
+    import dataclasses
+
+    from memware.ledger import Retraction, normalize
+
+    row = {
+        "id": 1,
+        "subject": text,
+        "relation": "r",
+        "value": "v",
+        "key": "",
+        "source": "memware:session/s/turn/1",
+    }
+    kw: dict = {f.name: [] for f in dataclasses.fields(Retraction)}
+    kw["retract"] = [row]
+    key = cli._withheld_plan(Retraction(**kw), text).retract[0]["key"]
+    assert normalize(text) not in key
+    assert key == "[removed]|r"
