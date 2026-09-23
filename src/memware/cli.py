@@ -1230,7 +1230,7 @@ def _withheld_key(subject: str, relation: str, forms: list[str]) -> str:
     def protect(text: str) -> str:
         return text.replace(REDACTED, _KEY_GUARD)
 
-    key = _withhold(make_key(protect(subject), protect(relation)), forms)
+    key = str(_withhold(make_key(protect(subject), protect(relation)), forms))
     return key.replace(_KEY_GUARD, REDACTED)
 
 
