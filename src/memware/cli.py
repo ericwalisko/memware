@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shlex
 import sqlite3
 import sys
@@ -800,6 +801,29 @@ _PRUNE_COUNTS = {
     "turns_removed": ("turns removed", "turns to remove"),
 }
 
+# The fixed label vocabulary a prune's default/--plain view prints -- memware's own words, never
+# derived from a value in the store. The output guard (_Withheld) leaves these, and its REDACTED
+# marker, alone: a --turns-containing/--containing text of a letter or two would otherwise match
+# them too (e.g. "e" inside "beliefs", or inside "removed" itself) and mangle memware's own output
+# along with the value it is actually withholding.
+_PRUNE_LABELS = (
+    *dict.fromkeys(lbl for pair in _PRUNE_COUNTS.values() for lbl in pair),
+    *dict.fromkeys(lbl for _, lbl in _CASCADE_COLS),
+    "sessions with no turn left",
+    "beliefs retracted",
+    "beliefs to retract",
+    "predecessors reopened",
+    "predecessors to reopen",
+    "predecessors relinked",
+    "predecessors to relink",
+    "human-stated beliefs kept",
+    "beliefs redacted",
+    "beliefs to redact",
+    "redaction guard",
+    "store file",
+    "text left in the store",
+)
+
 
 def _cascade(
     a: argparse.Namespace,
@@ -1162,13 +1186,20 @@ def _withheld_forms(text: str) -> list[str]:
     return sorted({f for f in forms if f}, key=len, reverse=True)
 
 
+def _apply_forms(text: str, forms: list[str]) -> str:
+    """``text`` with every form replaced by ``[removed]``, once each. Never call this twice on the
+    same text with overlapping forms: a form that is a substring of ``removed`` itself (true of
+    any one- to three-letter text) would eat into the marker a first pass already inserted."""
+    for form in forms:
+        text = text.replace(form, REDACTED)
+    return text
+
+
 def _withhold(value: Any, forms: list[str]) -> Any:
     """``value`` with every form replaced by ``[removed]``, in strings and, recursively, in the
     values of lists and dicts. Dict keys are left alone: they are memware's names, not the text."""
     if isinstance(value, str):
-        for form in forms:
-            value = value.replace(form, REDACTED)
-        return value
+        return _apply_forms(value, forms)
     if isinstance(value, dict):
         return {k: _withhold(v, forms) for k, v in value.items()}
     if isinstance(value, list | tuple):
@@ -1176,16 +1207,30 @@ def _withhold(value: Any, forms: list[str]) -> Any:
     return value
 
 
+def _withhold_text(data: str, forms: list[str], protect: tuple[str, ...] = ()) -> str:
+    """``data`` with every form replaced by ``[removed]``, except inside an occurrence of one of
+    ``protect``: memware's own fixed labels and the marker itself, which a one- to three-letter
+    form would otherwise match letter by letter (:func:`_apply_forms`'s note)."""
+    if not protect:
+        return _apply_forms(data, forms)
+    pattern = "|".join(re.escape(p) for p in sorted(set(protect), key=len, reverse=True))
+    parts = re.split(f"({pattern})", data)
+    protected = set(protect)
+    return "".join(part if part in protected else _apply_forms(part, forms) for part in parts)
+
+
 class _Withheld(io.TextIOBase):
     """A text stream that passes everything through with every form of a prune's text replaced by
-    ``[removed]`` (:func:`_withheld_forms`)."""
+    ``[removed]`` (:func:`_withheld_forms`), except inside the marker itself or one of ``protect``
+    -- memware's own fixed labels, never a value from the store."""
 
-    def __init__(self, stream: Any, text: str) -> None:
+    def __init__(self, stream: Any, text: str, protect: tuple[str, ...] = ()) -> None:
         self._stream = stream
         self._forms = _withheld_forms(text)
+        self._protect = (REDACTED, *protect)
 
     def write(self, data: str) -> int:
-        self._stream.write(_withhold(data, self._forms))
+        self._stream.write(_withhold_text(data, self._forms, self._protect))
         return len(data)
 
     def flush(self) -> None:
@@ -1202,18 +1247,38 @@ def _withholding(text: str | None, *, stdout: bool = True) -> Iterator[None]:
     """While a prune prints, no form of its text reaches standard error, or standard output unless
     ``stdout`` is off, by any path: counts, belief records, notes, errors. The records are withheld
     where they are built too (:func:`_withheld_plan`); this is what holds when a path is missed.
-    ``--json`` withholds in the data instead, where a replacement cannot break the JSON."""
+    ``--json`` withholds in the data instead, where a replacement cannot break the JSON. Labels and
+    the marker (:data:`_PRUNE_LABELS`) are left alone, so a text of a letter or two stays legible
+    in the counts and record fields around it."""
     if not text:
         yield
         return
     out, err = sys.stdout, sys.stderr
-    sys.stderr = _Withheld(err, text)
+    sys.stderr = _Withheld(err, text, _PRUNE_LABELS)
     if stdout:
-        sys.stdout = _Withheld(out, text)
+        sys.stdout = _Withheld(out, text, _PRUNE_LABELS)
     try:
         yield
     finally:
         sys.stdout, sys.stderr = out, err
+
+
+_KEY_GUARD = "\x00"
+
+
+def _withheld_key(subject: str, relation: str, forms: list[str]) -> str:
+    """``make_key`` from an already-withheld subject/relation, printed the way a prune shows it.
+    ``make_key`` normalizes by stripping leading/trailing punctuation (:func:`memware.ledger.
+    normalize`), which otherwise eats the opening ``[`` of a ``[removed]`` marker sitting at
+    either edge of the field, printing ``removed] ...`` instead. The marker is swapped for a
+    guard character that normalize's edge-stripping does not match, so it survives, then swapped
+    back after the same case-variant safety net (:func:`_withhold`) the caller already relied on."""
+
+    def protect(text: str) -> str:
+        return text.replace(REDACTED, _KEY_GUARD)
+
+    key = str(_withhold(make_key(protect(subject), protect(relation)), forms))
+    return key.replace(_KEY_GUARD, REDACTED)
 
 
 def _withheld_plan(plan: Retraction, text: str | None) -> Retraction:
@@ -1230,8 +1295,7 @@ def _withheld_plan(plan: Retraction, text: str | None) -> Retraction:
             r.get("subject"),
             r.get("relation"),
         ):
-            # lowercasing can make the text again from a case variant, so withhold the key too
-            out["key"] = _withhold(make_key(str(out["subject"]), str(out["relation"])), forms)
+            out["key"] = _withheld_key(str(out["subject"]), str(out["relation"]), forms)
         return out
 
     return Retraction(

@@ -98,6 +98,68 @@ def test_prune_never_prints_the_text_it_removes(tmp_path, capsys, selector, text
         assert "[removed]" in out
 
 
+@pytest.mark.parametrize("view", [[], ["--plain"], ["--json"]])
+@pytest.mark.parametrize("text", ["e", "abc"])
+def test_short_text_dry_run_keeps_labels_and_marker_readable(tmp_path, capsys, text, view):
+    """LOW follow-up to #40: a one- to three-letter --turns-containing text shares letters with
+    the word "removed" and with memware's own labels ("beliefs to redact" holds an "e"), so the
+    output guard mangled its own words along with the value it was withholding -- turning
+    "beliefs to redact" into "b[removed]li[removed]fs to r[removed]dact" and "[removed]" itself
+    into "[r[removed]mov[removed]d]". A single clean pass must still withhold the text from a
+    value that happens to already contain the word "removed"."""
+    root = tmp_path / "corpus"
+    value = f"we found stains {text} removed easily and {text} again"
+    _write(root / "notes.jsonl", "notes", [value])
+    db = tmp_path / "s.db"
+    with Store(db) as s:
+        sync_tree(s, root, harness="generic")
+        turn = s.conn.execute("SELECT id FROM turn WHERE session='notes'").fetchone()[0]
+        assert_belief(
+            s, "cleanup note", "says", value, reliability=0.9, source=source_pointer("notes", turn)
+        )
+    code, out, err = _run(capsys, "--db", str(db), "prune", "--turns-containing", text, *view)
+    assert code == 0, err
+    expected = value.replace(text, "[removed]")  # one pass only: the marker itself stays whole
+    assert expected in out, (text, view, out)
+    if not view:
+        for label in (
+            "turns to remove",
+            "sessions with no turn left",
+            "beliefs to retract",
+            "predecessors to reopen",
+            "predecessors to relink",
+            "human-stated beliefs kept",
+            "beliefs to redact",
+            "redaction guard",
+            "action",
+            "subject",
+            "relation",
+            "value",
+            "source",
+        ):
+            assert label in out, (label, out)
+    if view == ["--json"]:
+        # the belief's lookup key is remade from the pre-redaction subject/relation, in one
+        # pass: remaking it from the already-withheld fields would eat into the marker too
+        key = json.loads(out)["retract"][0]["key"]
+        assert key == "cleanup note|says".replace(text, "[removed]"), (text, key)
+
+
+def test_a_redacted_subject_prints_its_key_with_the_marker_intact(tmp_path, capsys):
+    """Cosmetic finding from the final check of #40: the cascade rebuilt a retracted belief's
+    key from its already-withheld subject via ``make_key``, whose ``normalize`` strips leading
+    and trailing punctuation, eating the opening ``[`` of a ``[removed]`` marker sitting at the
+    edge of the field. It printed ``removed] is the staging api key note|says`` -- the marker
+    must survive intact."""
+    db = _store(tmp_path)
+    code, out, _ = _run(capsys, "--db", str(db), "prune", "--turns-containing", SECRET, "--json")
+    assert code == 0
+    body = json.loads(out)
+    note = next(r for r in body["retract"] if r["relation"] == "says")
+    assert note["subject"] == "[removed] is the staging api key note"
+    assert note["key"] == "[removed] is the staging api key note|says"
+
+
 def test_error_paths_withhold_the_text_too(tmp_path, capsys, monkeypatch):
     """An error that names the text, here a scrub failing with it in the message, is withheld."""
     db = _store(tmp_path)
@@ -307,3 +369,31 @@ def test_json_stays_json_whatever_the_text(tmp_path, capsys, text):
     assert all(
         text not in str(v) for r in body["retract"] for v in r.values() if isinstance(v, str)
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["HUNTER2SECRET!", "my  pass", "Tok\tEN42x", "(sk-live_X9)"],
+)
+def test_a_printed_key_never_holds_the_text_that_normalizing_would_change(text):
+    """``make_key`` lowercases, strips edge punctuation and collapses whitespace. A key made from
+    the raw subject and only then withheld prints ``hunter2secret`` for ``HUNTER2SECRET!`` -- no
+    withheld form matches it any more. The key is made from the already-withheld fields, so the
+    text is gone before normalizing can change it."""
+    import dataclasses
+
+    from memware.ledger import Retraction, normalize
+
+    row = {
+        "id": 1,
+        "subject": text,
+        "relation": "r",
+        "value": "v",
+        "key": "",
+        "source": "memware:session/s/turn/1",
+    }
+    kw: dict = {f.name: [] for f in dataclasses.fields(Retraction)}
+    kw["retract"] = [row]
+    key = cli._withheld_plan(Retraction(**kw), text).retract[0]["key"]
+    assert normalize(text) not in key
+    assert key == "[removed]|r"
