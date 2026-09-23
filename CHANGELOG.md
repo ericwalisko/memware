@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-23
+
+### Fixed
+- **A prune's dry run stays readable for a text of one to three letters.** The output guard that
+  keeps a prune from printing its text also matched those letters inside memware's own labels and
+  inside the `[removed]` marker, so a dry run for `e` printed `b[removed]li[removed]fs to
+  r[removed]dact`. Labels and the marker are now left alone; the text is still withheld
+  everywhere else.
+- **A redacted belief's key prints with the `[removed]` marker intact.** Key normalization strips
+  punctuation at the edges of a field, so a subject beginning with the marker printed as
+  `removed] vault|owner`. The key is still made from the already-withheld fields, so no form of
+  the text can reach it through normalization.
+
 ## [0.7.0] - 2026-09-17
 
 ### Added
