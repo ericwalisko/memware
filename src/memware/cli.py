@@ -12,7 +12,7 @@ import re
 import shlex
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,7 @@ from memware.digest import (
     belief_line,
     digest,
     injection_gate,
+    project_dir_name,
     resolve_project,
 )
 from memware.index import (
@@ -331,6 +332,67 @@ def _hiding_verdict(excluded: int, total: int, *, pointer: bool = True) -> str |
     return line + ("; `memware exclude` lists what each pattern matches" if pointer else "")
 
 
+def _path_names(src: str) -> set[str]:
+    """The names in a transcript source's path, as given and resolved."""
+    root = Path(src).expanduser()
+    return {*root.parts, *root.resolve().parts} - {"/"}
+
+
+_LAYOUT_NAMES = ("subagents",)
+"""Directory names Claude Code itself writes under a project directory."""
+
+
+def _segment_forms(pattern: str, src_names: Collection[str] = ()) -> list[str]:
+    """For a pattern written as a path, with ``/`` between names, the forms that name the Claude
+    Code project directory it means. Claude Code keeps a project's transcripts in a directory named
+    after its path with every character but a letter or digit made a dash
+    (:func:`memware.digest.project_dir_name`), so ``*/olivia-career/*`` names no directory there
+    and ``*-olivia-career/*`` or ``*olivia-career*`` does. Empty for a pattern with no name
+    beside a ``/``, one whose names are already dash-encoded, one naming a ``.jsonl`` file, and
+    one ending in a name a transcript path really holds: :data:`_LAYOUT_NAMES`, or one of
+    ``src_names``, the transcript source's own path."""
+    parts = os.path.expanduser(pattern).split("/")
+
+    def is_name(i: int) -> bool:
+        part = parts[i]
+        glob = any(c in part for c in "*?[")
+        return bool(part) and not glob and not (i == len(parts) - 1 and part.endswith(".jsonl"))
+
+    if len(parts) < 2:
+        return []
+    end = next((i for i in reversed(range(len(parts))) if is_name(i)), None)
+    if end is None:
+        return []
+    start = end
+    while start > 0 and is_name(start - 1):
+        start -= 1
+    names = parts[start : end + 1]
+    if any(n.startswith("-") for n in names) or names[-1] in (*_LAYOUT_NAMES, *src_names):
+        return []
+    if start == 1 and parts[0] == "":  # an absolute path: the whole project directory's name
+        whole = f"*/{project_dir_name('/' + '/'.join(names))}/*"
+    else:
+        whole = f"*-{project_dir_name('/'.join(names))}/*"
+    return list(dict.fromkeys([whole, f"*{project_dir_name(names[-1])}*"]))
+
+
+def _segment_verdict(suggestions: list[dict[str, Any]]) -> str:
+    """The note for a pattern written as a path that matches nothing: why, and what would."""
+    tries = " or ".join(
+        f"{shlex.quote(s['pattern'])} ({_plural(s['transcripts'], 'transcript')} on disk, "
+        f"{_plural(s['indexed_sources'], 'indexed source')})"
+        for s in suggestions
+    )
+    return (
+        "Claude Code keeps a project's transcripts in a directory named after its path with every "
+        "character but a letter or digit made a dash (/Users/me/work is -Users-me-work), so a "
+        f"pattern written as a path names no directory there; try {tries}"
+    )
+
+
+_SEGMENT_REFUSAL = "a pattern written as a path that matches nothing is most likely a mistyped one"
+
+
 def _print_blocks(blocks: list[list[tuple[str, str]]]) -> None:
     """Labeled ``field : value`` lines, a blank line between blocks, as ``memware stats`` prints."""
     blocks = [b for b in blocks if b]
@@ -348,8 +410,13 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     The dry run counts, for every pattern, the transcripts on disk it matches and the indexed
     sources it would un-index, and reads the store read-only. ``--apply`` writes the config and
     un-indexes every indexed source the patterns match, including sources whose transcript is
-    no longer on disk, which no sync would visit again. Removing a pattern un-indexes nothing
-    and indexes nothing: the next sync picks up the transcripts it was hiding."""
+    no longer on disk, which no sync would visit again, then scrubs the store file as an applied
+    prune does (:func:`memware.ingest.unindex_sources`). Removing a pattern un-indexes nothing
+    and indexes nothing: the next sync picks up the transcripts it was hiding.
+
+    A new pattern written as a path that matches nothing, such as ``*/olivia-career/*`` where
+    Claude Code names the directory ``-Users-me-olivia-career``, is refused on ``--apply``
+    unless ``--force``; the output names the forms that would match."""
     import sqlite3
 
     from memware.config import (
@@ -360,7 +427,12 @@ def cmd_exclude(a: argparse.Namespace) -> int:
         save_config,
         set_dotted,
     )
-    from memware.ingest import capture_exclude_patterns, is_excluded, matches_exclude, prune_source
+    from memware.ingest import (
+        capture_exclude_patterns,
+        is_excluded,
+        matches_exclude,
+        unindex_sources,
+    )
 
     before = capture_exclude_patterns()
     pattern = (a.add if a.add is not None else a.remove or "").strip()
@@ -382,11 +454,13 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     disk = _transcripts_on_disk(src)
     db = Path(a.db).expanduser()
     indexed: dict[str, int] = {}  # source -> turns, for sources some pattern of interest matches
+    sources: list[str] = []  # every indexed source, for what a suggested form would match
     watched = [*after, pattern] if action == "remove" else after
     if db.exists() and watched:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)  # a dry run never writes
         try:
             for (source,) in con.execute("SELECT source FROM cursor").fetchall():
+                sources.append(source)
                 if is_excluded(source, watched):
                     row = con.execute("SELECT count(*) FROM turn WHERE source=?", (source,))
                     indexed[source] = int(row.fetchone()[0])
@@ -422,28 +496,60 @@ def cmd_exclude(a: argparse.Namespace) -> int:
         report["reindexable"] = sum(
             matches_exclude(p, pattern) and not is_excluded(p, after) for p in disk
         )
+    nothing = bool(
+        action == "add" and target and not (target["transcripts"] or target["indexed_sources"])
+    )
+    suggestions = [
+        {
+            "pattern": form,
+            "transcripts": sum(matches_exclude(p, form) for p in disk),
+            "indexed_sources": sum(matches_exclude(s_, form) for s_ in sources),
+        }
+        for form in (_segment_forms(pattern, _path_names(src)) if nothing else [])
+    ]
+    refused = bool(a.apply and suggestions and not a.force)
+    report["suggestions"] = suggestions
+    report["refused"] = _SEGMENT_REFUSAL if refused else None
+    report["applied"] = bool(a.apply) and not refused
 
-    if a.apply:
+    pruned: Pruned | None = None
+    notes: list[str] = []
+    failed = False
+    if report["applied"]:
         if after != before:
             user = load_user_config()  # write the one key; defaults stay defaults
             set_dotted(user, "capture.exclude", after)
             save_config(user)
         if unindex:
             with Store(db) as s:
-                s.conn.execute("BEGIN IMMEDIATE")
-                try:
-                    for source in unindex:
-                        prune_source(s, source)  # as a sync does: beliefs are left alone
-                except BaseException:
-                    s.conn.execute("ROLLBACK")
-                    raise
-                s.conn.execute("COMMIT")
+                pruned = unindex_sources(  # as a sync un-indexes: beliefs are left alone
+                    s,
+                    unindex,
+                    progress=lambda step: print(
+                        f"scrubbing the store file: {step}", file=sys.stderr
+                    ),
+                )
                 report["beliefs_orphaned"] = orphaned_count(s)
+            dest = get_dotted(load_config(), "backup.dest")
+            report["store_scrubbed"] = asdict(pruned.scrubbed) if pruned.scrubbed else None
+            report["scrub_error"] = pruned.scrub_error
+            report["left_in_index"] = pruned.index_left
+            report["backup_dest"] = dest
+            notes, failed = _scrub_notes(a, pruned, dest)
+    code = 2 if refused else 1 if failed else 0
 
     if a.json:
         _out(report, True)
-        return 0
-    state = "applied" if a.apply else "dry run, nothing written"
+        if notes:
+            print("\n".join(notes), file=sys.stderr)
+        return code
+    state = (
+        "refused, nothing written"
+        if refused
+        else "applied"
+        if report["applied"]
+        else "dry run, nothing written"
+    )
     blocks: list[list[tuple[str, str]]] = [
         [
             ("action", f"{action} {pattern} ({state})" if pattern else f"list ({state})"),
@@ -467,17 +573,34 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     if action == "remove":
         total.append(("transcripts no longer excluded", f"{report['reindexable']:,}"))
     else:
-        label = "sources un-indexed" if a.apply else "sources to un-index"
+        label = "sources un-indexed" if report["applied"] else "sources to un-index"
         total.append((label, f"{len(unindex):,} ({report['unindex_turns']:,} turns)"))
+    if pruned is not None:
+        total.append(("store file", _scrubbed_line(pruned)))
+        if _index_checked(pruned):
+            total.append(("left in the search index", _index_left_line(pruned.index_left)))
     blocks.append(total)
 
     verdicts: list[str] = []
     if not after:
         verdicts.append("capture.exclude is empty; `memware exclude --add GLOB` previews a pattern")
-    if action == "add" and target and not (target["transcripts"] or target["indexed_sources"]):
+    if nothing:
+        how = (
+            _segment_verdict(suggestions)
+            if suggestions
+            else "it is matched against the whole resolved path, and `*` crosses `/`"
+        )
         verdicts.append(
-            "the pattern matches no transcript on disk and no indexed source; it is matched "
-            "against the whole resolved path, so `*/name/*` names a directory"
+            "the pattern matches no transcript on disk and no indexed source, so it excludes "
+            f"nothing now. {how[0].upper()}{how[1:]}"
+        )
+    if suggestions:
+        verdicts.append(
+            f"refused: {_SEGMENT_REFUSAL}; --force adds it anyway"
+            if refused
+            else f"--apply refuses it, because {_SEGMENT_REFUSAL}; --force adds it anyway"
+            if not a.apply
+            else "added with --force, though it matches nothing"
         )
     hiding = _hiding_verdict(report["excluded"], len(disk), pointer=False)
     if hiding:
@@ -491,19 +614,20 @@ def cmd_exclude(a: argparse.Namespace) -> int:
             "no longer indexed. `memware beliefs retract --orphaned` lists them; add --apply to "
             "retract."
         )
+    verdicts += notes
     if not a.apply:
         steps = []
-        if action == "add" and after != before:
+        if action == "add" and after != before and not suggestions:
             steps.append("add it to capture.exclude")
         if action == "remove":
             steps.append("remove it from capture.exclude")
         if unindex:
-            steps.append("un-index what the patterns match")
+            steps.append("un-index what the patterns match and scrub the store file")
         if steps:
             verdicts.append("run again with --apply to " + " and ".join(steps))
     blocks.append([("verdict", v) for v in verdicts])
     _print_blocks(blocks)
-    return 0
+    return code
 
 
 def cmd_recall(a: argparse.Namespace) -> int:
@@ -995,6 +1119,22 @@ def _scrubbed_line(r: Pruned) -> str:
     )
 
 
+def _index_left_line(held: dict[str, int] | None) -> str:
+    """What the search index still holds of deleted rows after a scrub with no text to check."""
+    if held is None:
+        return "not checked: the search index could not be read"
+    if not any(held.values()):
+        return "nothing: no term of a deleted row is on its pages"
+    where = ", ".join(f"{table} {n:,}" for table, n in held.items() if n)
+    return f"{_plural(sum(held.values()), 'term')} of deleted rows ({where})"
+
+
+def _index_checked(r: Pruned) -> bool:
+    """Whether ``r`` scrubbed after an un-index with no text (a glob, an exclusion: no redaction), so
+    its search index was to be checked in place of the text."""
+    return r.redaction is None and (r.scrubbed is not None or r.scrub_error is not None)
+
+
 def _left_line(left: FileCheck) -> str:
     """What the store file and its log still hold of the text: counts and places, never the text."""
     if left.error:
@@ -1060,6 +1200,15 @@ def _scrub_notes(a: argparse.Namespace, r: Pruned, dest: str | None) -> tuple[li
             f"the store file still holds copies of the text no row accounts for "
             f"({_left_line(left)}). To finish, {close}: {_finish_command(a)}"
         )
+    elif _index_checked(r) and (r.index_left is None or any(r.index_left.values())):
+        failed = True
+        found = (
+            "could not be read to check it"
+            if r.index_left is None
+            else f"still holds {_index_left_line(r.index_left)}, copies of removed text no row "
+            "accounts for"
+        )
+        notes.append(f"the search index {found}. To finish, {close}: {_finish_command(a)}")
     if left is not None and left.beliefs:
         notes.append(
             f"{_plural(left.beliefs, 'belief', 'hold')} the text past the start of a field: "
@@ -1417,10 +1566,13 @@ def _prune(a: argparse.Namespace) -> int:
         head["left_in_store"] = (
             {**asdict(r.left), "leftover": r.left.leftover} if r.left is not None else None
         )
+        head["left_in_index"] = r.index_left
         head["backup_dest"] = dest
         lines.append(("store file", _scrubbed_line(r)))
         if r.left is not None:
             lines.append(("text left in the store", _left_line(r.left)))
+        if _index_checked(r):
+            lines.append(("left in the search index", _index_left_line(r.index_left)))
         more, failed = _scrub_notes(a, r, dest)
         notes += more
     unwritten = "dry run: nothing written; add --apply to write it"
@@ -2536,7 +2688,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  memware exclude --add '*/-Users-me-gen-runs/*' --apply\n"
             "  memware exclude --remove '*/-Users-me-gen-runs/*' --apply\n"
             "A pattern is matched against the whole resolved transcript path, and * crosses /.\n"
-            "See docs/keeping-memory-clean.md."
+            "Claude Code names a project's directory after its path with every character but a\n"
+            "letter or digit a dash: /Users/me/gen-runs is -Users-me-gen-runs. --apply scrubs the\n"
+            "store file as prune --apply does. See docs/keeping-memory-clean.md."
         ),
     )
     which = s.add_mutually_exclusive_group()
@@ -2545,7 +2699,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--apply",
         action="store_true",
-        help="write the config and un-index the indexed sources the patterns match",
+        help="write the config, un-index the indexed sources the patterns match, and scrub the "
+        "store file",
+    )
+    s.add_argument(
+        "--force",
+        action="store_true",
+        help="with --apply, add a pattern written as a path even though it matches nothing",
     )
     s.set_defaults(fn=cmd_exclude)
 

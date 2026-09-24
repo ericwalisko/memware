@@ -6,6 +6,47 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **`memware exclude --apply` removes what it un-indexes from the store file.** It deleted the
+  matching turns and cursors but never scrubbed, so the search index kept each removed turn's
+  words, lowercased, on its pages. A synthetic store synced with a transcript holding a token,
+  then `exclude --add '*privateproj*' --apply`, left 0 turns and 0 `fts5vocab` terms but 2
+  case-insensitive copies of the token in the file (4 with `secure_delete` off). `memware scan`
+  reported the term held and exited 1, and a backup taken afterwards copied it. Only a later
+  `prune --scrub` removed it. Now, whenever it un-indexes anything, `exclude --apply` runs the
+  same scrub as `prune --apply` (`memware.ingest.unindex_sources`, which calls the prune's own
+  scrub step): both search indexes merged, one a merge leaves holding deleted terms rebuilt,
+  `VACUUM`, the write-ahead log emptied without waiting for a reader while the lock is held, each
+  step announced on stderr. Then it checks the index pages for terms no live row holds (`left in
+  the search index`, `left_in_index` in `--json`) and names the backup destination whose earlier
+  snapshots and mirrored transcripts may still hold the text. It exits 1 with the command to finish
+  when the scrub did not finish, the log could not be emptied, or the index still holds such terms
+  or could not be read. `--json` adds `store_scrubbed`, `scrub_error`, `left_in_index` and
+  `backup_dest`. Beliefs are still left in place, as before. **A store an exclusion was applied to with 0.8.0 or earlier
+  still holds that text: run `memware prune --scrub` once.** So does a store whose pattern was
+  added with `memware config capture.exclude` and then applied by a sync, which un-indexes
+  without scrubbing.
+- **`memware exclude --add` refuses a pattern written as a path that matches nothing.** Claude Code
+  names a project's transcript directory after its whole path with every character but a letter or
+  digit a dash (`-Users-me-Developer-olivia-career`), so `'*/olivia-career/*'` matched nothing.
+  The dry run printed `transcripts : 0` and a hint that `*/name/*` names a directory, and `--apply`
+  saved the pattern and reported success. Now a new pattern that matches no transcript on disk and
+  no indexed source says so. When it is written as a path, the output lists the dash-encoded and
+  `*name*` forms (`'*-olivia-career/*'`, `'*olivia-career*'`) with what each would match, and
+  `--apply` refuses it, writes nothing and exits 2 (`refused` and `suggestions` in `--json`).
+  `--force` adds it anyway. A pattern already in the dash-encoded form, or ending in a name
+  Claude Code writes itself such as `subagents`, is added as before.
+
+### Changed
+- `prune --glob --apply` runs the same index check after its scrub and prints `left in the search
+  index` (`left_in_index` in `--json`); an index still holding terms of deleted rows, or one that
+  could not be read, exits 1, as `exclude --apply` does.
+- `docs/keeping-memory-clean.md` explains Claude Code's dash-encoded project directory names
+  beside the `'*/-Users-me-gen-runs/*'` example, compares the `*-name/*` and `*name*` forms, and
+  says what `exclude --apply` now scrubs. It also says that a pattern a sync applies, and one
+  applied with 0.8.0 or earlier, needs a `memware prune --scrub`. `docs/memware.1` and `memware
+  exclude --help` follow.
+
 ## [0.8.0] - 2026-09-24
 
 ### Added

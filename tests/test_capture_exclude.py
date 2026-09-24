@@ -3,18 +3,20 @@
 ``MEMWARE_NO_CAPTURE`` reaches only the processes a run starts, and three harnesses forgot it in
 two days. A marker needs its text inside the transcript. A pattern lives in the machine's config,
 so it excludes a generator by where its sessions run, whatever the generator's author forgot.
-Every test here runs on a synthetic transcript tree and a scratch ``MEMWARE_HOME``.
+``exclude --apply`` scrubs the store file as ``prune --apply`` does, so what it un-indexes leaves
+the file too. Every test here runs on a synthetic transcript tree and a scratch ``MEMWARE_HOME``.
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from memware import backup as bk
-from memware.cli import main
+from memware.cli import _segment_forms, main
 from memware.config import config_path, memware_home
 from memware.ingest import (
     capture_exclude_patterns,
@@ -24,10 +26,12 @@ from memware.ingest import (
     sync_file,
 )
 from memware.ledger import assert_belief, current
-from memware.store import Store
+from memware.residue import FTS_TABLES, check_file
+from memware.store import Scrubbed, Store
 from tests.conftest import write_claude_jsonl
 
 GLOB = "*/-Users-me-gen-runs/*"
+VALUE = "QUIXOTIC77"
 
 
 def _config(**capture: object) -> dict:
@@ -318,7 +322,10 @@ def test_exclude_add_and_remove_are_exclusive_and_reject_an_empty_pattern(machin
 
 def test_a_pattern_that_matches_nothing_says_how_patterns_match(machine, capsys):
     assert main(["--db", machine["db"], "exclude", "--add=-Users-me-gen-runs"]) == 0
-    assert "`*/name/*` names a directory" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "the pattern matches no transcript on disk and no indexed source" in out
+    assert "matched against the whole resolved path, and `*` crosses `/`" in out
+    assert "refuses" not in out  # written as no path, so --apply adds it as it is
 
 
 @pytest.mark.parametrize(
@@ -360,3 +367,232 @@ def test_stats_walks_no_transcripts_without_a_pattern(machine, capsys, monkeypat
     assert main(["--db", machine["db"], "--json", "stats"]) == 0
     capture = json.loads(capsys.readouterr().out)["capture"]
     assert capture == {"exclude": [], "transcripts": None, "transcripts_excluded": None}
+
+
+@pytest.fixture()
+def secure_delete_forced_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every store connection runs with ``secure_delete`` off after the store turned it on, so a
+    freed page keeps its bytes and only the scrub can remove them."""
+    real = Store._open
+
+    def _open(self: Store) -> None:
+        real(self)
+        self.conn.execute("PRAGMA secure_delete=OFF")
+
+    monkeypatch.setattr(Store, "_open", _open)
+
+
+def _secret(machine) -> Path:
+    """A transcript in the generator's project holding the value, as the card's repro has."""
+    path = machine["gen"].with_name("g3.jsonl")
+    write_claude_jsonl(
+        path, "g3", [("user", "2026-09-16T12:00:00Z", f"the deploy key is {VALUE}, keep it")]
+    )
+    return path
+
+
+def _copies(db: str | Path) -> int:
+    """The value in a store file and its log with ASCII case folded, as FTS5 keeps a term."""
+    files = (Path(db), Path(f"{db}-wal"))
+    return sum(f.read_bytes().lower().count(VALUE.lower().encode()) for f in files if f.exists())
+
+
+@pytest.mark.parametrize("pragma", ["as the store sets it", "forced off"])
+def test_exclude_apply_alone_leaves_no_copy_in_the_file_its_index_or_a_later_snapshot(
+    machine, capsys, request, pragma
+):
+    """The card's repro. Before the scrub, the un-index left the lowercased term in the FTS5
+    segments, and with ``secure_delete`` off the freed pages kept the turn's bytes, until a
+    ``prune --scrub``; a backup taken meanwhile copied them."""
+    if pragma == "forced off":
+        request.getfixturevalue("secure_delete_forced_off")
+    db = machine["db"]
+    _secret(machine)
+    assert main(["--db", db, "sync"]) == 0
+    assert _copies(db) > 0 and check_file(db, VALUE).index_tokens["passage_fts"] == 1
+    capsys.readouterr()
+
+    assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 0
+    out = capsys.readouterr().out
+    snapshot = bk.snapshot(Path(db), machine["dest"])
+
+    left = check_file(db, VALUE)
+    assert _copies(db) == 0
+    assert (left.turns, left.occurrences_any_case, left.wal_occurrences_any_case or 0) == (0, 0, 0)
+    assert left.index_tokens == {"passage_fts": 0, "belief_fts": 0}
+    assert _copies(snapshot) == 0
+    assert "store file : scrubbed in " in out and "write-ahead log emptied" in out
+    assert "left in the search index : nothing: no term of a deleted row is on its pages" in out
+
+
+def test_exclude_apply_reports_the_scrub_names_the_backup_and_skips_it_with_nothing_removed(
+    machine, capsys
+):
+    db, dest = machine["db"], machine["dest"]
+    assert main(["--db", db, "sync"]) == 0
+    capsys.readouterr()
+
+    assert main(["--db", db, "--json", "exclude", "--add", GLOB, "--apply"]) == 0
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["store_scrubbed"]["indexes"] == list(FTS_TABLES)
+    assert out["store_scrubbed"]["wal_truncated"] is True and out["scrub_error"] is None
+    assert out["left_in_index"] == {"passage_fts": 0, "belief_fts": 0}
+    assert out["backup_dest"] == str(dest)
+    progress = [
+        line for line in cap.err.splitlines() if line.startswith("scrubbing the store file")
+    ]
+    assert len(progress) == 3  # both indexes merged, then VACUUM, each announced before it runs
+    assert f"the snapshots and mirrored transcripts in {dest}" in cap.err
+    assert "`memware scan --backups`" in cap.err
+    assert not dest.exists()  # an exclude never writes to a backup destination
+
+    assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 0  # nothing left to un-index
+    cap = capsys.readouterr()
+    assert "scrubbing" not in cap.err and "store file" not in cap.out
+
+
+def test_an_exclude_whose_scrub_is_blocked_exits_1_and_says_how_to_finish(
+    machine, capsys, monkeypatch
+):
+    import memware.store as store_module
+
+    monkeypatch.setattr(store_module, "BUSY_TIMEOUT_MS", 100)
+    monkeypatch.setattr(store_module, "CHECKPOINT_WAIT_MS", 100)
+    db = machine["db"]
+    _secret(machine)
+    assert main(["--db", db, "sync"]) == 0
+    locker = sqlite3.connect(db, isolation_level=None)
+    real = Store.scrub
+
+    def scrub_under_a_lock(self, progress=None):
+        locker.execute("BEGIN IMMEDIATE")  # another writer takes the lock once the delete commits
+        return real(self, progress)
+
+    monkeypatch.setattr(Store, "scrub", scrub_under_a_lock)
+    capsys.readouterr()
+    try:
+        code = main(["--db", db, "exclude", "--add", GLOB, "--apply"])
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "store file : NOT scrubbed: OperationalError: database is locked" in out
+    assert "left in the search index : " in out and " of deleted rows (passage_fts " in out
+    assert "the scrub did not finish" in out and f"memware --db {db} prune --scrub" in out
+    assert [_turns_from(db, p) for p in _excluded(machine)] == [0, 0, 0]  # the un-index stands
+    assert capture_exclude_patterns() == [GLOB]
+
+    monkeypatch.setattr(Store, "scrub", real)
+    assert main(["--db", db, "prune", "--scrub"]) == 0
+    assert _copies(db) == 0
+
+
+def test_an_index_the_scrub_left_holding_deleted_terms_fails_the_exclude(
+    machine, capsys, monkeypatch
+):
+    """The check after the scrub reads the index pages, not the scrub's own report of itself."""
+    db = machine["db"]
+    assert main(["--db", db, "sync"]) == 0
+    monkeypatch.setattr(
+        Store, "scrub", lambda self, progress=None: Scrubbed(FTS_TABLES, (), True, 0)
+    )
+    capsys.readouterr()
+
+    assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert "left in the search index : " in out and " of deleted rows (passage_fts " in out
+    assert "the search index still holds " in out and f"memware --db {db} prune --scrub" in out
+
+
+def test_an_index_that_cannot_be_read_after_the_scrub_fails_the_exclude(
+    machine, capsys, monkeypatch
+):
+    """A check that could not run is not a clean one."""
+    import memware.ingest as ingest
+
+    def unreadable(conn, table, terms=None):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    db = machine["db"]
+    assert main(["--db", db, "sync"]) == 0
+    monkeypatch.setattr(ingest, "deleted_terms", unreadable)
+    capsys.readouterr()
+
+    assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 1
+    out = capsys.readouterr().out
+    assert "store file : scrubbed in " in out
+    assert "left in the search index : not checked: the search index could not be read" in out
+    assert "the search index could not be read to check it" in out and "prune --scrub" in out
+
+
+def test_a_path_pattern_that_matches_nothing_is_refused_on_apply_with_the_forms_that_match(
+    machine, capsys
+):
+    """``*/olivia-career/*`` named no directory: Claude Code keeps it as
+    ``-Users-me-olivia-career``. The dry run printed ``transcripts : 0`` and ``--apply`` saved it."""
+    db, pattern = machine["db"], "*/gen-runs/*"
+    assert main(["--db", db, "sync"]) == 0
+    before = config_path().read_bytes()
+    capsys.readouterr()
+
+    assert main(["--db", db, "exclude", "--add", pattern]) == 0
+    dry = capsys.readouterr().out
+    assert main(["--db", db, "exclude", "--add", pattern, "--apply"]) == 2
+    refused = capsys.readouterr().out
+    assert main(["--db", db, "--json", "exclude", "--add", pattern, "--apply"]) == 2
+    out = json.loads(capsys.readouterr().out)
+
+    assert config_path().read_bytes() == before  # nothing written
+    assert [_turns_from(db, p) for p in _excluded(machine)] == [2, 2, 1]
+    tries = (
+        "try '*-gen-runs/*' (3 transcripts on disk, 3 indexed sources) "
+        "or '*gen-runs*' (4 transcripts on disk, 4 indexed sources)"  # the neighbour too
+    )
+    assert "the pattern matches no transcript on disk and no indexed source" in dry
+    assert tries in dry and tries in refused
+    assert "--apply refuses it" in dry and "--force adds it anyway" in dry
+    assert "run again with --apply" not in dry
+    assert f"add {pattern} (refused, nothing written)" in refused
+    assert "verdict : refused: " in refused
+    assert (out["applied"], bool(out["refused"])) == (False, True)
+    assert out["suggestions"] == [
+        {"pattern": "*-gen-runs/*", "transcripts": 3, "indexed_sources": 3},
+        {"pattern": "*gen-runs*", "transcripts": 4, "indexed_sources": 4},
+    ]
+
+    assert main(["--db", db, "exclude", "--add", pattern, "--apply", "--force"]) == 0
+    assert capture_exclude_patterns() == [pattern]
+    assert "added with --force, though it matches nothing" in capsys.readouterr().out
+
+
+def test_a_dash_encoded_pattern_that_matches_nothing_is_added_as_it_is(machine, capsys):
+    """A project not run yet can be excluded ahead of time in the form Claude Code will use."""
+    assert main(["--db", machine["db"], "exclude", "--add", "*/-Users-me-later/*", "--apply"]) == 0
+    assert capture_exclude_patterns() == ["*/-Users-me-later/*"]
+    assert "refuse" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("pattern", "forms"),
+    [
+        ("*/olivia-career/*", ["*-olivia-career/*", "*olivia-career*"]),
+        ("*/olivia-career", ["*-olivia-career/*", "*olivia-career*"]),
+        ("*/Developer/olivia-career/*", ["*-Developer-olivia-career/*", "*olivia-career*"]),
+        ("*/my.site/*", ["*-my-site/*", "*my-site*"]),
+        (
+            "/Users/me/Developer/olivia-career/*",
+            ["*/-Users-me-Developer-olivia-career/*", "*olivia-career*"],
+        ),
+        ("~/work/*", ["*/-Users-me-work/*", "*work*"]),
+        ("*/-Users-me-gen-runs/*", []),  # already dash-encoded
+        ("*olivia-career*", []),  # no path
+        ("*/g1.jsonl", []),  # a file, not a directory
+        ("*/*/subagents/*", []),  # a directory Claude Code writes itself
+        ("*/.claude/projects/*", []),  # the transcript source's own path
+    ],
+)
+def test_the_forms_suggested_for_a_pattern_written_as_a_path(monkeypatch, pattern, forms):
+    monkeypatch.setenv("HOME", "/Users/me")
+    assert _segment_forms(pattern, {"Users", "me", ".claude", "projects"}) == forms

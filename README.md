@@ -216,8 +216,10 @@ Two kinds of turn are never sent:
 - **A session memware keeps out of its store:** `MEMWARE_NO_CAPTURE=1`, the no-capture list, a
   `capture.exclude` glob, or an ignore marker in the prompt.
 
-So `memware exclude --add '*/<project-dir>/*' --apply` keeps every prompt from that project on the
-machine. It also keeps that project out of memware's index, since that is what the glob is for. If
+So `memware exclude --add '*/-Users-me-work/*' --apply` keeps every prompt from the project in
+`/Users/me/work` on the machine: Claude Code names the project's transcript directory after its
+path with every character but a letter or digit a dash. It also keeps that project out of
+memware's index, since that is what the glob is for. If
 some of your work must not leave the machine, exclude it that way before you turn the filter on,
 or leave the filter off.
 
