@@ -6,7 +6,7 @@ by hand. ``--explain`` prints the class or durable, the test that decided it, th
 behind a veto and where it came from, the exemptions and the manifest check, and whether the
 belief is injected. It reads :meth:`memware.volatile.Gate.explain`, the function ``--stale``,
 the prompt hook and the digest go through too. Every test runs on a synthetic store under the
-test's tmp dir, with a scratch home whose ``transcript_src`` is a scratch directory.
+test's tmp dir, with a scratch home whose ``backup.transcript_src`` is a scratch directory.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from memware.cli import main
+from memware.config import get_dotted, load_config
 from memware.ledger import assert_belief
 from memware.store import Store
 
@@ -33,13 +34,16 @@ BELIEFS = [  # (subject, relation, value, reliability, source)
 
 @pytest.fixture()
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A scratch memware home whose config points transcript_src at a scratch directory, so
-    nothing here can walk the real transcript tree."""
+    """A scratch memware home whose config points ``backup.transcript_src`` at a scratch
+    directory, so nothing here can walk the real transcript tree."""
     root = tmp_path / "memware-home"
     root.mkdir(exist_ok=True)
     (tmp_path / "transcripts").mkdir()
-    (root / "config.json").write_text(json.dumps({"transcript_src": str(tmp_path / "transcripts")}))
+    (root / "config.json").write_text(
+        json.dumps({"backup": {"transcript_src": str(tmp_path / "transcripts")}})
+    )
     monkeypatch.setenv("MEMWARE_HOME", str(root))
+    assert get_dotted(load_config(), "backup.transcript_src") == str(tmp_path / "transcripts")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     project = tmp_path / "memware"
     project.mkdir()
@@ -92,8 +96,10 @@ def test_a_vetoed_belief_names_the_qualifier_and_where_it_came_from(db, capsys):
     assert code == 0
     assert f["class"] == "durable" and f["injected"] == "yes"
     assert f["why"] == "durable: qualifier 'scheduled' in the relation vetoes a measurement"
-    assert f["is a measurement"].startswith("no: a quantity, not an exact measure, but")
-    assert f["is a status"] == "no: the relation does not end in status or state"
+    assert f["is a measurement"] == (
+        "no: a quantity, but qualifier 'scheduled' in the relation vetoes it"
+    )
+    assert f["is a status"].startswith("no: the relation is not status, state or progress")
     assert f["reliability above 0.5"].startswith("no: 0.5")
     assert f["not a session pointer"].startswith(f"no: {DERIVED}")
     assert f["confirmed by a person"] == "no: no person has confirmed it"
@@ -151,7 +157,7 @@ def test_a_durable_belief_with_no_veto_lists_each_failed_test(db, capsys):
     assert [t["because"] for t in r["tests"]] == [
         "the value is not a bare quantity",
         "the value is not a version",
-        "the relation does not end in status or state",
+        "the relation is not status, state or progress, a compound status, or a finding",
     ]
 
 

@@ -72,11 +72,26 @@
 {"subject": "rate limit", "relation": "requests", "value": "1,000", "expect": "durable", "from": "t_571a37a3", "why": "the subject names a limit"}
 {"subject": "max upload", "relation": "size", "value": "20 MB", "expect": "durable", "from": "t_571a37a3", "why": "the subject names a maximum"}
 {"subject": "k8s deployment", "relation": "desired state", "value": "running", "expect": "durable", "from": "t_571a37a3", "why": "a desired state is a setting"}
-{"subject": "order state machine", "relation": "end state", "value": "completed", "expect": "durable", "from": "probe", "why": "a state-machine term, like final state"}
+{"subject": "order state machine", "relation": "end state", "value": "completed", "expect": "durable", "from": "probe", "why": "a compound state is a design term, like final state"}
 {"subject": "release policy", "relation": "blocker", "value": "any open P0", "expect": "durable", "from": "probe", "why": "a policy's blocker is a rule; the qualifier vetoes the finding rule"}
 {"subject": "max_rows", "relation": "set to", "value": "10,000 rows", "expect": "durable", "from": "probe", "why": "an identifier holding a bound names a setting"}
 {"subject": "page_size", "relation": "value", "value": "1,000 rows", "expect": "durable", "from": "probe", "why": "an identifier joining a qualifier to a measured noun names a setting"}
-{"subject": "memware", "relation": "coverage target", "value": "90%", "expect": "durable", "from": "probe", "why": "a target in the relation still vetoes; only an exact measure skips the veto"}
+{"subject": "memware", "relation": "coverage target", "value": "90%", "expect": "durable", "from": "probe", "why": "a target in the relation vetoes, as it always has"}
+{"subject": "kanban card", "relation": "review state", "value": "requires two approvals", "expect": "durable", "from": "review-pr51", "why": "a compound state is a process rule, not a reading"}
+{"subject": "release build", "relation": "release state", "value": "tag then publish", "expect": "durable", "from": "review-pr51", "why": "a compound state is a process rule"}
+{"subject": "backup job", "relation": "exit status", "value": "non-zero on failure", "expect": "durable", "from": "review-pr51", "why": "a compound status with a rule for a value; 'job' is a noun, not an instance id"}
+{"subject": "sync indicator", "relation": "error state", "value": "red", "expect": "durable", "from": "review-pr51", "why": "a compound state is a design term: what the indicator shows on error"}
+{"subject": "ci badge", "relation": "failing state", "value": "red", "expect": "durable", "from": "review-pr51", "why": "a compound state is a design term"}
+{"subject": "pairware card", "relation": "approved state", "value": "green", "expect": "durable", "from": "review-pr51", "why": "a compound state is a design term"}
+{"subject": "required ci", "relation": "coverage", "value": "90%", "expect": "durable", "from": "review-pr51", "why": "a whole-word qualifier vetoes, even before an exact measure"}
+{"subject": "export-schedule", "relation": "rows", "value": "4,200 rows", "expect": "durable", "from": "review-pr51", "why": "an identifier whose last part is a qualifier names a setting"}
+{"subject": "backup-retention", "relation": "files", "value": "1,000 files", "expect": "durable", "from": "review-pr51", "why": "an identifier whose last part is a qualifier names a setting"}
+{"subject": "ruff-pin", "relation": "current version", "value": "0.16.5", "expect": "durable", "from": "review-pr51", "why": "an identifier whose last part is a qualifier names a pin"}
+{"subject": "min_coverage", "relation": "coverage", "value": "80%", "expect": "durable", "from": "probe", "why": "an identifier holding a bound names a setting"}
+{"subject": "memware", "relation": "open issues", "value": "tracked at github.com/ericwalisko/memware/issues", "expect": "durable", "from": "review-pr51", "why": "the value points at where issues are tracked; true after any fix"}
+{"subject": "sqlite fts5", "relation": "known issue", "value": "no infix matching (by design)", "expect": "durable", "from": "review-pr51", "why": "a by-design limitation stays true"}
+{"subject": "known issue", "relation": "workaround", "value": "pass --no-cache", "expect": "durable", "from": "review-pr51", "why": "a workaround is not a finding relation"}
+{"subject": "release gate tests", "relation": "must pass", "value": "3 of 3", "expect": "durable", "from": "review-pr51", "why": "a requirement word makes the N of M a rule"}
 {"subject": "the table", "relation": "row count", "value": "4.2 million rows", "expect": "measurement", "from": "issue-38", "why": "the row count derive filed"}
 {"subject": "staging table", "relation": "row count", "value": "4.2 million", "expect": "measurement", "from": "issue-38", "why": "a row count"}
 {"subject": "staging table", "relation": "duplicate rows removed", "value": "10,671", "expect": "measurement", "from": "issue-38", "why": "a tally of one run"}
@@ -127,6 +142,9 @@
 {"subject": "memware", "relation": "build status", "value": "green", "expect": "status", "from": "probe", "why": "a relation ending in status, with a status word for a value"}
 {"subject": "memware", "relation": "open issues", "value": "the digest header", "expect": "status", "from": "probe", "why": "'open issues' names a finding"}
 {"subject": "the release", "relation": "blocker", "value": "notarisation", "expect": "status", "from": "probe", "why": "'blocker' names a finding"}
+{"subject": "t_31080683 on personal-os board", "relation": "test status", "value": "1 failed, 14 passed", "expect": "status", "from": "review-pr51", "why": "a compound status of an instance id"}
+{"subject": "personal-os PR #152", "relation": "deployed status", "value": "deployed", "expect": "status", "from": "review-pr51", "why": "a compound status of an instance id"}
+{"subject": "memware belief classifier", "relation": "must-fix issue", "value": "Config values are treated as measurements", "expect": "status", "from": "review-pr51", "why": "a review finding: stale once fixed"}
 {"subject": "memware #22", "relation": "feature", "value": "the no-capture fix", "expect": "status", "miss": true, "from": "hub-session", "why": "what a PR contains; 'feature' is not a status relation"}
 {"subject": "memware ci", "relation": "checks passed", "value": "3 of 5", "expect": "measurement", "miss": true, "from": "probe", "why": "'checks' is a qualifier"}
 {"subject": "api", "relation": "p95 latency", "value": "340ms", "expect": "measurement", "miss": true, "from": "probe", "why": "latency is not an accumulating count"}
@@ -138,3 +156,5 @@
 {"subject": "load balancer health check", "relation": "status", "value": "failing", "expect": "status", "miss": true, "from": "probe", "why": "'check' in the subject is a qualifier"}
 {"subject": "memware sync at 50k turns", "relation": "latency", "value": "3.7 s", "expect": "measurement", "from": "hub-session", "why": "a latency beside a load figure reads like a budget; too close to config for a word rule", "miss": true}
 {"subject": "personal-os board", "relation": "open cards count", "value": "55", "expect": "measurement", "from": "hub-session", "why": "cards are not on the accumulating list, and an open-card count reads like a WIP limit", "miss": true}
+{"subject": "scheduled_user_sync", "relation": "row count", "value": "4,200 rows", "expect": "measurement", "from": "review-pr51", "why": "the identifier joins 'scheduled' to a counted noun ('user'), which reads like a setting's name", "miss": true}
+{"subject": "scheduled_test_run", "relation": "status", "value": "failing", "expect": "status", "from": "review-pr51", "why": "the identifier joins 'scheduled' to a counted noun ('test'), which reads like a setting's name", "miss": true}

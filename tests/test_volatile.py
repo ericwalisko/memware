@@ -42,28 +42,87 @@ def test_a_qualifier_names_a_setting(relation):
     [
         ("export job", "scheduled row count", ("scheduled", "relation", "")),
         ("field audit", "spec-required row count", ("required", "relation", "")),  # split
-        ("rate limit", "requests", ("limit", "subject", "")),  # a plain word qualifies
+        ("rate limit", "requests", ("limit", "subject", "")),  # a whole word qualifies
         ("max upload", "size", ("max", "subject", "")),
-        ("scheduled_export", "null rate", None),  # an identifier is a name, read whole
-        ("spec-required fields", "row count", None),
+        ("required ci", "coverage", ("required", "subject", "")),
+        ("scheduled_export", "null rate", None),  # an identifier names a thing
         ("nightly_cron_job", "status", None),
-        ("max_rows", "set to", ("max", "subject", "max_rows")),  # it holds a bound
-        ("page_size", "value", ("page", "subject", "page_size")),  # qualifier + measured noun
+        # its last part is a qualifier: the identifier names a setting
+        ("export-schedule", "rows", ("schedule", "subject", "export-schedule")),
+        ("backup-retention", "files", ("retention", "subject", "backup-retention")),
+        ("ruff-pin", "current version", ("pin", "subject", "ruff-pin")),
+        ("spec-required fields", "row count", ("required", "subject", "spec-required")),
+        ("min_coverage", "coverage", ("min", "subject", "min_coverage")),  # it holds a bound
+        # it joins a qualifier to what would be measured
+        ("max_rows", "set to", ("max", "subject", "max_rows")),
+        ("page_size", "value", ("page", "subject", "page_size")),
         ("export.max_rows", "value", ("max", "subject", "max_rows")),
+        ("scheduled_user_sync", "row count", ("scheduled", "subject", "scheduled_user_sync")),
     ],
 )
-def test_the_veto_reads_an_identifier_in_the_subject_whole(subject, relation, want):
+def test_the_veto_reads_an_identifier_in_the_subject_as_a_name(subject, relation, want):
     """#42: `_tokens` split `scheduled_export` on the underscore and found `scheduled`. An
     identifier names a thing unless it names a setting itself; the relation still splits."""
     got = v.veto(subject, relation)
     assert (None if got is None else tuple(got)) == want
 
 
-def test_an_exact_measure_is_decided_before_the_veto():
-    """The docstring's unconditional relations: nothing in the subject turns them off, while a
-    target named in the relation itself still keeps a belief durable."""
-    assert v.classify("coverage target", "coverage", "90%") == v.MEASUREMENT
+def test_a_whole_word_qualifier_vetoes_even_an_exact_measure():
+    """The veto runs before every rule, the exact measures included: a subject that is itself a
+    requirement or a target is not a reading. An identifier naming a thing does not veto."""
+    assert v.classify("required ci", "coverage", "90%") is None
+    assert v.classify("coverage target", "coverage", "90%") is None
     assert v.classify("memware", "coverage target", "90%") is None
+    assert v.classify("scheduled_export", "null rate", "41% null") == v.MEASUREMENT
+
+
+def test_a_requirement_word_makes_a_quantity_a_rule():
+    """ "must" is not a qualifier ("must-fix issue" is a finding), but a quantity a relation says
+    must hold is a rule, not a reading."""
+    assert v.classify("release gate tests", "must pass", "3 of 3") is None
+    assert v.classify("release gate tests", "passed", "3 of 3") == v.MEASUREMENT
+    assert v.decide("release gate tests", "must pass", "3 of 3").tests[0].because == (
+        "a quantity, but 'must' in the relation makes it a rule"
+    )
+    assert v.classify("memware PR #31", "must-fix issue", "retract skips confirmed rows") == (
+        v.STATUS
+    )
+
+
+@pytest.mark.parametrize(
+    "value, fired",
+    [
+        ("retract skips confirmed rows", True),
+        ("cli.py crashes on an empty store", True),  # names a file, but it is the defect
+        ("#42", True),
+        ("tracked at github.com/ericwalisko/memware/issues", False),
+        ("https://github.com/ericwalisko/memware/issues/3", False),
+        ("docs/known-issues.md", False),
+        ("no infix matching (by design)", False),
+        ("use --plain instead", False),
+        ("users can work around it by restarting", False),
+    ],
+)
+def test_a_finding_is_status_unless_the_value_outlives_the_fix(value, fired):
+    assert v.status_test("memware", "known issue", value).fired is fired
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value, want",
+    [
+        ("memware PR #31", "ci status", "green", v.STATUS),  # a status word
+        ("t_31080683 on personal-os board", "test status", "1 failed, 14 passed", v.STATUS),
+        ("personal-os PR #152", "deployed status", "deployed", v.STATUS),  # an instance id
+        ("backup job", "exit status", "non-zero on failure", None),  # a noun is not enough
+        ("sync indicator", "error state", "red", None),  # a compound state is a design term
+        ("pairware card", "approved state", "green", None),
+        ("card t_cd03d14d", "state", "review", v.STATUS),  # exactly state: the rule as before
+        ("PR #12", "status", "two approvals", v.STATUS),  # exactly status, of an instance id
+        ("nightly backup job", "status", "stalled for two days", v.STATUS),  # or of a noun
+    ],
+)
+def test_a_compound_status_needs_a_status_word_or_an_instance_id(subject, relation, value, want):
+    assert v.classify(subject, relation, value) == want
 
 
 def test_decide_names_the_test_that_decided_and_each_one_that_did_not():
@@ -71,18 +130,15 @@ def test_decide_names_the_test_that_decided_and_each_one_that_did_not():
     assert d.cls is None
     assert [t.fired for t in d.tests] == [False, False, False]
     assert d.tests[0].veto == v.Veto("scheduled", "relation")
-    assert d.because.startswith("not a measurement: a quantity, not an exact measure, but")
+    assert d.because.startswith("not a measurement: a quantity, but qualifier 'scheduled'")
     d = v.decide("appointment rows", "eligible and exported", "2,454 of 10,346")
     assert d.cls == v.MEASUREMENT
     assert d.because == "measurement: an N of M over 'rows', the subject's noun"
     assert v.decide("the release", "blocker", "notarisation").because == (
         "status: the relation names a finding, 'blocker'"
     )
-    assert v.decide("order state machine", "end state", "completed").tests[2].because == (
-        "'end state' is a state-machine term"
-    )
-    assert v.decide("memware PR #31", "review state", "two approvals").because == (
-        "status: 'review state' of an instance, '#31'"
+    assert v.decide("memware PR #31", "review status", "two approvals").because == (
+        "status: 'review status' of an instance, '#31'"
     )
 
 

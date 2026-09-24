@@ -15,27 +15,30 @@ sees the excerpt; this sees only a triple. ``tests/data/volatility_cases.jsonl``
 corpus: no durable case may classify volatile, and the volatile cases these rules miss are kept
 there, marked, so the tradeoff stays visible.
 
-A qualifier always means durable: slo, sla, target, threshold, budget, commitment, fail under,
-min, max, limit, default, initial, final, required, desired, every, schedule, check, and words
-like them (:data:`QUALIFIERS`), anywhere in the relation or as a word of the subject. An
-identifier in the subject (``scheduled_export``, words joined by ``_`` or ``-``) is a name and
-is read whole, unless it names a setting itself (``max_rows``, ``page_size``): see :func:`veto`.
-Past that:
+A qualifier always means durable, and it is checked before every rule: slo, sla, target,
+threshold, budget, commitment, fail under, min, max, limit, default, initial, final, required,
+desired, every, schedule, retention, pin, check, and words like them (:data:`QUALIFIERS`), as any
+word of the relation or a whole word of the subject. An identifier in the subject
+(``scheduled_export``, words joined by ``_`` or ``-``) is a name, and a qualifier inside it
+counts only when the identifier names a setting (``export-schedule``, ``min_coverage``,
+``max_rows``): see :func:`veto`. Past that:
 
 * **measurement**: a bare quantity under a relation that is exactly progress, coverage or null
-  rate, whatever the subject says; or, unless a qualifier vetoes it, one that is: a count, total
-  or "number of" over an accumulating noun (rows, records, tests, files, lines, commits,
-  duplicates, accounts, users, downloads); a magnitude word or a comma-grouped number of 1,000 or
-  more beside such a noun; an "N of M" figure over one, in the relation or as the subject's noun
-  ("appointment rows"), or over a completion word ("backfilled", "passed").
+  rate; or one that is: a count, total or "number of" over an accumulating noun (rows, records,
+  tests, files, lines, commits, duplicates, accounts, users, downloads); a magnitude word or a
+  comma-grouped number of 1,000 or more beside such a noun; an "N of M" figure over one, in the
+  relation or as the subject's noun ("appointment rows"), or over a completion word
+  ("backfilled", "passed"). A requirement word in the relation ("must pass", "at least") makes
+  the quantity a rule.
 * **moving version**: a version string under a version noun that the subject or relation calls
   current, latest, built, installed, deployed, released, or on main.
-* **status**: a relation that names a finding or a defect (known issue, open issue, must-fix
-  issue, should-fix issue, blocker), whatever the value; or a relation ending in status or state
-  ("ci status", "connection status"), or exactly progress, whose value is a status word (open,
-  merged, review, blocked, failing, connected, …) or whose subject names an instance (an id such
-  as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card). A
-  state-machine word before the noun ("end state") keeps it durable, as a qualifier does.
+* **status**: a relation that is exactly status, state or progress, whose value is a status word
+  (open, merged, review, blocked, failing, connected, …) or whose subject names an instance (an
+  id such as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card);
+  a relation ending in status ("ci status"), whose value is a status word or where an instance
+  id is named (a noun is not enough; a compound "… state" is a design term); or a relation that
+  names a finding (known issue, open issue, must-fix issue, should-fix issue, blocker), unless
+  the value points at where it is tracked or states a by-design limitation or a workaround.
 
 :func:`decide` returns the class with the test each class ran, :meth:`Gate.explain` adds the
 exemptions and the manifest; ``classify``, derive's gate, ``memware beliefs --stale`` and
@@ -140,7 +143,7 @@ VERSION_NOUNS = frozenset({"version", "versions", "release", "tag"})
 MOVING = wordset("current currently latest newest built installed deployed released")
 _ON_MAIN = re.compile(r"\bon (?:main|master)\b", re.I)
 
-STATUS_NOUNS = frozenset({"status", "state"})
+STATUS_RELATIONS = frozenset({"status", "state", "progress"})
 _STATUS_LEAD = wordset("current overall latest")
 STATUS_VALUE_WORDS = wordset(
     """
@@ -154,8 +157,6 @@ INSTANCE_NOUNS = wordset(
     "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
 )
 _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
-STATE_MACHINE = wordset("start starting end ending terminal steady resting accepting next previous")
-"""Words that make "X state" a design term like "final state", not a reading: "end state"."""
 FINDINGS = frozenset(
     {
         *(
@@ -167,7 +168,21 @@ FINDINGS = frozenset(
         "blockers",
     }
 )
-"""Relations that name a finding or a defect: true until someone fixes it, whatever the value."""
+"""Relations that name a finding or a defect: true until someone fixes it."""
+_POINTER = re.compile(
+    r"^\s*tracked\s+(?:at|in|on)\b"  # "tracked at github.com/…"
+    r"|^\s*(?:(?:see|at|in)\s+)?(?:https?://|www\.|~/|\.{0,2}/)?[\w.@:~+-]*/[\w./@:~+%#?=&-]*\s*$"
+    r"|^\s*(?:(?:see|at|in)\s+)?[\w./-]+\.(?:md|rst|txt|py|json|toml|ya?ml|html?)\s*$"
+    r"|https?://|\bwww\.",
+    re.I,
+)
+"""A value that points at where a finding lives (a URL, a path, "tracked at …"), not at the
+defect: it stays true after the fix."""
+_LIMITATION = re.compile(r"\bby design\b|\bwork[- ]?arounds?\b|\buse\b.+\binstead\b", re.I)
+"""A value stating a by-design limitation or a workaround: true after any fix."""
+_REQUIREMENT = re.compile(r"\bmust\b|\bat least\b", re.I)
+"""Requirement words that are not qualifiers everywhere ("must-fix issue" is a finding), but
+make a relation's quantity a rule: "must pass | 3 of 3"."""
 
 BOUNDS = wordset(
     """
@@ -186,7 +201,7 @@ class Veto(NamedTuple):
     where: str
     """``subject`` or ``relation``."""
     within: str = ""
-    """The identifier it is part of, when it is one (``max_rows``)."""
+    """The identifier it is part of, when it is one (``export-schedule``)."""
 
     def __str__(self) -> str:
         inside = f" (in '{self.within}')" if self.within else ""
@@ -198,30 +213,43 @@ def names_setting(relation: str) -> bool:
     return bool(set(_tokens(relation)) & QUALIFIERS)
 
 
-def _setting_identifier(parts: list[str], qualifiers: list[str]) -> bool:
-    return bool(set(qualifiers) & BOUNDS or set(parts) & MEASURED_NOUNS)
+def _identifier_qualifier(parts: list[str]) -> str | None:
+    """The part that makes an identifier a setting's name, or None for a thing's name."""
+    if parts[-1] in QUALIFIERS:
+        return parts[-1]  # export-schedule, backup-retention, ruff-pin
+    qualifiers = [p for p in parts if p in QUALIFIERS]
+    if not qualifiers:
+        return None
+    bounds = [p for p in qualifiers if p in BOUNDS]
+    if bounds:
+        return bounds[0]  # min_coverage, max_upload
+    if set(parts) & MEASURED_NOUNS:
+        return qualifiers[0]  # max_rows, page_size, scheduled_user_sync
+    return None
 
 
 def veto(subject: str, relation: str) -> Veto | None:
-    """The qualifier that makes a triple durable, or None. Every word of the relation counts:
-    "scheduled row count" and "spec-required row count" are rules. In the subject, an identifier
-    (words joined by ``_`` or ``-``) is a name and is read whole, so ``scheduled_export`` is an
-    export, not a schedule; unless the identifier names a setting itself, by holding a bound
-    (``max_upload``, ``default_timeout``) or by joining a qualifier to what would be measured
-    (``page_size``, ``batch_rows``). A plain subject word counts as it always has: "rate limit",
-    "max upload" and "nightly backup cron" are settings."""
+    """The qualifier that makes a triple durable, or None. It is checked before every rule.
+
+    Every word of the relation counts, split at ``_`` and ``-`` too: "scheduled row count" and
+    "spec-required row count" are rules. A whole word of the subject counts: "rate limit", "max
+    upload", "required ci" and "nightly backup cron" are settings. An identifier in the subject
+    (words joined by ``_`` or ``-``) is a name, so a qualifier inside it counts only when the
+    identifier names a setting: its last part is the qualifier (``export-schedule``,
+    ``ruff-pin``), or it holds a bound (``min_coverage``), or it joins a qualifier to what would
+    be measured (``max_rows``, ``page_size``). ``scheduled_export`` names an export."""
     for token in _tokens(relation):
         if token in QUALIFIERS:
             return Veto(token, "relation")
     for word in _SUBJECT_WORD.findall(subject.lower()):
         parts = _tokens(word)
-        qualifiers = [p for p in parts if p in QUALIFIERS]
-        if not qualifiers:
-            continue
         if len(parts) == 1:
-            return Veto(word, "subject")
-        if _setting_identifier(parts, qualifiers):
-            return Veto(qualifiers[0], "subject", word)
+            if word in QUALIFIERS:
+                return Veto(word, "subject")
+            continue
+        named = _identifier_qualifier(parts)
+        if named is not None:
+            return Veto(named, "subject", word)
     return None
 
 
@@ -237,17 +265,21 @@ class Test(NamedTuple):
 
 
 def measurement_test(subject: str, relation: str, value: str) -> Test:
-    """A quantity, then: a relation that is exactly an exact measure (whatever else the subject
-    says), or, unless a qualifier vetoes it, a count, magnitude or N of M over what accumulates."""
+    """A quantity that no qualifier or requirement word vetoes, under a relation that is exactly
+    progress, coverage or null rate, or a count, magnitude or N of M over what accumulates."""
     if not _QUANTITY.match(value.strip()):
         return Test(MEASUREMENT, False, "the value is not a bare quantity")
+    v = veto(subject, relation)
+    if v is not None:
+        return Test(MEASUREMENT, False, f"a quantity, but {v} vetoes it", v)
+    required = _REQUIREMENT.search(relation)
+    if required:
+        word = required.group(0).lower()
+        return Test(MEASUREMENT, False, f"a quantity, but '{word}' in the relation makes it a rule")
     rel = _tokens(relation)
     joined = " ".join(rel)
     if joined in EXACT_MEASURES:
         return Test(MEASUREMENT, True, f"the relation is exactly '{joined}'")
-    v = veto(subject, relation)
-    if v is not None:
-        return Test(MEASUREMENT, False, f"a quantity, not an exact measure, but {v} vetoes it", v)
     words = set(rel) | set(_tokens(value))
     counted_by = sorted(set(rel) & COUNT_WORDS) or (["number of"] if "number of" in joined else [])
     if counted_by and words & ACCUMULATING:
@@ -327,32 +359,61 @@ def _instance(subject: str) -> str | None:
 
 
 def status_test(subject: str, relation: str, value: str) -> Test:
-    """A relation naming a finding ("known issue", "blocker"), whatever the value; or a relation
-    ending in status or state ("ci status", "connection status"), or exactly progress, with a
-    status word for a value or an instance for a subject. A qualifier vetoes both: "default
-    state", "status check", "final state". So does a state-machine word: "end state"."""
+    """Three shapes, each vetoed by a qualifier ("default state", "status check"):
+
+    * a relation that is exactly status, state or progress (after "current" or "overall"), with
+      a status word for a value or an instance (an id, or a run, job, PR, card …) for a subject;
+    * a relation ending in status ("ci status", "connection status"), with a status word for a
+      value or an instance id (``#31``, ``t_31080683``) in the subject or relation: a subject
+      noun is not enough ("backup job exit status: non-zero on failure" is a rule). A compound
+      "… state" is a design term ("error state", "review state") and is never a status;
+    * a relation naming a finding (known issue, open issue, must-fix or should-fix issue,
+      blocker), unless the value points at where it is tracked (a URL, a path, "tracked at …")
+      or states a by-design limitation or a workaround: those stay true after a fix."""
     rel = _tokens(relation)
     while rel and rel[0] in _STATUS_LEAD:
         rel = rel[1:]
     joined = " ".join(rel)
     finding = joined in FINDINGS
-    if not finding and not (rel and (rel[-1] in STATUS_NOUNS or rel == ["progress"])):
-        return Test(STATUS, False, "the relation does not end in status or state")
+    exact = len(rel) == 1 and rel[0] in STATUS_RELATIONS
+    compound = len(rel) > 1 and rel[-1] == "status"
+    if not (finding or exact or compound):
+        return Test(
+            STATUS,
+            False,
+            "the relation is not status, state or progress, a compound status, or a finding",
+        )
     v = veto(subject, relation)
     if v is not None:
         return Test(STATUS, False, f"'{joined}', but {v} vetoes it", v)
     if finding:
+        if _POINTER.search(value):
+            return Test(STATUS, False, f"'{joined}', but the value points at where it is tracked")
+        if _LIMITATION.search(value):
+            return Test(
+                STATUS,
+                False,
+                f"'{joined}', but the value states a by-design limitation or a workaround",
+            )
         return Test(STATUS, True, f"the relation names a finding, '{joined}'")
-    machine = sorted(set(rel[:-1]) & STATE_MACHINE)
-    if machine:
-        return Test(STATUS, False, f"'{machine[0]} {rel[-1]}' is a state-machine term")
     if _status_value(value):
         return Test(STATUS, True, f"'{joined}' with a status word for a value")
-    instance = _instance(subject)
-    if instance:
-        return Test(STATUS, True, f"'{joined}' of an instance, '{instance}'")
+    if exact:
+        instance = _instance(subject)
+        if instance:
+            return Test(STATUS, True, f"'{joined}' of an instance, '{instance}'")
+        return Test(
+            STATUS,
+            False,
+            f"'{joined}', but the value is not a status word and no instance is named",
+        )
+    m = _INSTANCE_ID.search(f"{subject} {relation}")
+    if m:
+        return Test(STATUS, True, f"'{joined}' of an instance, '{m.group(0)}'")
     return Test(
-        STATUS, False, f"'{joined}', but the value is not a status word and no instance is named"
+        STATUS,
+        False,
+        f"'{joined}', but the value is not a status word and no instance id (#N, t_…) is named",
     )
 
 

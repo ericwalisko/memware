@@ -804,6 +804,7 @@ def test_the_prompt_rejects_measurements_and_transient_state_and_tests_a_vague_s
         "what a PR contains",
         "would the value need re-checking to know it is still true?",
         "a defect, a review finding or an open issue: it stops being true when someone fixes it",
+        "A fix, its cause, a workaround, or a by-design limitation would not",
         '("the table", "the repo", "the worker"',
     ):
         assert phrase in " ".join(md.SYSTEM.split()), phrase

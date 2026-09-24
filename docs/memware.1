@@ -131,21 +131,28 @@ derived belief that was a measurement, a moving version or a status when recorde
 List the current beliefs the prompt hook and the digest leave out, each with its reason and
 why: a derived
 .B measurement
-(a relation that is exactly progress, coverage or null rate, whatever the subject says; or a
-count, total or N of M over rows, tests, files and the like, in the relation or as the
-subject's noun),
+(a relation that is exactly progress, coverage or null rate; or a count, total or N of M over
+rows, tests, files and the like, in the relation or as the subject's noun; not when the relation
+says it must hold),
 .B moving_version
 (a version called current, latest, built, installed, deployed, released or on main) or
 .B status
-(a relation that names a finding: known issue, open issue, must\-fix issue, should\-fix issue or
-blocker; or a relation ending in status or state, with a status word for a value or an
-instance such as a PR, card or run for a subject). Only unambiguous cases count: a qualifier
-(slo, target, threshold, budget, commitment, min, max, limit, default, initial, final, required,
-every, schedule, check, and the like) in the relation, or as a word of the subject, means
-durable. An identifier in the subject
+(a relation that is exactly status, state or progress, with a status word for a value or an
+instance such as a PR, card or run for a subject; a relation ending in status, with a status
+word for a value or an instance id such as #31 named; or a relation that names a finding:
+known issue, open issue, must\-fix issue, should\-fix issue or blocker, unless the value points
+at where it is tracked or states a by\-design limitation or a workaround). Only unambiguous
+cases count: a qualifier (slo, target, threshold, budget, commitment, min, max, limit, default,
+initial, final, required, every, schedule, retention, pin, check, and the like), as any word of
+the relation or a whole word of the subject, means durable, before any rule. An identifier in
+the subject
 .RI ( scheduled_export )
-is a name and is read whole, unless it names a setting itself
-.RI ( max_rows ", " page_size ).
+is a name, unless it names a setting: its last part is the qualifier
+.RI ( export\-schedule ),
+it holds a bound
+.RI ( min_coverage ),
+or it joins a qualifier to what would be measured
+.RI ( max_rows ).
 And, inside a project whose
 .IR pyproject.toml ,
 .I package.json

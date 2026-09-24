@@ -22,27 +22,33 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 - **An incidental word no longer turns a measurement durable (#42).** The qualifier veto split
-  `scheduled_export` on the underscore and found `scheduled`, and it ran before the relations the
-  module calls unconditional, so `scheduled_export | null rate | 41% null` was injected as a
-  durable fact. An identifier in the subject is now a name, read whole, unless it names a setting
-  itself (`max_rows`, `page_size`); a relation that is exactly progress, coverage or null rate is
-  a measurement whatever the subject says; and an "N of M" figure finds its counted noun in the
-  subject too (`appointment rows | eligible and exported | 2,454 of 10,346`). A count qualified in
-  the relation (`scheduled row count`, `spec-required row count`) stays durable: a target, not a
-  reading.
+  `scheduled_export` on the underscore and found `scheduled`, so `scheduled_export | null rate |
+  41% null` was injected as a durable fact. An identifier in the subject is now a name: a
+  qualifier inside it counts only when the identifier names a setting, by ending in the
+  qualifier (`export-schedule`, `ruff-pin`), holding a bound (`min_coverage`) or joining a
+  qualifier to what would be measured (`max_rows`, `page_size`). A whole-word qualifier still
+  vetoes every rule, the exact measures included (`required ci | coverage | 90%` stays durable).
+  An "N of M" figure finds its counted noun in the subject too (`appointment rows | eligible and
+  exported | 2,454 of 10,346`), and a requirement word in the relation makes it a rule
+  (`release gate tests | must pass | 3 of 3`). A count qualified in the relation (`scheduled row
+  count`, `spec-required row count`) stays durable: a target, not a reading.
 
 ### Changed
 - **Two narrow status rules, from beliefs that stayed injected after going stale.** A relation
-  ending in status or state (`memware PR #31 | ci status | green`, `connection status |
-  connected`) is a status when its value is a status word or its subject names an instance, unless
-  a qualifier or a state-machine word modifies it (`default state`, `final state`, `end state`,
-  `status check`). A relation naming a finding or a defect (`known issue`, `open issue`, `must-fix
-  issue`, `should-fix issue`, `blocker`) is a status whatever the value, which also catches
-  `memware 0.4.0 | known issue` outside its project, where the manifest rule cannot. Derive's
-  prompt now rejects "a defect, a review finding or an open issue: it stops being true when
-  someone fixes it". The labeled corpus grows from 115 to 140 cases with no durable case left out;
-  `memware sync at 50k turns | latency | 3.7 s` and `personal-os board | open cards count | 55`
-  stay missed on purpose, too close to durable configuration for a word rule.
+  ending in status (`memware PR #31 | ci status | green`, `connection status | connected`) is a
+  status when its value is a status word or an instance id (`#31`, `t_…`) is named; a subject
+  noun such as job or card is not enough (`backup job | exit status | non-zero on failure` stays
+  durable), and a compound "… state" is a design term (`sync indicator | error state | red`). A
+  relation naming a finding or a defect (`known issue`, `open issue`, `must-fix issue`,
+  `should-fix issue`, `blocker`) is a status unless the value points at where it is tracked or
+  states a by-design limitation or a workaround; this also catches `memware 0.4.0 | known issue`
+  outside its project, where the manifest rule cannot. Derive's prompt now rejects "a defect, a
+  review finding or an open issue: it stops being true when someone fixes it", and says that a
+  fix, its cause, a workaround or a by-design limitation would not need re-checking. The labeled
+  corpus grows from 115 to 160 cases with no durable case left out; four cases stay missed on
+  purpose: `memware sync at 50k turns | latency | 3.7 s` and `personal-os board | open cards
+  count | 55`, too close to durable configuration for a word rule, and `scheduled_user_sync |
+  row count` and `scheduled_test_run | status`, whose identifiers read like a setting's name.
 
 ## [0.8.0] - 2026-09-24
 
