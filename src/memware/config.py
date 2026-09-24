@@ -1,6 +1,7 @@
 """User configuration at ``$MEMWARE_HOME/config.json`` (default ``~/.memware``).
 
-Small and explicit: the store path, a backup block, capture exclusions, derive, and injection. Everything has a safe default,
+Small and explicit: the store path, a backup block, capture exclusions, derive, injection, and the
+optional relevance filter (off). Everything has a safe default,
 so memware works with no config file at all; ``memware setup`` writes one interactively.
 """
 
@@ -68,6 +69,16 @@ DEFAULTS: dict[str, Any] = {
         # A derived measurement, moving version or status is injected while younger than this
         # many days. 0 never injects one: a version belief one day old was already wrong.
         "volatile_days": 0,
+    },
+    # Optional relevance filter on what the prompt hook and Hermes prefetch inject
+    # (memware.relevance). Off by default. shadow or filter sends each prompt and its candidate
+    # facts to TypeSafe (api.typesafe.ai) and needs TYPESAFE_API_KEY.
+    "relevance": {
+        "mode": "off",  # off | shadow (call and log, inject unchanged) | filter
+        "model": "jev-1.13.0",  # pinned: the threshold is tuned against one version
+        "threshold": 0.5,  # inject a candidate whose P(helps with the prompt) is at least this
+        "pool": 20,  # candidates asked about, from memware's own ranking
+        "timeout_s": 1.5,  # hard deadline, one attempt; past it the hook injects as if off
     },
 }
 

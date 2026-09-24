@@ -109,6 +109,11 @@ def _text(content: Any) -> str:
     return ""
 
 
+def _value(hit: Any) -> str:
+    """A belief hit's value: its text less the subject and relation it starts with."""
+    return str(hit.text).removeprefix(f"{hit.subject} {hit.relation} ")
+
+
 class MemwareProvider(MemoryProvider):
     def __init__(self) -> None:
         self._db = os.path.expanduser(_DEFAULT_DB)
@@ -198,19 +203,38 @@ class MemwareProvider(MemoryProvider):
     def prefetch(self, query: str, **kwargs: Any) -> str:
         if not query or not query.strip():
             return ""
+        from memware.config import load_config
         from memware.index import search_beliefs
         from memware.ledger import touch
         from memware.store import SHORT_WAIT_MS, Store
         from memware.volatile import Gate, window_days
 
+        try:  # a memware older than this plugin has no relevance filter: it stays off
+            from memware import relevance
+        except ImportError:
+            relevance = None  # type: ignore[assignment]
+
         try:
-            gate = Gate(volatile_days=window_days())
+            cfg = load_config()
+            gate = Gate(volatile_days=window_days(cfg))
+            rel = relevance.settings(cfg) if relevance else None
             # before every turn: reads, and use counts it skips rather than wait for a writer
             with Store(self._db, busy_timeout_ms=SHORT_WAIT_MS) as s:
                 # Ranked past k with no use recorded, so a left-out belief makes room for the
                 # next one; what is injected counts as used, as before.
                 ranked = search_beliefs(s, query, k=100, require_subject=True, record_use=False)
-                hits = [h for h in ranked if gate.admits_hit(h.volatile, h.ts)][: self._prefetch_k]
+                hits = [h for h in ranked if gate.admits_hit(h.volatile, h.ts)]
+                if rel is not None and rel.on:  # opted in: memware.relevance, off by default
+                    picked = relevance.choose(
+                        query,
+                        [(h.id, relevance.fact(h.subject, h.relation, _value(h))) for h in hits],
+                        self._prefetch_k,
+                        rel,
+                        harness="hermes",
+                        session=self._session_id or None,
+                    )
+                    hits = [hits[i] for i in picked]
+                hits = hits[: self._prefetch_k]
                 touch(s, [h.id for h in hits])
         except Exception as e:  # never break a turn over memory
             logger.warning("memware prefetch failed: %s", e)
@@ -219,7 +243,7 @@ class MemwareProvider(MemoryProvider):
             return ""
         lines = []
         for h in hits:
-            value = h.text.removeprefix(f"{h.subject} {h.relation} ")
+            value = _value(h)
             when = f" (recorded {h.ts[:10]})" if h.ts else ""
             lines.append(f"- {h.subject} {h.relation}: {value}{when}")
         return (

@@ -1,0 +1,23 @@
+{
+  "about": "Synthetic ledger for tests/test_relevance.py. Some subjects bear on the prompt; the rest share only a word with it (report, morning, short, draft, api, queue), the lexical hits the relevance filter exists to drop. golden_hook, golden_plain and golden_hermes are what origin/main at 6c889fd printed (the prompt hook, memware context, the Hermes prefetch) for this ledger and prompt: the default path must keep printing exactly these bytes.",
+  "prompt": "The billing api started returning 502s this morning. Check the billing worker queue and draft a short incident report for the payments channel.",
+  "relevant": ["billing api", "billing worker", "incident report", "payments channel"],
+  "beliefs": [
+    ["billing api", "listens on port", "8443", "2026-08-01T09:00:00Z"],
+    ["billing api", "owner", "the payments team", "2026-08-02T09:00:00Z"],
+    ["billing worker", "queue", "billing-jobs", "2026-08-03T09:00:00Z"],
+    ["billing worker", "retry limit", "5", "2026-08-04T09:00:00Z"],
+    ["incident report", "template", "docs/incident-template.md", "2026-08-05T09:00:00Z"],
+    ["weekly report", "file path", "~/reports/weekly.md", "2026-08-06T09:00:00Z"],
+    ["report card app", "framework", "SwiftUI", "2026-08-07T09:00:00Z"],
+    ["payments channel", "chat id", "C0PAYMENTS", "2026-08-08T09:00:00Z"],
+    ["morning playlist", "first track", "Selected Ambient Works", "2026-08-09T09:00:00Z"],
+    ["api style guide", "voice", "second person, present tense", "2026-08-10T09:00:00Z"],
+    ["queue theory notes", "source", "Reinertsen chapter 3", "2026-08-11T09:00:00Z"],
+    ["short story draft", "title", "The Lighthouse", "2026-08-12T09:00:00Z"],
+    ["garden", "tomato variety", "Sungold", "2026-08-13T09:00:00Z"]
+  ],
+  "golden_hook": "{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"Known facts from your memory ledger, each with the date it was recorded:\\n- short story draft title: The Lighthouse (recorded 2026-08-12)\\n- payments channel chat id: C0PAYMENTS (recorded 2026-08-08)\\n- billing worker queue: billing-jobs (recorded 2026-08-03)\\n- incident report template: docs/incident-template.md (recorded 2026-08-05)\\n- billing api owner: the payments team (recorded 2026-08-02)\\n- billing worker retry limit: 5 (recorded 2026-08-04)\"}}\n",
+  "golden_plain": "Known facts from your memory ledger, each with the date it was recorded:\n- short story draft title: The Lighthouse (recorded 2026-08-12)\n- payments channel chat id: C0PAYMENTS (recorded 2026-08-08)\n- billing worker queue: billing-jobs (recorded 2026-08-03)\n- incident report template: docs/incident-template.md (recorded 2026-08-05)\n- billing api owner: the payments team (recorded 2026-08-02)\n- billing worker retry limit: 5 (recorded 2026-08-04)\n",
+  "golden_hermes": "Known facts from the memory ledger, each with the date it was recorded:\n- short story draft title: The Lighthouse (recorded 2026-08-12)\n- payments channel chat id: C0PAYMENTS (recorded 2026-08-08)\n- billing worker queue: billing-jobs (recorded 2026-08-03)\n- incident report template: docs/incident-template.md (recorded 2026-08-05)\n- billing api owner: the payments team (recorded 2026-08-02)\n- billing worker retry limit: 5 (recorded 2026-08-04)"
+}

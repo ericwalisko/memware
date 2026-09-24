@@ -26,7 +26,7 @@ Hooks (`hooks/hooks.json`):
 | `SessionStart` | `memware notice --from-hook`, in the foreground | until `memware setup` has asked about `derive` (setup last ran before 0.4.0 or never, and `derive.auto` is unset), shows one line under the session header saying so; reads only the config, and prints nothing once either is true, after a compaction, or when the config will not parse |
 | `SessionStart` | `memware digest --from-hook`, in the foreground (5 s timeout) | injects a block of at most 1,200 characters: a line pointing at `recall`, this project's 5 most recent sessions (date and first prompt), and the beliefs whose subject names the project, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)); nothing for a project memware has no session for — see [the digest](#the-session-start-digest) |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
-| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext` |
+| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext`; with the [optional relevance filter](../README.md#optional-a-relevance-filter-for-prompt-time-injection) switched on, less what it judges irrelevant too |
 
 `SessionEnd` runs when Claude Code exits cleanly, but some environments **force-kill** it (a worktree/pane manager may `SIGKILL` the process group on close), and a `SIGKILL` cannot run any hook. The `SessionStart` hook covers that: it runs a bare `memware sync` — which catches up the configured `backup.transcript_src` (default `~/.claude/projects`) — plus a throttled backup, **backgrounded** so it never delays startup. So the previous session is indexed at the next start even if its `SessionEnd` was skipped; the raw transcript is durable on disk regardless.
 
@@ -135,6 +135,15 @@ many beliefs are no longer injected; the store records that it did.
 
 The Hermes provider's `prefetch` applies the class rule and the window through each hit's
 `volatile` mark. It has no project directory, so the manifest rules do not apply there.
+
+The [relevance filter](../README.md#optional-a-relevance-filter-for-prompt-time-injection) is
+off by default. When `relevance.mode` is `filter`, it also leaves out candidates that TypeSafe's
+classifier judges irrelevant to the prompt. It works on what the gate admitted, widened to
+`relevance.pool` candidates, and never adds a belief the gate left out. Both the prompt hook and
+`prefetch` read the switch from memware's own config. In `shadow` mode it logs its judgments and
+leaves injection unchanged. A task notification, a hook fired inside a subagent (its payload
+carries `agent_id`) and a session memware keeps out of the store are never sent. With the filter
+off, a task notification still gets beliefs injected, as it did before the filter existed.
 
 ## Hermes Agent
 

@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **An optional relevance filter for prompt-time injection, off by default.** The prompt hook and
+  the Hermes provider's `prefetch` pick beliefs by keyword, so a prompt about an incident report
+  also got a weekly report's file path. With `memware config relevance.mode filter`, memware asks
+  TypeSafe's System One model (`jev-1.13.0`, pinned) one yes/no question per candidate, all in one
+  request, and injects the candidates at or above `relevance.threshold`, at most k. `shadow` makes
+  the same call, logs each (prompt, candidate) pair to `relevance-log.jsonl` for calibration, and
+  injects what `off` does. When it is on, the prompt (up to 2,000 characters) and up to 20
+  candidate facts go to `api.typesafe.ai`, and nothing else does. A task notification, a hook
+  inside a subagent and a session memware keeps out of its store are never sent. With the filter
+  off, memware reads no key, opens no socket and prints the same bytes as before. It fails open
+  on a missing key, a timeout, an HTTP error, a redirect or a malformed reply, with one attempt
+  under a 1.5 s deadline. With a full pool of 20 candidates the hook took 553 ms p50 and 753 ms
+  p95, against 84 ms and 99 ms off. It uses the standard library only, with no new dependency.
+  `memware config` refuses a bad `relevance.*` value and says what switching the filter on sends.
+  `memware nuke` removes the log and `relevance-usage.jsonl`.
+
 ## [0.7.1] - 2026-09-23
 
 ### Fixed

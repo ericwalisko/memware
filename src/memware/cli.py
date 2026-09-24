@@ -17,7 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from memware import __version__
+from memware import __version__, relevance
 from memware.derive import add_arguments as _derive_arguments
 from memware.derive import cmd_derive, open_readonly
 from memware.derive import status as derive_status
@@ -552,7 +552,8 @@ def _hook_store(db: str) -> Store | None:
 
 def cmd_context(a: argparse.Namespace) -> int:
     """Prompt-time helper: print the beliefs whose subject the prompt names, less what the
-    injection gate leaves out (memware.volatile)."""
+    injection gate leaves out (memware.volatile) and, when switched on, what the relevance filter
+    judges irrelevant (memware.relevance; off by default)."""
     payload = _hook_payload() if a.from_hook or not a.prompt else {}
     prompt = a.prompt or str(payload.get("prompt", ""))
     if not prompt.strip():
@@ -575,10 +576,22 @@ def cmd_context(a: argparse.Namespace) -> int:
                 [h.id for h in hits],
             )
         }
+    admitted = [r for r in (rows[h.id] for h in hits if h.id in rows) if gate.verdict(r) is None]
+    rel = relevance.settings()
+    if rel.on:  # opted in: the network call happens here, after the store is closed
+        picked = relevance.choose(
+            prompt,
+            [(r["id"], relevance.fact(r["subject"], r["relation"], r["value"])) for r in admitted],
+            a.k,
+            rel,
+            harness="claude-code" if a.from_hook else "cli",
+            session=str(payload.get("session_id") or "") or None,
+            transcript=str(payload.get("transcript_path") or "") or None,
+            agent=bool(payload.get("agent_id")),
+        )
+        admitted = [admitted[i] for i in picked]
     lines = [
-        belief_line(r["subject"], r["relation"], r["value"], r["valid_from"])
-        for r in (rows[h.id] for h in hits if h.id in rows)
-        if gate.verdict(r) is None
+        belief_line(r["subject"], r["relation"], r["value"], r["valid_from"]) for r in admitted
     ][: a.k]
     if not lines:
         return 0
@@ -2258,6 +2271,24 @@ def cmd_setup(a: argparse.Namespace) -> int:
     return 0
 
 
+def _relevance_notice(mode: str) -> None:
+    """What switching the relevance filter on sends, and where, before the first prompt does."""
+    from memware.derive import env_file
+
+    print(
+        f"relevance.mode {mode}: from the next prompt, the prompt hook and the Hermes provider "
+        f"send each prompt and its candidate facts to TypeSafe ({relevance.ENDPOINT}); "
+        "`memware config relevance.mode off` stops it",
+        file=sys.stderr,
+    )
+    if relevance.api_key() is None:
+        print(
+            f"no {relevance.KEY} in the environment or {env_file()}: until one is set, nothing "
+            "is sent and injection is unchanged",
+            file=sys.stderr,
+        )
+
+
 def cmd_config(a: argparse.Namespace) -> int:
     from memware.config import (
         config_path,
@@ -2282,6 +2313,23 @@ def cmd_config(a: argparse.Namespace) -> int:
                 )
                 return 2
             val = int(days) if days.is_integer() else days
+        elif a.key.startswith("relevance."):
+            parsed = relevance.parse_setting(a.key, a.value)
+            name = a.key.removeprefix("relevance.")
+            if parsed is None:
+                expects = relevance.EXPECTS.get(name)
+                print(
+                    f"{a.key} takes {expects}"
+                    if expects
+                    else f"{a.key} is not a setting; relevance takes {', '.join(relevance.EXPECTS)}",
+                    f"; got {a.value!r}, nothing written",
+                    sep="",
+                    file=sys.stderr,
+                )
+                return 2
+            val = parsed
+            if name == "mode" and val != "off":
+                _relevance_notice(str(val))
         elif a.value.lower() in ("true", "false"):
             val = a.value.lower() == "true"
         user = load_user_config()  # write the one key; defaults stay defaults, not choices
@@ -2314,6 +2362,8 @@ def cmd_nuke(a: argparse.Namespace) -> int:
         "no-capture.txt.lock",
         "review-outbox.jsonl",
         "review-inbox.jsonl",
+        relevance.LOG_NAME,  # holds the text of prompts, when the relevance filter was on
+        relevance.USAGE_NAME,
     ):
         targets.append(home / name)
     targets.append(config_path())
@@ -2349,7 +2399,8 @@ def cmd_nuke(a: argparse.Namespace) -> int:
 
 _DESCRIPTION = (
     "Memory for AI agents that only remembers the latest truth — a local SQLite belief "
-    "ledger and transcript index. No daemon, no vector database, no model in the loop."
+    "ledger and transcript index. No daemon, no vector database, and no model in the loop "
+    "unless you opt in to the relevance filter."
 )
 
 _EPILOG = """\
