@@ -182,17 +182,38 @@ never indexed and never mirrored, whoever started the run and whatever it sent.
 ```bash
 memware exclude                                          # each pattern: matches on disk and in the index
 memware exclude --add '*/-Users-me-gen-runs/*'           # dry run: what it matches, what it would un-index
-memware exclude --add '*/-Users-me-gen-runs/*' --apply   # write it, and un-index what it matches
+memware exclude --add '*/-Users-me-gen-runs/*' --apply   # write it, un-index what it matches, scrub the file
 memware exclude --remove '*/-Users-me-gen-runs/*' --apply
 ```
 
 Nothing changes without `--apply`, and the dry run reads the store read-only. A pattern is matched
 with shell-style wildcards against the whole resolved transcript path, as `memware prune --glob`
-matches, so `*` crosses `/`, and a leading `~` is expanded. Claude Code keeps one transcript
-directory per working directory under `~/.claude/projects`, named after the path with each `/`
-turned into `-`. So `*/-Users-me-gen-runs/*` names every session started in `/Users/me/gen-runs`,
-and their subagents' transcripts in `<session>/subagents/` with them. A pattern that begins with
-`-` is passed as `--add=-Users-…`.
+matches, so `*` crosses `/`, and a leading `~` is expanded. A pattern that begins with `-` is
+passed as `--add=-Users-…`.
+
+**Name the project directory the way Claude Code writes it.** Claude Code keeps one transcript
+directory per working directory under `~/.claude/projects`, named after the whole path with every
+character but a letter or digit made a dash: `/Users/me/gen-runs` is `-Users-me-gen-runs`, and
+`/Users/me/Developer/olivia-career` is `-Users-me-Developer-olivia-career`. So
+`*/-Users-me-gen-runs/*` names every session started in `/Users/me/gen-runs`, and their subagents'
+transcripts in `<session>/subagents/` with them. A session started in a subdirectory or a worktree
+of a project gets a directory of its own: `/Users/me/Developer/olivia-career/.claude/worktrees/feat`
+is `-Users-me-Developer-olivia-career--claude-worktrees-feat`. A pattern written as the path, such
+as `*/olivia-career/*`, names no directory there and matches nothing. Two forms do match:
+
+| pattern | matches |
+|---|---|
+| `'*olivia-career*'` | **to keep a project out, use this one.** Every path holding `olivia-career`: sessions started in the project, in its subdirectories and in its worktrees, and in any other directory whose name holds it, such as `-Users-me-olivia-career-archive` |
+| `'*-olivia-career/*'` | only sessions started in a directory named `olivia-career` itself. Sessions started in its subdirectories and worktrees stay indexed |
+
+`memware exclude --add` says when a new pattern matches no transcript on disk and no indexed
+source. When the pattern holds a `/`, it prints those two forms, built from the pattern's last
+name (`~/.claude/projects/olivia-career/*` and `*/olivia-career*` give the same two), each with the
+transcripts and indexed sources it matches; a form that matches nothing is left out. `--apply`
+refuses the pattern: nothing is written and it exits 2. `--force` adds it anyway, for a project
+you have not run yet and want excluded ahead of time, even one in the dash-encoded form such as
+`*/-Users-me-later/*`. Adding a pattern already in `capture.exclude` again changes nothing and
+exits 0.
 
 Every sync skips a matching transcript and un-indexes it if an earlier sync indexed it, exactly as
 it does for a marker: the hooks, the `SessionStart` catch-up, `memware sync`, `backfill`, `setup`
@@ -202,10 +223,33 @@ and the Hermes provider. `memware backup` never mirrors it and counts it under
 `memware exclude --add … --apply` also un-indexes matching sources whose transcript is no longer on
 disk, which no sync would walk to again. Like a sync, it leaves the beliefs derived from those
 sessions in place and says how many beliefs now cite an unindexed session; `memware beliefs
-retract --orphaned` retracts them (see [Layer 2](#retract-the-beliefs-those-runs-left-behind)). An edit to `config.json` by hand, or through `memware
-config capture.exclude`, takes effect at the next sync, for the transcripts still on disk.
-Removing a pattern re-indexes nothing by itself: the next sync indexes the transcripts it hid,
-if they are still on disk.
+retract --orphaned` retracts them (see [Layer 2](#retract-the-beliefs-those-runs-left-behind)).
+
+When it un-indexed anything, `exclude --apply` then scrubs the store file exactly as an applied
+prune does ([Removing a value](#removing-a-value-a-token-a-password), step 2): it merges both
+search indexes, rebuilds one a merge left holding terms of deleted rows, runs `VACUUM` and empties
+the write-ahead log, without waiting for a reader while it holds the lock. A search index keeps a
+deleted row's words, lowercased, on its pages until it merges, so without this step the
+un-indexed text stayed in the file, and in any backup taken afterwards, until a `memware prune
+--scrub`. Having no single text to look for, it then checks the index itself and prints `left in
+the search index`: the terms on its pages that no live row holds. The check reads the index as the
+store's connection sees it, write-ahead log included, so the line says `nothing` only when the
+scrub finished and emptied the log, and the file holds exactly the pages it read. When another
+process was reading and the log could not be emptied, the file may still hold the pages the scrub
+rewrote, and the line says `not checked` and why. It exits 1, with the command to finish
+(`memware --db … prune --scrub`), when the scrub did not finish, the write-ahead log could not be
+emptied, or the index still holds such terms or could not be read. The un-index stays committed
+either way. Like a prune, it names the backup destination, whose snapshots and mirrored
+transcripts from before may still hold the text; memware never changes them. `memware scan
+--backups` counts them.
+
+An edit to `config.json` by hand, or through `memware config capture.exclude`, takes effect at the
+next sync, for the transcripts still on disk. That sync un-indexes what the pattern matches but
+does not scrub the file: run `memware prune --scrub` after it, or add the pattern with `memware
+exclude --add … --apply` instead. The same goes
+for a pattern applied with memware 0.8.0 or earlier, whose `exclude --apply` did not scrub: run
+`memware prune --scrub` once. Removing a pattern re-indexes nothing by itself: the next sync
+indexes the transcripts it hid, if they are still on disk.
 
 **Run a generator from a working directory of its own.** A pattern can tell sessions apart only by
 where they ran. A pipeline whose steps start Claude Code in the directory you work in yourself —
@@ -452,7 +496,8 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 |---|---|
 | never index or mirror this run | `MEMWARE_NO_CAPTURE=1` in its environment (a memware hook must run in the session) |
 | never write the transcript at all | `claude -p --no-session-persistence` |
-| never index or mirror a generator, whatever its environment | run it from its own directory; `memware exclude --add '*/<project-dir>/*'`, then again with `--apply` |
+| never index or mirror a generator, whatever its environment | run it from its own directory; `memware exclude --add '*/-Users-me-gen-runs/*'` (the directory's path, every character but a letter or digit a dash), then again with `--apply` |
+| keep a project out, its worktrees and subdirectories too | `memware exclude --add '*<project name>*'`, then again with `--apply` |
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |

@@ -534,6 +534,22 @@ def test_a_glob_prune_counts_no_beliefs(tmp_path, capsys):
     assert code == 0 and "beliefs_holding_text" not in json.loads(out)
 
 
+def test_a_glob_prune_checks_the_index_after_its_scrub(tmp_path, capsys):
+    """A glob has no text to look for, so the check after the scrub counts every term on the index
+    pages that no live row holds: what an un-index leaves in the FTS5 segments."""
+    db = _db(tmp_path)
+    code, out, _ = _run(
+        capsys, "--db", str(db), "prune", "--glob", "*/t.jsonl", "--apply", "--json"
+    )
+    r = json.loads(out)
+    assert code == 0 and r["sources_pruned"] == 1 and r["left_in_store"] is None
+    assert r["left_in_index"] == {"passage_fts": 0, "belief_fts": 0}
+    assert _counts(db) == (0, 0)
+
+    code, out, _ = _run(capsys, "--db", str(db), "prune", "--glob", "*/t.jsonl", "--apply")
+    assert code == 0 and "left in the search index" not in out  # nothing removed, no scrub
+
+
 def test_prune_apply_names_the_backup_destination_and_points_to_scan(tmp_path, capsys):
     db = _db(tmp_path)
     dest = tmp_path / "dropbox" / "memware"

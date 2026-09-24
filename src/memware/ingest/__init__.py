@@ -24,7 +24,14 @@ from memware.ledger import (
     redaction_refusal,
 )
 from memware.passage import index_turn
-from memware.residue import FileCheck, check_file, file_windows, value_tokens
+from memware.residue import (
+    FTS_TABLES,
+    FileCheck,
+    check_file,
+    deleted_terms,
+    file_windows,
+    value_tokens,
+)
 from memware.store import Scrubbed, Store, now_iso
 
 WITHHELD = "(value withheld)"
@@ -335,7 +342,8 @@ def prune_source(store: Store, source: str) -> int:
     Beliefs are left alone. ``sync_file`` calls this for every listed or marked transcript, from
     hooks, and a belief changes only after someone has read a dry run: ``memware stats`` counts
     the beliefs this can leave citing a missing session, and ``memware beliefs retract
-    --orphaned`` retracts them. :func:`prune` is the un-index that cascades."""
+    --orphaned`` retracts them. :func:`prune` is the un-index that cascades, and
+    :func:`unindex_sources` the one that scrubs the file without cascading."""
     n = int(store.conn.execute("SELECT count(*) FROM turn WHERE source=?", (source,)).fetchone()[0])
     store.conn.execute("DELETE FROM turn WHERE source=?", (source,))
     store.conn.execute("DELETE FROM cursor WHERE source=?", (source,))
@@ -375,6 +383,11 @@ class Pruned:
     redaction_refusal: str | None = None
     """Why an applied prune would refuse this redaction as too broad, or None. An applied prune
     that went ahead did so with ``allow_broad_redaction``."""
+    index_left: dict[str, int] | None = None
+    """FTS table -> terms on its index pages that no live row holds, counted after the scrub of an
+    un-index with no text to check for (a ``glob`` alone, or :func:`unindex_sources`): what the
+    scrub left of the removed turns. None for a dry run, a selector with a text (``left`` checks
+    that), an un-index that removed nothing, or an index that could not be read."""
 
 
 @dataclass(frozen=True)
@@ -574,7 +587,40 @@ def _scrub_after(
         if text is not None and on_disk
         else None
     )
-    return replace(result, scrubbed=scrubbed, scrub_error=error, left=left)
+    index_left = _index_left(store) if text is None else None
+    return replace(result, scrubbed=scrubbed, scrub_error=error, left=left, index_left=index_left)
+
+
+def _index_left(store: Store) -> dict[str, int] | None:
+    """FTS table -> terms on its pages that no live row holds, every term counted: the check after
+    a scrub that has no text to look for. None when an index could not be read."""
+    try:
+        return {table: deleted_terms(store.conn, table) for table in FTS_TABLES}
+    except sqlite3.Error:
+        return None
+
+
+def unindex_sources(
+    store: Store, sources: list[str], *, progress: Callable[[str], None] | None = None
+) -> Pruned:
+    """Un-index ``sources`` in one transaction as a sync un-indexes an excluded transcript
+    (:func:`prune_source`: beliefs are left alone), then scrub the store file when that removed
+    anything, and check its search index, as an applied :func:`prune` with a ``glob`` does. What
+    ``memware exclude --apply`` runs: exclusion is how a project is kept out of memory, so it
+    removes the text from the file as well as from every query. A scrub that fails is reported
+    in ``scrub_error``, not raised; the un-index has committed by then."""
+    conn = store.conn
+    counts: dict[str, int] = {}
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for source in sources:
+            counts[source] = prune_source(store, source)
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
+    result = Pruned(counts, sum(counts.values()), Retraction([], [], [], [], []), True)
+    return _scrub_after(store, result, None, bool(counts), progress)
 
 
 def prune_turns(
@@ -634,5 +680,6 @@ __all__ = [
     "sync_file",
     "sync_tree",
     "turn_matches",
+    "unindex_sources",
 ]
 _ = (_cc, _generic)

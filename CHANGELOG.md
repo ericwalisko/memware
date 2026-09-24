@@ -32,6 +32,40 @@ All notable changes to this project are documented here. The format follows
   exported | 2,454 of 10,346`), and a requirement word in the relation makes it a rule
   (`release gate tests | must pass | 3 of 3`). A count qualified in the relation (`scheduled row
   count`, `spec-required row count`) stays durable: a target, not a reading.
+- **`memware exclude --apply` removes what it un-indexes from the store file.** It deleted the
+  matching turns and cursors but never scrubbed, so the search index kept each removed turn's words,
+  lowercased, on its pages. A synthetic store synced with a transcript holding a token, then
+  `exclude --add '*privateproj*' --apply`, left 0 turns and 0 `fts5vocab` terms but 2
+  case-insensitive copies of the token in the file (4 with `secure_delete` off). `memware scan`
+  reported the term held and exited 1, and a backup taken afterwards copied it. Only a later `prune
+  --scrub` removed it. Now, whenever it un-indexes anything, `exclude --apply` runs the same scrub
+  as `prune --apply` (`memware.ingest.unindex_sources`, which calls the prune's own scrub step):
+  both search indexes merged, one a merge leaves holding deleted terms rebuilt, `VACUUM`, the
+  write-ahead log emptied without waiting for a reader while the lock is held, each step announced
+  on stderr. Then it checks the index pages for terms no live row holds (`left in the search index`,
+  `left_in_index` and `index_check` in `--json`). The line says `nothing` only when the scrub
+  finished and emptied the log; otherwise it says `not checked` and why. It names the backup
+  destination whose earlier snapshots and mirrored transcripts may still hold the text. It exits 1
+  with the command to finish when the scrub did not finish, the log could not be emptied, or the
+  index still holds such terms or could not be read. `--json` adds `store_scrubbed`, `scrub_error`,
+  `left_in_index`, `index_check` and `backup_dest`. Beliefs are still left in place, as before. **A
+  store an exclusion was applied to with 0.8.0 or earlier still holds that text: run `memware prune
+  --scrub` once.** So does a store whose pattern was added with `memware config capture.exclude` and
+  then applied by a sync, which un-indexes without scrubbing.
+- **`memware exclude --add` refuses a pattern written as a path that matches nothing.** Claude Code
+  names a project's transcript directory after its whole path with every character but a letter or
+  digit a dash (`-Users-me-Developer-olivia-career`), so `'*/olivia-career/*'` matched nothing.
+  The dry run printed `transcripts : 0` and a hint that `*/name/*` names a directory, and `--apply`
+  saved the pattern and reported success. Now a new pattern that matches no transcript on disk and
+  no indexed source says so. When it holds a `/`, `--apply` refuses it, writes nothing and exits 2
+  (`refused` in `--json`), and `--force` adds it anyway, for a project that has not run yet. The
+  output lists the forms built from the pattern's last name that match something, each with its
+  transcript and indexed-source counts (`suggestions` in `--json`). `'*olivia-career*'` comes
+  first, because it keeps the project out along with its subdirectories and worktrees, which
+  Claude Code keeps in directories of their own
+  (`-Users-me-Developer-olivia-career--claude-worktrees-feat`). `'*-olivia-career/*'` comes second,
+  and the output says it leaves those sessions indexed. Adding a pattern already in
+  `capture.exclude` changes nothing and exits 0.
 
 ### Changed
 - **Two narrow status rules, from beliefs that stayed injected after going stale.** A relation
@@ -49,6 +83,15 @@ All notable changes to this project are documented here. The format follows
   purpose: `memware sync at 50k turns | latency | 3.7 s` and `personal-os board | open cards
   count | 55`, too close to durable configuration for a word rule, and `scheduled_user_sync |
   row count` and `scheduled_test_run | status`, whose identifiers read like a setting's name.
+- `prune --glob --apply` runs the same index check after its scrub and prints `left in the search
+  index` (`left_in_index` and `index_check` in `--json`); an index still holding terms of deleted
+  rows, or one that could not be read, exits 1, as `exclude --apply` does.
+- `docs/keeping-memory-clean.md` explains Claude Code's dash-encoded project directory names beside
+  the `'*/-Users-me-gen-runs/*'` example, including a worktree's directory, and compares the
+  `*name*` form, which keeps a project out, with the narrower `*-name/*`. It says what `exclude
+  --apply` now scrubs, when `left in the search index` can say `nothing`, and that a pattern a sync
+  applies, or one applied with 0.8.0 or earlier, needs a `memware prune --scrub`. `docs/memware.1`,
+  the README's exclusion example and `memware exclude --help` follow.
 
 ## [0.8.0] - 2026-09-24
 

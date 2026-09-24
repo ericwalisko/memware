@@ -59,14 +59,39 @@ path, so
 .B *
 crosses
 .BR / .
+Claude Code names a project's transcript directory after its path with every character but a
+letter or digit a dash:
+.I /Users/me/gen\-runs
+is
+.IR \-Users\-me\-gen\-runs .
 With no flag, prints each pattern with the transcripts on disk and the indexed sources it
 matches. Flags:
 .BI "\-\-add " GLOB ,
 .BI "\-\-remove " GLOB ,
-.BR \-\-apply .
+.BR \-\-apply ,
+.BR \-\-force .
 A dry run unless
 .BR \-\-apply ,
-which writes the config and un\-indexes the indexed sources the patterns match.
+which writes the config, un\-indexes the indexed sources the patterns match and, when it
+un\-indexed anything, scrubs the store file as
+.B prune \-\-apply
+does, checks the search index for terms of deleted rows, and exits 1 with the command to finish
+when either falls short. A new pattern holding a
+.B /
+that matches nothing, such as
+.IR */olivia\-career/* ,
+is refused by
+.B \-\-apply
+(exit 2). The output lists the forms built from its last name that match something, each with its
+count:
+.I *olivia\-career*
+first, which keeps the project out with its subdirectories and worktrees, then
+.IR *\-olivia\-career/* ,
+which leaves their sessions indexed.
+.B \-\-force
+adds the pattern anyway. Adding a pattern already in
+.B capture.exclude
+changes nothing and exits 0.
 .TP
 .BI "recall " QUERY " ..."
 Search turns and beliefs. Pass several phrasings, fused by reciprocal rank. Flags:
