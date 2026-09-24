@@ -342,55 +342,68 @@ _LAYOUT_NAMES = ("subagents",)
 """Directory names Claude Code itself writes under a project directory."""
 
 
-def _segment_forms(pattern: str, src_names: Collection[str] = ()) -> list[str]:
-    """For a pattern written as a path, with ``/`` between names, the forms that name the Claude
-    Code project directory it means. Claude Code keeps a project's transcripts in a directory named
-    after its path with every character but a letter or digit made a dash
-    (:func:`memware.digest.project_dir_name`), so ``*/olivia-career/*`` names no directory there
-    and ``*-olivia-career/*`` or ``*olivia-career*`` does. Empty for a pattern with no name
-    beside a ``/``, one whose names are already dash-encoded, one naming a ``.jsonl`` file, and
-    one ending in a name a transcript path really holds: :data:`_LAYOUT_NAMES`, or one of
-    ``src_names``, the transcript source's own path."""
+def _last_name(pattern: str, src_names: Collection[str] = ()) -> str | None:
+    """The last name in a pattern written as a path that can be a project's: the last
+    ``/``-separated segment with its wildcards and edge dashes taken out, skipping one left empty,
+    a ``.jsonl`` file's name, a directory Claude Code writes itself (:data:`_LAYOUT_NAMES`) and a
+    name in the transcript source's own path (``src_names``). ``*/privateproj*``,
+    ``*/privateproj/*/subagents/*`` and ``~/.claude/projects/privateproj/*`` all give
+    ``privateproj``."""
     parts = os.path.expanduser(pattern).split("/")
+    for i in reversed(range(len(parts))):
+        name = re.sub(r"\[[^]]*\]|[*?]", "", parts[i]).strip("-")
+        if i == len(parts) - 1 and name.endswith(".jsonl"):
+            continue
+        if name and name not in _LAYOUT_NAMES and not {name, parts[i]} & set(src_names):
+            return name
+    return None
 
-    def is_name(i: int) -> bool:
-        part = parts[i]
-        glob = any(c in part for c in "*?[")
-        return bool(part) and not glob and not (i == len(parts) - 1 and part.endswith(".jsonl"))
 
-    if len(parts) < 2:
-        return []
-    end = next((i for i in reversed(range(len(parts))) if is_name(i)), None)
-    if end is None:
-        return []
-    start = end
-    while start > 0 and is_name(start - 1):
-        start -= 1
-    names = parts[start : end + 1]
-    if any(n.startswith("-") for n in names) or names[-1] in (*_LAYOUT_NAMES, *src_names):
-        return []
-    if start == 1 and parts[0] == "":  # an absolute path: the whole project directory's name
-        whole = f"*/{project_dir_name('/' + '/'.join(names))}/*"
-    else:
-        whole = f"*-{project_dir_name('/'.join(names))}/*"
-    return list(dict.fromkeys([whole, f"*{project_dir_name(names[-1])}*"]))
+def _segment_forms(pattern: str, src_names: Collection[str] = ()) -> list[str]:
+    """The forms that name the Claude Code project a pattern written as a path means, the one that
+    keeps a project out first. Claude Code keeps a project's transcripts in a directory named after
+    the whole path it ran in, with every character but a letter or digit made a dash
+    (:func:`memware.digest.project_dir_name`), and a session started in a subdirectory or a
+    worktree of the project in a directory of its own (``-Users-me-work--claude-worktrees-feat``).
+    So ``*work*`` names the project with its subdirectories and worktrees, and any other directory
+    whose name holds ``work``; ``*-work/*`` names only the directory ``work`` itself. Built from
+    :func:`_last_name`; empty when the pattern has none."""
+    name = _last_name(pattern, src_names)
+    encoded = project_dir_name(name).strip("-") if name else ""
+    return [f"*{encoded}*", f"*-{encoded}/*"] if encoded else []
 
 
 def _segment_verdict(suggestions: list[dict[str, Any]]) -> str:
-    """The note for a pattern written as a path that matches nothing: why, and what would."""
-    tries = " or ".join(
-        f"{shlex.quote(s['pattern'])} ({_plural(s['transcripts'], 'transcript')} on disk, "
-        f"{_plural(s['indexed_sources'], 'indexed source')})"
-        for s in suggestions
+    """Why a pattern written as a path matched nothing, and the forms that match, each with what it
+    matches. ``suggestions`` holds only forms that match something, the broad one first."""
+    why = (
+        "Claude Code keeps a project's transcripts in a directory named after the whole path it ran "
+        "in, with every character but a letter or digit made a dash: /Users/me/work is "
+        "-Users-me-work, and a worktree of it -Users-me-work--claude-worktrees-feat"
     )
-    return (
-        "Claude Code keeps a project's transcripts in a directory named after its path with every "
-        "character but a letter or digit made a dash (/Users/me/work is -Users-me-work), so a "
-        f"pattern written as a path names no directory there; try {tries}"
+    if not suggestions:
+        return f"{why}; no form of the pattern's last name matches anything either"
+
+    def counted(s: dict[str, Any]) -> str:
+        return (
+            f"{shlex.quote(s['pattern'])} ({_plural(s['transcripts'], 'transcript')} on disk, "
+            f"{_plural(s['indexed_sources'], 'indexed source')})"
+        )
+
+    line = (
+        f"{why}. To keep the project out, use {counted(suggestions[0])}: it covers sessions "
+        "started in the project, its subdirectories and its worktrees, and in any other directory "
+        "whose name holds that name"
     )
+    for narrow in suggestions[1:]:
+        line += (
+            f". {counted(narrow)} covers only sessions started in a directory of that name itself, "
+            "and leaves its subdirectories' and worktrees' sessions indexed"
+        )
+    return line
 
 
-_SEGMENT_REFUSAL = "a pattern written as a path that matches nothing is most likely a mistyped one"
+_SEGMENT_REFUSAL = "a pattern written as a path that matches nothing is most likely mistyped"
 
 
 def _print_blocks(blocks: list[list[tuple[str, str]]]) -> None:
@@ -414,9 +427,10 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     prune does (:func:`memware.ingest.unindex_sources`). Removing a pattern un-indexes nothing
     and indexes nothing: the next sync picks up the transcripts it was hiding.
 
-    A new pattern written as a path that matches nothing, such as ``*/olivia-career/*`` where
-    Claude Code names the directory ``-Users-me-olivia-career``, is refused on ``--apply``
-    unless ``--force``; the output names the forms that would match."""
+    A new pattern written as a path (holding a ``/``) that matches nothing, such as
+    ``*/olivia-career/*`` where Claude Code names the directory ``-Users-me-olivia-career``, is
+    refused on ``--apply`` unless ``--force``; the output names the forms that match, the one that
+    keeps the project out first. A pattern already in ``capture.exclude`` adds nothing."""
     import sqlite3
 
     from memware.config import (
@@ -499,15 +513,18 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     nothing = bool(
         action == "add" and target and not (target["transcripts"] or target["indexed_sources"])
     )
-    suggestions = [
+    already = action == "add" and pattern in before
+    path_like = nothing and "/" in os.path.expanduser(pattern)
+    counted = (
         {
             "pattern": form,
             "transcripts": sum(matches_exclude(p, form) for p in disk),
             "indexed_sources": sum(matches_exclude(s_, form) for s_ in sources),
         }
-        for form in (_segment_forms(pattern, _path_names(src)) if nothing else [])
-    ]
-    refused = bool(a.apply and suggestions and not a.force)
+        for form in (_segment_forms(pattern, _path_names(src)) if path_like else [])
+    )
+    suggestions = [c for c in counted if c["transcripts"] or c["indexed_sources"]]
+    refused = bool(a.apply and path_like and not already and not a.force)
     report["suggestions"] = suggestions
     report["refused"] = _SEGMENT_REFUSAL if refused else None
     report["applied"] = bool(a.apply) and not refused
@@ -534,6 +551,7 @@ def cmd_exclude(a: argparse.Namespace) -> int:
             report["store_scrubbed"] = asdict(pruned.scrubbed) if pruned.scrubbed else None
             report["scrub_error"] = pruned.scrub_error
             report["left_in_index"] = pruned.index_left
+            report["index_check"] = _index_left_line(pruned)
             report["backup_dest"] = dest
             notes, failed = _scrub_notes(a, pruned, dest)
     code = 2 if refused else 1 if failed else 0
@@ -578,27 +596,30 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     if pruned is not None:
         total.append(("store file", _scrubbed_line(pruned)))
         if _index_checked(pruned):
-            total.append(("left in the search index", _index_left_line(pruned.index_left)))
+            total.append(("left in the search index", _index_left_line(pruned)))
     blocks.append(total)
 
     verdicts: list[str] = []
     if not after:
         verdicts.append("capture.exclude is empty; `memware exclude --add GLOB` previews a pattern")
+    if already:
+        verdicts.append(f"{pattern} is already in capture.exclude, so --add changes nothing")
     if nothing:
         how = (
             _segment_verdict(suggestions)
-            if suggestions
+            if path_like
             else "it is matched against the whole resolved path, and `*` crosses `/`"
         )
         verdicts.append(
             "the pattern matches no transcript on disk and no indexed source, so it excludes "
             f"nothing now. {how[0].upper()}{how[1:]}"
         )
-    if suggestions:
+    if path_like and not already:
+        force = "--force adds it anyway, for a project that has not run yet"
         verdicts.append(
-            f"refused: {_SEGMENT_REFUSAL}; --force adds it anyway"
+            f"refused: {_SEGMENT_REFUSAL}; {force}"
             if refused
-            else f"--apply refuses it, because {_SEGMENT_REFUSAL}; --force adds it anyway"
+            else f"--apply refuses it, because {_SEGMENT_REFUSAL}; {force}"
             if not a.apply
             else "added with --force, though it matches nothing"
         )
@@ -617,7 +638,7 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     verdicts += notes
     if not a.apply:
         steps = []
-        if action == "add" and after != before and not suggestions:
+        if action == "add" and after != before and not path_like:
             steps.append("add it to capture.exclude")
         if action == "remove":
             steps.append("remove it from capture.exclude")
@@ -1119,14 +1140,33 @@ def _scrubbed_line(r: Pruned) -> str:
     )
 
 
-def _index_left_line(held: dict[str, int] | None) -> str:
-    """What the search index still holds of deleted rows after a scrub with no text to check."""
+def _index_found(held: dict[str, int]) -> str:
+    where = ", ".join(f"{table} {n:,}" for table, n in held.items() if n)
+    return f"{_plural(sum(held.values()), 'term')} of deleted rows on the index pages ({where})"
+
+
+def _index_left_line(r: Pruned) -> str:
+    """What the check after a scrub with no text to look for found, or why it could not tell, as
+    :func:`_left_line` words a text's check. The check reads the index as the store's connection
+    sees it, the write-ahead log included. So it says nothing is left only when the scrub finished
+    and emptied the log, and the file holds exactly the pages it read: with the log still full,
+    the file may keep the pages the scrub rewrote."""
+    held = r.index_left
     if held is None:
         return "not checked: the search index could not be read"
-    if not any(held.values()):
-        return "nothing: no term of a deleted row is on its pages"
-    where = ", ".join(f"{table} {n:,}" for table, n in held.items() if n)
-    return f"{_plural(sum(held.values()), 'term')} of deleted rows ({where})"
+    if any(held.values()):
+        return _index_found(held)
+    if r.scrub_error is not None:
+        return "not checked: the scrub did not finish, so the file may hold removed text"
+    if r.scrubbed is not None and not r.scrubbed.wal_truncated:
+        return (
+            "not checked: another process was reading the store, so the rewritten pages are still "
+            "in the write-ahead log and the file may hold the pages they replace"
+        )
+    return (
+        "nothing: the file was compacted and its log emptied, and no term of a deleted row is on "
+        "its index pages"
+    )
 
 
 def _index_checked(r: Pruned) -> bool:
@@ -1205,7 +1245,7 @@ def _scrub_notes(a: argparse.Namespace, r: Pruned, dest: str | None) -> tuple[li
         found = (
             "could not be read to check it"
             if r.index_left is None
-            else f"still holds {_index_left_line(r.index_left)}, copies of removed text no row "
+            else f"still holds {_index_found(r.index_left)}, copies of removed text no row "
             "accounts for"
         )
         notes.append(f"the search index {found}. To finish, {close}: {_finish_command(a)}")
@@ -1567,12 +1607,13 @@ def _prune(a: argparse.Namespace) -> int:
             {**asdict(r.left), "leftover": r.left.leftover} if r.left is not None else None
         )
         head["left_in_index"] = r.index_left
+        head["index_check"] = _index_left_line(r) if _index_checked(r) else None
         head["backup_dest"] = dest
         lines.append(("store file", _scrubbed_line(r)))
         if r.left is not None:
             lines.append(("text left in the store", _left_line(r.left)))
         if _index_checked(r):
-            lines.append(("left in the search index", _index_left_line(r.index_left)))
+            lines.append(("left in the search index", _index_left_line(r)))
         more, failed = _scrub_notes(a, r, dest)
         notes += more
     unwritten = "dry run: nothing written; add --apply to write it"
@@ -2687,10 +2728,14 @@ def build_parser() -> argparse.ArgumentParser:
             "  memware exclude --add '*/-Users-me-gen-runs/*'   preview: matches, sources to un-index\n"
             "  memware exclude --add '*/-Users-me-gen-runs/*' --apply\n"
             "  memware exclude --remove '*/-Users-me-gen-runs/*' --apply\n"
+            "  memware exclude --add '*privateproj*' --apply    a project, its subdirectories and\n"
+            "                                                   worktrees\n"
             "A pattern is matched against the whole resolved transcript path, and * crosses /.\n"
             "Claude Code names a project's directory after its path with every character but a\n"
-            "letter or digit a dash: /Users/me/gen-runs is -Users-me-gen-runs. --apply scrubs the\n"
-            "store file as prune --apply does. See docs/keeping-memory-clean.md."
+            "letter or digit a dash: /Users/me/gen-runs is -Users-me-gen-runs, and a worktree of\n"
+            "it -Users-me-gen-runs--claude-worktrees-feat. A new pattern holding / that matches\n"
+            "nothing is refused unless --force. --apply scrubs the store file as prune --apply\n"
+            "does. See docs/keeping-memory-clean.md."
         ),
     )
     which = s.add_mutually_exclusive_group()

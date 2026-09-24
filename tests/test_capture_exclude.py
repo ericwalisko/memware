@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -422,7 +423,10 @@ def test_exclude_apply_alone_leaves_no_copy_in_the_file_its_index_or_a_later_sna
     assert left.index_tokens == {"passage_fts": 0, "belief_fts": 0}
     assert _copies(snapshot) == 0
     assert "store file : scrubbed in " in out and "write-ahead log emptied" in out
-    assert "left in the search index : nothing: no term of a deleted row is on its pages" in out
+    assert (
+        "left in the search index : nothing: the file was compacted and its log emptied, and no "
+        "term of a deleted row is on its index pages"
+    ) in out
 
 
 def test_exclude_apply_reports_the_scrub_names_the_backup_and_skips_it_with_nothing_removed(
@@ -479,7 +483,10 @@ def test_an_exclude_whose_scrub_is_blocked_exits_1_and_says_how_to_finish(
     out = capsys.readouterr().out
     assert code == 1
     assert "store file : NOT scrubbed: OperationalError: database is locked" in out
-    assert "left in the search index : " in out and " of deleted rows (passage_fts " in out
+    assert (
+        "left in the search index : " in out
+        and " of deleted rows on the index pages (passage_fts " in out
+    )
     assert "the scrub did not finish" in out and f"memware --db {db} prune --scrub" in out
     assert [_turns_from(db, p) for p in _excluded(machine)] == [0, 0, 0]  # the un-index stands
     assert capture_exclude_patterns() == [GLOB]
@@ -502,8 +509,64 @@ def test_an_index_the_scrub_left_holding_deleted_terms_fails_the_exclude(
 
     assert main(["--db", db, "exclude", "--add", GLOB, "--apply"]) == 1
     out = capsys.readouterr().out
-    assert "left in the search index : " in out and " of deleted rows (passage_fts " in out
+    assert (
+        "left in the search index : " in out
+        and " of deleted rows on the index pages (passage_fts " in out
+    )
     assert "the search index still holds " in out and f"memware --db {db} prune --scrub" in out
+
+
+def test_a_reader_mid_read_leaves_the_index_line_not_checked_and_the_exclude_failing(
+    machine, capsys, monkeypatch
+):
+    """Review of #50: with another connection mid-read the log cannot be emptied, and the file keeps
+    the pages the scrub rewrote. The check reads the index through the log, so it found nothing and
+    the line said so while the file held the value. Now the line says what it could not check."""
+    import memware.store as store_module
+
+    monkeypatch.setattr(store_module, "CHECKPOINT_WAIT_MS", 100)
+    db = machine["db"]
+    _secret(machine)
+    assert main(["--db", db, "sync"]) == 0
+    reader = sqlite3.connect(db, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM turn").fetchall()
+    capsys.readouterr()
+    try:
+        code = main(["--db", db, "exclude", "--add", GLOB, "--apply"])
+        out = capsys.readouterr().out
+        held = _copies(db)
+    finally:
+        reader.execute("COMMIT")
+        reader.close()
+    assert code == 1 and held > 0
+    assert "write-ahead log NOT emptied" in out
+    assert (
+        "left in the search index : not checked: another process was reading the store, so the "
+        "rewritten pages are still in the write-ahead log"
+    ) in out
+    assert "left in the search index : nothing" not in out
+    assert f"memware --db {db} prune --scrub" in out
+
+    assert main(["--db", db, "prune", "--scrub"]) == 0  # the reader is gone
+    assert _copies(db) == 0
+
+
+def test_the_index_line_never_says_nothing_after_a_scrub_that_did_not_finish():
+    from memware.cli import _index_left_line
+    from memware.ingest import Pruned
+    from memware.ledger import Retraction
+
+    clean = {"passage_fts": 0, "belief_fts": 0}
+    r = Pruned({}, 0, Retraction([], [], [], [], []), True, scrub_error="OperationalError: x")
+    assert _index_left_line(replace(r, index_left=clean)).startswith(
+        "not checked: the scrub did not finish"
+    )
+    found = replace(r, index_left={"passage_fts": 2, "belief_fts": 0})
+    assert _index_left_line(found) == "2 terms of deleted rows on the index pages (passage_fts 2)"
+    unread = replace(r, scrub_error=None, scrubbed=Scrubbed(FTS_TABLES, (), True, 0))
+    assert _index_left_line(unread) == "not checked: the search index could not be read"
+    assert _index_left_line(replace(unread, index_left=clean)).startswith("nothing: ")
 
 
 def test_an_index_that_cannot_be_read_after_the_scrub_fails_the_exclude(
@@ -546,20 +609,19 @@ def test_a_path_pattern_that_matches_nothing_is_refused_on_apply_with_the_forms_
 
     assert config_path().read_bytes() == before  # nothing written
     assert [_turns_from(db, p) for p in _excluded(machine)] == [2, 2, 1]
-    tries = (
-        "try '*-gen-runs/*' (3 transcripts on disk, 3 indexed sources) "
-        "or '*gen-runs*' (4 transcripts on disk, 4 indexed sources)"  # the neighbour too
-    )
+    broad = "use '*gen-runs*' (4 transcripts on disk, 4 indexed sources)"  # the neighbour too
+    narrow = "'*-gen-runs/*' (3 transcripts on disk, 3 indexed sources) covers only"
     assert "the pattern matches no transcript on disk and no indexed source" in dry
-    assert tries in dry and tries in refused
+    for text in (dry, refused):
+        assert broad in text and narrow in text and text.index(broad) < text.index(narrow)
     assert "--apply refuses it" in dry and "--force adds it anyway" in dry
     assert "run again with --apply" not in dry
     assert f"add {pattern} (refused, nothing written)" in refused
     assert "verdict : refused: " in refused
     assert (out["applied"], bool(out["refused"])) == (False, True)
     assert out["suggestions"] == [
-        {"pattern": "*-gen-runs/*", "transcripts": 3, "indexed_sources": 3},
         {"pattern": "*gen-runs*", "transcripts": 4, "indexed_sources": 4},
+        {"pattern": "*-gen-runs/*", "transcripts": 3, "indexed_sources": 3},
     ]
 
     assert main(["--db", db, "exclude", "--add", pattern, "--apply", "--force"]) == 0
@@ -567,28 +629,110 @@ def test_a_path_pattern_that_matches_nothing_is_refused_on_apply_with_the_forms_
     assert "added with --force, though it matches nothing" in capsys.readouterr().out
 
 
-def test_a_dash_encoded_pattern_that_matches_nothing_is_added_as_it_is(machine, capsys):
-    """A project not run yet can be excluded ahead of time in the form Claude Code will use."""
-    assert main(["--db", machine["db"], "exclude", "--add", "*/-Users-me-later/*", "--apply"]) == 0
+def test_the_form_that_keeps_a_project_out_covers_its_worktrees_and_comes_first(machine, capsys):
+    """Review of #50: ``*-name/*`` misses a session started in a worktree or a subdirectory of the
+    project, which Claude Code keeps in a directory of its own. Offered first, it made a partial
+    privacy exclusion."""
+    db, projects = machine["db"], machine["projects"]
+    project = projects / "-Users-me-privateproj" / "p1.jsonl"
+    worktree = projects / "-Users-me-privateproj--claude-worktrees-feat" / "w1.jsonl"
+    for path in (project, worktree):
+        path.parent.mkdir()
+        write_claude_jsonl(path, path.stem, [("user", "2026-09-16T12:00:00Z", "private plans")])
+    assert main(["--db", db, "sync"]) == 0
+    capsys.readouterr()
+
+    assert main(["--db", db, "--json", "exclude", "--add", "*/privateproj/*"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert main(["--db", db, "exclude", "--add", "*/privateproj/*"]) == 0
+    human = capsys.readouterr().out
+
+    assert [s["pattern"] for s in out["suggestions"]] == ["*privateproj*", "*-privateproj/*"]
+    assert [s["transcripts"] for s in out["suggestions"]] == [2, 1]
+    assert "To keep the project out, use '*privateproj*' (2 transcripts on disk" in human
+    assert "leaves its subdirectories' and worktrees' sessions indexed" in human
+
+    assert main(["--db", db, "exclude", "--add", "*privateproj*", "--apply"]) == 0
+    assert (_turns_from(db, project), _turns_from(db, worktree)) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["*/gen-runs*", "*/gen-runs/*/subagents/*", "~/.claude/projects/gen-runs/*"],
+)
+def test_any_path_pattern_that_matches_nothing_is_refused_with_forms_from_its_last_name(
+    machine, capsys, monkeypatch, tmp_path, pattern
+):
+    """Review of #50: a pattern ending in a wildcard got no suggestion and was saved, and one under
+    the transcript source got a form built from the whole path, which matched nothing."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    db = machine["db"]
+    assert main(["--db", db, "sync"]) == 0
+    before = config_path().read_bytes()
+    capsys.readouterr()
+
+    assert main(["--db", db, "--json", "exclude", "--add", pattern, "--apply"]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert config_path().read_bytes() == before
+    assert out["refused"] and out["suggestions"] == [
+        {"pattern": "*gen-runs*", "transcripts": 4, "indexed_sources": 4},
+        {"pattern": "*-gen-runs/*", "transcripts": 3, "indexed_sources": 3},
+    ]
+
+
+def test_a_form_that_matches_nothing_is_not_suggested(machine, capsys):
+    db = machine["db"]
+    assert main(["--db", db, "sync"]) == 0
+    capsys.readouterr()
+
+    assert main(["--db", db, "--json", "exclude", "--add", "*/nothere/*", "--apply"]) == 2
+    assert json.loads(capsys.readouterr().out)["suggestions"] == []
+    assert main(["--db", db, "exclude", "--add", "*/nothere/*"]) == 0
+    out = capsys.readouterr().out
+    assert "no form of the pattern's last name matches anything either" in out
+    assert "'*nothere*'" not in out and "--force adds it anyway" in out
+
+
+def test_a_dash_encoded_pattern_for_a_project_not_run_yet_needs_force(machine, capsys):
+    """Any pattern holding a ``/`` that matches nothing is refused, the form Claude Code uses too;
+    --force excludes a project ahead of its first session."""
+    args = ["--db", machine["db"], "exclude", "--add", "*/-Users-me-later/*", "--apply"]
+    assert main(args) == 2
+    assert capture_exclude_patterns() == []
+    assert main([*args, "--force"]) == 0
     assert capture_exclude_patterns() == ["*/-Users-me-later/*"]
-    assert "refuse" not in capsys.readouterr().out
+
+
+def test_adding_a_pattern_already_in_the_config_is_a_no_op(machine, capsys):
+    """Review of #50: a pattern added with --force was refused when added again."""
+    args = ["--db", machine["db"], "exclude", "--add", "*/nothere/*", "--apply"]
+    assert main([*args, "--force"]) == 0
+    before = config_path().read_bytes()
+    capsys.readouterr()
+
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert config_path().read_bytes() == before
+    assert "*/nothere/* is already in capture.exclude, so --add changes nothing" in out
+    assert "refuse" not in out
+    assert main(["--db", machine["db"], "exclude", "--add", "*/nothere/*"]) == 0
+    assert "refuse" not in capsys.readouterr().out  # the dry run does not threaten it either
 
 
 @pytest.mark.parametrize(
     ("pattern", "forms"),
     [
-        ("*/olivia-career/*", ["*-olivia-career/*", "*olivia-career*"]),
-        ("*/olivia-career", ["*-olivia-career/*", "*olivia-career*"]),
-        ("*/Developer/olivia-career/*", ["*-Developer-olivia-career/*", "*olivia-career*"]),
-        ("*/my.site/*", ["*-my-site/*", "*my-site*"]),
-        (
-            "/Users/me/Developer/olivia-career/*",
-            ["*/-Users-me-Developer-olivia-career/*", "*olivia-career*"],
-        ),
-        ("~/work/*", ["*/-Users-me-work/*", "*work*"]),
-        ("*/-Users-me-gen-runs/*", []),  # already dash-encoded
-        ("*olivia-career*", []),  # no path
-        ("*/g1.jsonl", []),  # a file, not a directory
+        ("*/olivia-career/*", ["*olivia-career*", "*-olivia-career/*"]),
+        ("*/olivia-career", ["*olivia-career*", "*-olivia-career/*"]),
+        ("*/Developer/olivia-career/*", ["*olivia-career*", "*-olivia-career/*"]),
+        ("*/my.site/*", ["*my-site*", "*-my-site/*"]),
+        ("/Users/me/Developer/olivia-career/*", ["*olivia-career*", "*-olivia-career/*"]),
+        ("~/work/*", ["*work*", "*-work/*"]),
+        ("~/.claude/projects/olivia-career/*", ["*olivia-career*", "*-olivia-career/*"]),
+        ("*/olivia-career*", ["*olivia-career*", "*-olivia-career/*"]),
+        ("*/olivia-career/*/subagents/*", ["*olivia-career*", "*-olivia-career/*"]),
+        ("*/-Users-me-gen-runs/*", ["*Users-me-gen-runs*", "*-Users-me-gen-runs/*"]),
+        ("*/g1.jsonl", []),  # a file, and no name before it
         ("*/*/subagents/*", []),  # a directory Claude Code writes itself
         ("*/.claude/projects/*", []),  # the transcript source's own path
     ],

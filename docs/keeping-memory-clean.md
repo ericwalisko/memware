@@ -195,19 +195,24 @@ directory per working directory under `~/.claude/projects`, named after the whol
 character but a letter or digit made a dash: `/Users/me/gen-runs` is `-Users-me-gen-runs`, and
 `/Users/me/Developer/olivia-career` is `-Users-me-Developer-olivia-career`. So
 `*/-Users-me-gen-runs/*` names every session started in `/Users/me/gen-runs`, and their subagents'
-transcripts in `<session>/subagents/` with them. A pattern written as the path, such as
-`*/olivia-career/*`, names no directory there and matches nothing. Two forms do match:
+transcripts in `<session>/subagents/` with them. A session started in a subdirectory or a worktree
+of a project gets a directory of its own: `/Users/me/Developer/olivia-career/.claude/worktrees/feat`
+is `-Users-me-Developer-olivia-career--claude-worktrees-feat`. A pattern written as the path, such
+as `*/olivia-career/*`, names no directory there and matches nothing. Two forms do match:
 
 | pattern | matches |
 |---|---|
-| `'*-olivia-career/*'` | the directory whose name ends with `-olivia-career`: every session started in a directory called `olivia-career`, wherever it is |
-| `'*olivia-career*'` | every path holding `olivia-career` anywhere, including a neighbour such as `-Users-me-olivia-career-archive` |
+| `'*olivia-career*'` | **to keep a project out, use this one.** Every path holding `olivia-career`: sessions started in the project, in its subdirectories and in its worktrees, and in any other directory whose name holds it, such as `-Users-me-olivia-career-archive` |
+| `'*-olivia-career/*'` | only sessions started in a directory named `olivia-career` itself. Sessions started in its subdirectories and worktrees stay indexed |
 
 `memware exclude --add` says when a new pattern matches no transcript on disk and no indexed
-source. When the pattern is written as a path, it prints the dash-encoded and `*name*` forms with
-what each would match, and `--apply` refuses it: nothing is written and it exits 2. `--force`
-adds it anyway, for a project you have not run yet and want excluded ahead of time; a pattern
-already in the dash-encoded form, such as `*/-Users-me-later/*`, is added without it.
+source. When the pattern holds a `/`, it prints those two forms, built from the pattern's last
+name (`~/.claude/projects/olivia-career/*` and `*/olivia-career*` give the same two), each with the
+transcripts and indexed sources it matches; a form that matches nothing is left out. `--apply`
+refuses the pattern: nothing is written and it exits 2. `--force` adds it anyway, for a project
+you have not run yet and want excluded ahead of time, even one in the dash-encoded form such as
+`*/-Users-me-later/*`. Adding a pattern already in `capture.exclude` again changes nothing and
+exits 0.
 
 Every sync skips a matching transcript and un-indexes it if an earlier sync indexed it, exactly as
 it does for a marker: the hooks, the `SessionStart` catch-up, `memware sync`, `backfill`, `setup`
@@ -226,10 +231,14 @@ the write-ahead log, without waiting for a reader while it holds the lock. A sea
 deleted row's words, lowercased, on its pages until it merges, so without this step the
 un-indexed text stayed in the file, and in any backup taken afterwards, until a `memware prune
 --scrub`. Having no single text to look for, it then checks the index itself and prints `left in
-the search index`: the terms on its pages that no live row holds. It exits 1, with the command to
-finish (`memware --db … prune --scrub`), when the scrub did not finish, the write-ahead log could
-not be emptied, or the index still holds such terms or could not be read. The un-index stays
-committed either way. Like a prune, it names the backup destination, whose snapshots and mirrored
+the search index`: the terms on its pages that no live row holds. The check reads the index as the
+store's connection sees it, write-ahead log included, so the line says `nothing` only when the
+scrub finished and emptied the log, and the file holds exactly the pages it read. When another
+process was reading and the log could not be emptied, the file may still hold the pages the scrub
+rewrote, and the line says `not checked` and why. It exits 1, with the command to finish
+(`memware --db … prune --scrub`), when the scrub did not finish, the write-ahead log could not be
+emptied, or the index still holds such terms or could not be read. The un-index stays committed
+either way. Like a prune, it names the backup destination, whose snapshots and mirrored
 transcripts from before may still hold the text; memware never changes them. `memware scan
 --backups` counts them.
 
@@ -487,6 +496,7 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | never index or mirror this run | `MEMWARE_NO_CAPTURE=1` in its environment (a memware hook must run in the session) |
 | never write the transcript at all | `claude -p --no-session-persistence` |
 | never index or mirror a generator, whatever its environment | run it from its own directory; `memware exclude --add '*/-Users-me-gen-runs/*'` (the directory's path, every character but a letter or digit a dash), then again with `--apply` |
+| keep a project out, its worktrees and subdirectories too | `memware exclude --add '*<project name>*'`, then again with `--apply` |
 | never index or mirror anything matching a phrase | add the phrase to `~/.memware/ignore-markers.txt` |
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |

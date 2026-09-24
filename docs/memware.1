@@ -76,15 +76,22 @@ which writes the config, un\-indexes the indexed sources the patterns match and,
 un\-indexed anything, scrubs the store file as
 .B prune \-\-apply
 does, checks the search index for terms of deleted rows, and exits 1 with the command to finish
-when either falls short. A new pattern written as a path that matches nothing, such as
+when either falls short. A new pattern holding a
+.B /
+that matches nothing, such as
 .IR */olivia\-career/* ,
 is refused by
 .B \-\-apply
-(exit 2) with the dash\-encoded and
-.I *name*
-forms that would match;
+(exit 2). The output lists the forms built from its last name that match something, each with its
+count:
+.I *olivia\-career*
+first, which keeps the project out with its subdirectories and worktrees, then
+.IR *\-olivia\-career/* ,
+which leaves their sessions indexed.
 .B \-\-force
-adds it anyway.
+adds the pattern anyway. Adding a pattern already in
+.B capture.exclude
+changes nothing and exits 0.
 .TP
 .BI "recall " QUERY " ..."
 Search turns and beliefs. Pass several phrasings, fused by reciprocal rank. Flags:
