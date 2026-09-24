@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-24
+
 ### Added
 - **An optional relevance filter for prompt-time injection, off by default.** The prompt hook and
   the Hermes provider's `prefetch` pick beliefs by keyword, so a prompt about an incident report
