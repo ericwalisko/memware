@@ -225,10 +225,14 @@ REJECT (keep: false) — expect to reject MOST excerpts:
   - transient state: the version a branch, build or install is currently at
     ("main is at 0.4.0", "the built wheel is 0.5.0"); the status of an issue, PR,
     run or check ("PR #12 is merged", "CI is red"); what a PR contains
-  - for both, ask: would the value need re-checking to know it is still true? A
-    pinned or required version would not ("ruff is pinned to 0.16.5"); a current
-    or built version would. A configured limit would not ("the retry limit is
-    5"); a count would.
+  - a defect, a review finding or an open issue: it stops being true when
+    someone fixes it ("known issue: retract skips confirmed rows", "must-fix:
+    the docstring promises the wrong order")
+  - for all three, ask: would the value need re-checking to know it is still
+    true? A pinned or required version would not ("ruff is pinned to 0.16.5"); a
+    current or built version would. A configured limit would not ("the retry
+    limit is 5"); a count would. A fix, its cause, a workaround, or a by-design
+    limitation would not; an open defect would.
   - a prediction, an intention, or an option under discussion — only what IS
   - anything whose subject or value would be a pronoun ("it", "this", "that")
 

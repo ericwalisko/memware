@@ -88,24 +88,34 @@ and the digest leave out:
 
 | reason | what (derived beliefs only, and only unambiguous ones) | example |
 |---|---|---|
-| `measurement` | a count, total or "number of" over rows, records, tests, files, lines, commits, duplicates, accounts, users or downloads; a magnitude or a comma-grouped number of 1,000 or more beside one of those; an "N of M" over one, or over a completion word ("backfilled"); a relation that is exactly progress, coverage or null rate | `memware test suite test count: 91 tests` |
+| `measurement` | a relation that is exactly progress, coverage or null rate; a count, total or "number of" over rows, records, tests, files, lines, commits, duplicates, accounts, users or downloads; a magnitude or a comma-grouped number of 1,000 or more beside one of those; an "N of M" over one, in the relation or as the subject's noun, or over a completion word ("backfilled"); not when the relation says it must hold ("must pass", "at least") | `memware test suite test count: 91 tests`, `appointment rows eligible and exported: 2,454 of 10,346` |
 | `moving_version` | a version string the subject or relation calls current, latest, built, installed, deployed, released or on main | `memware main branch current version: 0.4.0` |
-| `status` | a relation that is exactly status, state or progress, whose value is a status word (open, merged, review, blocked, failing, archived, …) or whose subject names an instance (`#12`, `t_cd03d14d`, or ending in run, scan, build, job, PR, issue or card) | `card t_cd03d14d status: review`, `graph_health scan status: clean` |
+| `status` | a relation that is exactly status, state or progress, whose value is a status word (open, merged, review, blocked, failing, connected, …) or whose subject names an instance (`#12`, `t_cd03d14d`, or ending in run, scan, build, job, PR, issue or card); a relation ending in status, whose value is a status word or where an instance id (`#31`, `t_…`) is named; a relation that names a finding or a defect (known issue, open issue, must-fix issue, should-fix issue, blocker), unless the value points at where it is tracked or states a by-design limitation or a workaround | `card t_cd03d14d status: review`, `memware PR #31 ci status: green`, `memware known issue: …` |
 | `contradicted` | inside a project: a belief about a package's own version that differs from the version that package declares | `built memware wheel version: 0.5.0` in a 0.6.1 checkout |
 | `older_version` | the same: a belief naming an older version beside the package's name | `memware 0.4.0 known issue: …` |
 
 **Precision over recall.** Hiding a durable fact silently removes something you relied on; a
 stale belief that slips through is how memware behaved before, and `memware beliefs retract ID`
-removes it. So these rules catch only what is unambiguous, and a qualifier anywhere in the
-subject or relation always means durable: slo, sla, target, threshold, budget, commitment, fail
-under, min, max, limit, default, initial, final, required, desired, every, schedule, check, and
-their like (`api p99 latency slo: 200ms`, `ci status check: required`, `order state machine final
-state: completed`, `nightly backup cron runs every: 6 hours`). Anything else in doubt is durable
-too: `main branch python version: 3.12`, `feature flag dark_mode state: enabled`, `rollout
-percentage: 10%`. The fuzzy judgment belongs to derive's prompt, which sees the excerpt; this
-sees only a triple. `tests/data/volatility_cases.jsonl` is the labeled corpus the rules are held
-to: no durable case may be left out, and the volatile cases they miss (`api p95 latency: 340ms`,
-`memware build status: green`, a `known issue` outside its project, …) are listed there, marked.
+removes it. So these rules catch only what is unambiguous, and a qualifier, checked before every
+rule, means durable: slo, sla, target, threshold, budget, commitment, fail under, min, max, limit,
+default, initial, final, required, desired, every, schedule, retention, pin, check, and their like,
+as any word of the relation or a whole word of the subject (`api p99 latency slo: 200ms`, `ci
+status check: required`, `required ci coverage: 90%`, `nightly backup cron runs every: 6 hours`,
+`export job scheduled row count: 4,200 rows`). An identifier in the subject is a name:
+`scheduled_export` is an export, not a schedule. One that names a setting still counts: its last
+part is the qualifier (`export-schedule`, `ruff-pin`), it holds a bound (`min_coverage`), or it
+joins a qualifier to what would be measured (`max_rows`, `page_size`). A compound "… state" is a
+design term (`sync indicator error state: red`), and a finding that points at its tracker or
+states a by-design limitation stays. Anything else in doubt is durable too: `main branch python
+version: 3.12`, `feature flag dark_mode state: enabled`, `rollout percentage: 10%`. The fuzzy judgment belongs to derive's prompt, which sees the excerpt;
+this sees only a triple. `tests/data/volatility_cases.jsonl` is the labeled corpus the rules are
+held to: no durable case may be left out, and the volatile cases they miss (`api p95 latency:
+340ms`, `memware sync at 50k turns latency: 3.7 s`, …) are listed there, marked.
+
+To see why one belief is or is not injected, `memware beliefs --explain ID` prints its class or
+durable, the test that decided it (with the qualifier and the field it came from, for a veto),
+each exemption and the manifest check, and `injected : yes` or `no`. `memware beliefs --explain
+--subject S --relation R --value V` judges a triple that is not in the ledger, with no store.
 
 The manifest is `pyproject.toml` (`project.version`, a hatch `[tool.hatch.version] path` holding
 `__version__`, or poetry), `package.json` or `Cargo.toml`, read from the root of the project the

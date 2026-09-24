@@ -91,3 +91,102 @@ def test_the_corpus_holds_what_the_reviews_and_the_hub_session_named():
     assert counts["durable"] >= 60 and counts["miss"] >= 1
     for c in CASES:
         assert c["why"] and c["from"], c
+
+
+def test_the_corpus_holds_what_issue_42_and_card_t_571a37a3_named():
+    """Each with the class the card requires; the last two are volatile and missed on purpose:
+    too close to durable config for a word rule."""
+    got = {
+        (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
+        for c in CASES
+        if not c.get("project")
+    }
+    for triple, expect in [
+        (("export job", "scheduled row count", "4,200 rows"), "durable"),
+        (("export job", "row count", "4,200 rows"), "measurement"),
+        (("field audit", "spec-required row count", "4,200 rows"), "durable"),
+        (("field audit", "row count", "4,200 rows"), "measurement"),
+        (("scheduled_export", "null rate", "41% null"), "measurement"),
+        (("nightly_export", "null rate", "41% null"), "measurement"),
+        (("appointment rows", "eligible and exported", "2,454 of 10,346"), "measurement"),
+        (("appointment rows", "rows exported", "2,454 of 10,346"), "measurement"),
+        (("rate limit", "requests", "1,000"), "durable"),
+        (("max upload", "size", "20 MB"), "durable"),
+        (("nightly backup cron", "runs every", "6 hours"), "durable"),
+        (("memware PR #31", "ci status", "green"), "status"),
+        (("Eric 17 Pro", "connection status", "connected"), "status"),
+        (("sidebar", "default state", "open"), "durable"),
+        (("circuit breaker", "initial state", "closed"), "durable"),
+        (("order state machine", "final state", "completed"), "durable"),
+        (("k8s deployment", "desired state", "running"), "durable"),
+        (("github branch protection", "status checks", "test, lint"), "durable"),
+        (("ci", "status check", "required"), "durable"),
+        (("memware PR #31", "must-fix issue", "retract skips confirmed rows"), "status"),
+        (("the release", "blocker", "notarisation"), "status"),
+        (("memware sync at 50k turns", "latency", "3.7 s"), "miss"),
+        (("personal-os board", "open cards count", "55"), "miss"),
+    ]:
+        assert got.get(triple) == expect, triple
+    for relation in ("known issue", "open issue", "must-fix issue", "should-fix issue", "blocker"):
+        assert any(c["relation"] == relation and c["expect"] == "status" for c in CASES), relation
+    assert (
+        got[
+            (
+                "memware 0.4.0",
+                "known issue",
+                "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder",
+            )
+        ]
+        == "status"
+    )
+
+
+def test_the_corpus_holds_what_the_pr51_review_named():
+    """The hub's review of PR #51 found durable facts the first rules hid; each is pinned with
+    the class its decision requires. The last two are volatile and missed on purpose."""
+    got = {
+        (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
+        for c in CASES
+        if not c.get("project")
+    }
+    for triple, expect in [
+        (("kanban card", "review state", "requires two approvals"), "durable"),
+        (("release build", "release state", "tag then publish"), "durable"),
+        (("backup job", "exit status", "non-zero on failure"), "durable"),
+        (("sync indicator", "error state", "red"), "durable"),
+        (("ci badge", "failing state", "red"), "durable"),
+        (("pairware card", "approved state", "green"), "durable"),
+        (("memware PR #31", "ci status", "green"), "status"),
+        (("Eric 17 Pro", "connection status", "connected"), "status"),
+        (("t_31080683 on personal-os board", "test status", "1 failed, 14 passed"), "status"),
+        (("personal-os PR #152", "deployed status", "deployed"), "status"),
+        (("required ci", "coverage", "90%"), "durable"),
+        (("export-schedule", "rows", "4,200 rows"), "durable"),
+        (("backup-retention", "files", "1,000 files"), "durable"),
+        (("ruff-pin", "current version", "0.16.5"), "durable"),
+        (("scheduled_export", "null rate", "41% null"), "measurement"),
+        (("appointment rows", "eligible and exported", "2,454 of 10,346"), "measurement"),
+        (("memware", "open issues", "tracked at github.com/ericwalisko/memware/issues"), "durable"),
+        (("sqlite fts5", "known issue", "no infix matching (by design)"), "durable"),
+        (("known issue", "workaround", "pass --no-cache"), "durable"),
+        (
+            (
+                "memware 0.4.0",
+                "known issue",
+                "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder",
+            ),
+            "status",
+        ),
+        (
+            (
+                "memware belief classifier",
+                "must-fix issue",
+                "Config values are treated as measurements",
+            ),
+            "status",
+        ),
+        (("release gate tests", "must pass", "3 of 3"), "durable"),
+        (("scheduled_user_sync", "row count", "4,200 rows"), "miss"),
+        (("scheduled_test_run", "status", "failing"), "miss"),
+    ]:
+        assert got.get(triple) == expect, triple
