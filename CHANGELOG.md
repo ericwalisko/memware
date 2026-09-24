@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-24
+
 ### Added
 - **`memware beliefs --explain ID` says why a belief is, or is not, injected (#43).** `--stale`
   explained what injection leaves out, but nothing explained what it lets in, so a stale belief
