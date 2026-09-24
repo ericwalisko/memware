@@ -3,10 +3,22 @@
 A memory-provider plugin implementing Hermes's `MemoryProvider` ABC.
 
 ```bash
-pip install memware                                   # in the Python env Hermes uses
 cp -R integrations/hermes/memware "$HERMES_HOME/plugins/memware"   # default HERMES_HOME=~/.hermes
-hermes memory setup                                   # select "memware"; accept the defaults
+hermes memory setup      # select "memware"; accept the defaults; Hermes installs memware for you
 ```
+
+`plugin.yaml` declares `python_dependencies: ["memware>=X.Y.Z"]`. Hermes' package manager
+installs memware from PyPI into Hermes' own venv during `hermes memory setup`, and puts it back
+in every venv it rebuilds later (`hermes update`, `hermes pm install`, a desktop-app update).
+Restart the gateway afterwards. Do not `pip install` memware into that venv by hand: Hermes does
+not record a hand install, and its next rebuild drops it. If `hermes memory status` reports memware
+`not available`, run `hermes pm install`, not `hermes pm repair`: repair rebuilds the package set
+Hermes already recorded and does not add a new declaration. A Hermes old enough to have no
+`hermes pm` needs `pip install memware` in the Python env it runs.
+
+Hermes keeps the memware version already in its lock as long as the floor is met. To move
+Hermes to a new release, copy the plugin from that release (its floor names the release), run
+`hermes pm install`, and restart the gateway.
 
 | hook / tool | what it does |
 |---|---|
