@@ -33,6 +33,14 @@ HERMES = Path(__file__).resolve().parents[1] / "integrations" / "hermes" / "memw
 KEY = "sk-test-not-a-real-key"
 
 
+class QuietServer(http.server.ThreadingHTTPServer):
+    """A client that gave up on a slow reply is not worth a traceback: printed to stderr, it lands
+    in whichever later test is capturing stderr at the time."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        pass
+
+
 class FakeJev:
     """Answers each noul by the subject its fact starts with, as :attr:`p` says (default 0)."""
 
@@ -43,14 +51,15 @@ class FakeJev:
         self.reply: bytes | None = None  # raw body instead of the computed answers
         self.truncate = False  # promise more bytes than are sent, then hang up
         self.requests: list[dict[str, Any]] = []
+        self.stopped = threading.Event()
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append({"headers": dict(self.headers), "body": body})
-                if fake.delay:
-                    time.sleep(fake.delay)
+                if fake.delay and fake.stopped.wait(fake.delay):
+                    return  # torn down: the client gave up long ago; write nothing
                 if fake.status != 200:
                     self.send_error(fake.status)
                     return
@@ -70,7 +79,7 @@ class FakeJev:
             def log_message(self, *args: Any) -> None:
                 pass
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = QuietServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1/systemone"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
@@ -87,6 +96,11 @@ class FakeJev:
     def p_for(self, fact: str) -> float:
         return next((p for s, p in self.p.items() if fact.startswith(s + " ")), 0.0)
 
+    def close(self) -> None:
+        self.stopped.set()  # wake any handler still sleeping out a delay
+        self.server.shutdown()
+        self.server.server_close()
+
 
 @pytest.fixture()
 def jev(monkeypatch):
@@ -94,8 +108,7 @@ def jev(monkeypatch):
     monkeypatch.setattr(relevance, "ENDPOINT", fake.url)
     monkeypatch.setenv("TYPESAFE_API_KEY", KEY)
     yield fake
-    fake.server.shutdown()
-    fake.server.server_close()
+    fake.close()
 
 
 @pytest.fixture()
@@ -314,17 +327,22 @@ def test_filter_fails_open(capsys, monkeypatch, db, jev, failure):
 def test_the_deadline_covers_a_slow_name_lookup(capsys, monkeypatch, db, jev):
     """The socket timeout bounds each read, not a name lookup; the hook's deadline bounds both."""
     configure(mode="filter", timeout_s=0.3)
-    lookup = socket.getaddrinfo
+    released = threading.Event()
 
-    def slow(*a, **k):
-        time.sleep(2.0)
-        return lookup(*a, **k)
+    def slow(
+        *a, **k
+    ):  # stalls until the test ends, then fails: the abandoned thread connects nowhere
+        released.wait(5.0)
+        raise OSError("lookup abandoned")
 
     monkeypatch.setattr(socket, "getaddrinfo", slow)
-    started = time.monotonic()
-    out = hook(capsys, monkeypatch, db)
-    assert time.monotonic() - started < 1.5
-    assert json.loads(out) == json.loads(LEDGER["golden_hook"])
+    try:
+        started = time.monotonic()
+        out = hook(capsys, monkeypatch, db)
+        assert time.monotonic() - started < 1.5
+        assert json.loads(out) == json.loads(LEDGER["golden_hook"])
+    finally:
+        released.set()
 
 
 def test_filter_fails_open_when_the_endpoint_refuses_the_connection(capsys, monkeypatch, db):
@@ -370,8 +388,7 @@ def test_a_redirect_is_refused_so_the_key_goes_nowhere_else(capsys, monkeypatch,
         assert json.loads(hook(capsys, monkeypatch, db)) == json.loads(LEDGER["golden_hook"])
         assert other.requests == []
     finally:
-        other.server.shutdown()
-        other.server.server_close()
+        other.close()
 
 
 # -- (c) shadow mode ------------------------------------------------------------------------
