@@ -94,6 +94,37 @@ reliability than the incumbent is stored as `status='candidate'` and a review
 is opened. Candidates never reach recall. Under `await_confirmation` every
 conflict is reviewed; under `auto` the newest event time wins.
 
+## 7. An optional relevance check before injection
+
+**The problem.** Unsolicited injection selects beliefs by BM25 and a subject term shared with the
+prompt. That is literal: "draft a short incident report" admits a short story's title and a weekly
+report's path. Recall on demand does not suffer this, because the agent that asked supplies the
+phrasings and reads the results. Injection has no reader until the model sees the block.
+
+**memware.** `memware.relevance` can put one yes/no question per candidate to a calibrated
+classifier (TypeSafe's System One, pinned to `jev-1.13.0`), all in one request, and keep the
+candidates that clear a threshold. It is off by default, following CONTRIBUTING's rule that a model
+in the read path is an optional extra. It keeps these invariants:
+
+- **Off is off.** With `relevance.mode` unset or anything other than `shadow` or `filter`, no key
+  is read and no socket is opened. The hook's output is byte-identical to the output before the
+  filter existed; `tests/test_relevance.py` pins it against output captured from origin/main.
+- **A subset, never an addition.** The classifier returns probabilities and never text. The
+  injected block is a subset of the candidates that already passed the subject and volatility
+  gates, capped at k, so no instruction in a prompt or a stored fact can add words to it.
+- **Failure is off.** No key, a timeout, an HTTP error, a redirect or a malformed reply each
+  inject what off injects. There is one attempt under a hard deadline, because the hook runs
+  before every prompt.
+- **What memware would not index, it does not send.** A session kept out of the store (the
+  no-capture switch or list, a `capture.exclude` glob, an ignore marker) and a turn nobody typed
+  (a task notification, a subagent's hook) make no request.
+- **Recall is untouched.** The `recall` tool, `memware recall` and `memware beliefs` never pass
+  through the filter. It applies only to the prompt hook and Hermes prefetch.
+
+Shadow mode logs each (prompt, candidate) pair with a stable id, so the threshold can be chosen
+from labelled pairs rather than taken on trust. A calibrated probability is not a correct answer
+until it has been checked against labels.
+
 ## Non-goals
 
 - A knowledge graph as the truth layer. Entities and multi-hop belong in a wiki

@@ -10,7 +10,7 @@ hermes memory setup                                   # select "memware"; accept
 
 | hook / tool | what it does |
 |---|---|
-| `prefetch` | injects the few current beliefs relevant to the turn, each with the date it was recorded (never a superseded value, and never a derived measurement, moving version or status; see [what injection leaves out](../../docs/integrations.md#what-injection-leaves-out)) |
+| `prefetch` | injects the few current beliefs relevant to the turn, each with the date it was recorded (never a superseded value, and never a derived measurement, moving version or status; see [what injection leaves out](../../docs/integrations.md#what-injection-leaves-out)); with the optional, off-by-default [relevance filter](../../README.md#optional-a-relevance-filter-for-prompt-time-injection) on, only those it judges relevant |
 | `sync_turn` | appends the completed turn to `<hermes_home>/memware/sessions/<id>.jsonl` and indexes it, in a daemon thread |
 | `on_session_end` / `on_pre_compress` | flushes and re-syncs the session file |
 | `on_memory_write` | mirrors built-in `MEMORY.md` adds into the ledger as human-stated beliefs |
@@ -19,6 +19,10 @@ hermes memory setup                                   # select "memware"; accept
 
 Config (`hermes memory setup` → `<hermes_home>/memware.json`): `db_path` (default
 `~/.memware/memware.db`, shared with Claude Code and the CLI), `prefetch_k`, `auto_sync`.
+The relevance filter is not a Hermes setting. `prefetch` reads `relevance.mode` from memware's own
+config (`memware config relevance.mode …`), and reads `TYPESAFE_API_KEY` from Hermes's
+environment or `~/.memware/.env`, so one switch covers both harnesses. The switch is off by
+default. When it is on, each turn's query and its candidate beliefs are sent to TypeSafe.
 
 Set `MEMWARE_NO_CAPTURE=1` in Hermes's environment and the provider captures nothing: no session
 file, no indexed turn, no mirrored memory write. The tools still work.

@@ -12,7 +12,8 @@ memware is one SQLite file with two stores:
   `(subject, relation)` **supersedes** the old one. Recall only ever returns the
   currently valid belief; history is kept for audit and never reaches a prompt.
 
-No daemon, no vector database, no LLM call at capture or read time. A 30-day
+No daemon, no vector database, and no model call at capture or read time unless you switch on
+the optional [relevance filter](#optional-a-relevance-filter-for-prompt-time-injection). A 30-day
 corpus of a busy coding agent — 18k turns, 40k passages — indexes in about
 fourteen seconds into ~120 MB.
 
@@ -188,7 +189,98 @@ recall(queries=["which port does the api listen on", "api port", "8443", "gatewa
 Byte-identical hits collapse to a single slot, so a prompt captured on many days — a scheduled job's own preamble, say — never crowds out distinct evidence; the turns stay in the store and a session still reads back whole.
 
 Prompt-time injection (the hooks) stays deterministic and only injects beliefs whose
-*subject* the prompt names.
+*subject* the prompt names. The optional filter below can drop some of those; it never adds one.
+
+## Optional: a relevance filter for prompt-time injection
+
+**Off by default.** Nothing in this section happens until you switch it on, and with it off memware
+makes no network call and injects exactly what it did before the filter existed.
+
+The prompt hook picks beliefs by keyword, and a shared word is not relevance. A prompt about an
+incident report also gets a weekly report's file path, and a prompt that says "draft a short note"
+gets a short story's title. memware can ask the System One model ("Jev") from
+[TypeSafe](https://typesafe.ai) whether each candidate bears on the prompt, and inject only the ones
+that clear a threshold. This is the only model call memware can make at read time, so you have to
+opt in to it.
+
+**What leaves your machine when it is on:** for each prompt the Claude Code hook sees, and each
+turn the Hermes provider prefetches for, memware sends the prompt text (cut to 2,000 characters)
+and up to 20 candidate beliefs, each as `subject relation: value`. They go over HTTPS to
+`api.typesafe.ai` with your API key. It sends no session id, path, transcript or date. What
+TypeSafe does with the data is set by [its terms](https://docs.typesafe.ai/legal).
+
+Two kinds of turn are never sent:
+
+- **A turn nobody typed:** a background task's notification, or a hook that fires inside a
+  subagent.
+- **A session memware keeps out of its store:** `MEMWARE_NO_CAPTURE=1`, the no-capture list, a
+  `capture.exclude` glob, or an ignore marker in the prompt.
+
+So `memware exclude --add '*/<project-dir>/*' --apply` keeps every prompt from that project on the
+machine. It also keeps that project out of memware's index, since that is what the glob is for. If
+some of your work must not leave the machine, exclude it that way before you turn the filter on,
+or leave the filter off.
+
+```bash
+echo 'TYPESAFE_API_KEY=<your key>' >> ~/.memware/.env   # or export it where the hooks run
+memware config relevance.mode shadow     # make the call and log it; injection unchanged
+memware config relevance.mode filter     # once the log says the threshold is right
+memware config relevance.mode off        # no calls at all (the default)
+```
+
+| mode | request per prompt | what is injected | log |
+|---|---|---|---|
+| `off` | none | memware's own top k | none |
+| `shadow` | one | unchanged | one line per candidate |
+| `filter` | one | the candidates at or above the threshold, most probable first, at most k | one line per candidate |
+
+Any other value reads as `off`, so a typo never switches it on. The other settings, each set with
+`memware config relevance.<name> VALUE`:
+
+- `threshold` (0.5)
+- `pool` (20 candidates, taken from memware's own ranking, so a relevant fact ranked seventh can
+  replace a lexical hit)
+- `timeout_s` (1.5, at most 5)
+- `model` (`jev-1.13.0`, pinned rather than `jev-latest` because a threshold is tuned against one
+  version)
+
+The Hermes provider reads the same switch.
+
+**It fails open.** memware makes one request with no retry, under a hard deadline. If it has no
+key, the request times out, the server returns an HTTP error or redirect, or the reply is not one
+probability per candidate, the hook injects exactly what it would with the filter off. Measured
+end to end on a synthetic ledger with a full pool of 20 candidates, over 100 prompts:
+
+| hook | p50 | p95 |
+|---|---|---|
+| off | 84 ms | 99 ms |
+| filter | 553 ms | 753 ms |
+
+One of the 100 calls hit the 1.5 s deadline and fell back to the unfiltered output.
+
+**Cost:** a full pool is about 3,200 input tokens per prompt. At jev-1.13's list price of $0.042
+per million input tokens (output is free), that is about $0.00014 per prompt.
+`~/.memware/relevance-usage.jsonl` records each answered request: its tokens, cost and latency,
+and no text.
+
+**Calibrating:** the default threshold of 0.5 has not been calibrated against your ledger. Shadow
+mode writes `~/.memware/relevance-log.jsonl`, with one line per prompt and candidate. Each line
+carries:
+
+- `pair_id`: the prompt's hash and the belief id, so the same pair is labelled once
+- memware's `rank` for the candidate, and `today`: whether memware injected it
+- `p`: the probability the model returned
+- `chosen`: whether filter mode would have injected it
+- `prompt` and `fact`: the texts that were sent
+
+Label a few dozen pairs as relevant or not, and pick the threshold that keeps what you need.
+**The log holds the text of your prompts,** so delete it when you are done. `memware nuke` removes
+both files; `memware scan` and `prune` do not read them.
+
+The model answers with probabilities and never with text. The injected block therefore holds only
+beliefs from your own ledger that passed memware's subject and staleness gates. A prompt or a
+stored fact written to steer the model can do no more than move a candidate that was already in
+the pool.
 
 ## Backups and the wipe trap
 

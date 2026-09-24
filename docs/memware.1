@@ -22,7 +22,10 @@ ledger records facts in which a new value for the same
 .RI ( subject ", " relation )
 .B supersedes
 the old one; recall only ever returns the currently valid belief, and history is kept for
-audit. There is no daemon, no vector database, and no model call at capture or read time.
+audit. There is no daemon, no vector database, and no model call at capture or read time,
+unless you switch on the optional relevance filter
+.RB ( relevance.mode ;
+off by default).
 .PP
 Recall is keyword search; the agent supplies the meaning by passing several phrasings, which
 are fused by reciprocal rank.
@@ -373,6 +376,16 @@ Content signatures, separated by newlines or
 .BR : ;
 a transcript whose head contains one is never indexed or mirrored.
 .TP
+.B TYPESAFE_API_KEY
+Key for the optional relevance filter, read only when
+.B relevance.mode
+is
+.B shadow
+or
+.BR filter ;
+also read from
+.IR <home>/.env .
+.TP
 .B NO_COLOR
 Honoured by construction \(em memware emits no colour at all.
 .SH FILES
@@ -388,6 +401,27 @@ a derived measurement, moving version or status is injected while younger than t
 The default, 0, never injects one;
 .B config
 refuses a value that is not a number of days, 0 or more.
+Also
+.BR relevance.mode :
+.B off
+(the default) makes no network call;
+.B shadow
+and
+.B filter
+send each prompt and its candidate facts to TypeSafe (api.typesafe.ai) to judge relevance before
+injection, and
+.B filter
+injects only what clears
+.BR relevance.threshold .
+.TP
+.I <home>/relevance-log.jsonl
+With the relevance filter on, one line per prompt and candidate, including the prompt text as
+sent, for choosing a threshold. Delete it when done;
+.B nuke
+removes it.
+.TP
+.I <home>/relevance-usage.jsonl
+With the relevance filter on, one line per answered request: tokens, cost and latency, no text.
 .TP
 .I <home>/ignore-markers.txt
 Content signatures for transcripts that must never be indexed or mirrored.
