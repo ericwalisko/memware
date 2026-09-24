@@ -91,3 +91,51 @@ def test_the_corpus_holds_what_the_reviews_and_the_hub_session_named():
     assert counts["durable"] >= 60 and counts["miss"] >= 1
     for c in CASES:
         assert c["why"] and c["from"], c
+
+
+def test_the_corpus_holds_what_issue_42_and_card_t_571a37a3_named():
+    """Each with the class the card requires; the last two are volatile and missed on purpose:
+    too close to durable config for a word rule."""
+    got = {
+        (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
+        for c in CASES
+        if not c.get("project")
+    }
+    for triple, expect in [
+        (("export job", "scheduled row count", "4,200 rows"), "durable"),
+        (("export job", "row count", "4,200 rows"), "measurement"),
+        (("field audit", "spec-required row count", "4,200 rows"), "durable"),
+        (("field audit", "row count", "4,200 rows"), "measurement"),
+        (("scheduled_export", "null rate", "41% null"), "measurement"),
+        (("nightly_export", "null rate", "41% null"), "measurement"),
+        (("appointment rows", "eligible and exported", "2,454 of 10,346"), "measurement"),
+        (("appointment rows", "rows exported", "2,454 of 10,346"), "measurement"),
+        (("rate limit", "requests", "1,000"), "durable"),
+        (("max upload", "size", "20 MB"), "durable"),
+        (("nightly backup cron", "runs every", "6 hours"), "durable"),
+        (("memware PR #31", "ci status", "green"), "status"),
+        (("Eric 17 Pro", "connection status", "connected"), "status"),
+        (("sidebar", "default state", "open"), "durable"),
+        (("circuit breaker", "initial state", "closed"), "durable"),
+        (("order state machine", "final state", "completed"), "durable"),
+        (("k8s deployment", "desired state", "running"), "durable"),
+        (("github branch protection", "status checks", "test, lint"), "durable"),
+        (("ci", "status check", "required"), "durable"),
+        (("memware PR #31", "must-fix issue", "retract skips confirmed rows"), "status"),
+        (("the release", "blocker", "notarisation"), "status"),
+        (("memware sync at 50k turns", "latency", "3.7 s"), "miss"),
+        (("personal-os board", "open cards count", "55"), "miss"),
+    ]:
+        assert got.get(triple) == expect, triple
+    for relation in ("known issue", "open issue", "must-fix issue", "should-fix issue", "blocker"):
+        assert any(c["relation"] == relation and c["expect"] == "status" for c in CASES), relation
+    assert (
+        got[
+            (
+                "memware 0.4.0",
+                "known issue",
+                "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder",
+            )
+        ]
+        == "status"
+    )

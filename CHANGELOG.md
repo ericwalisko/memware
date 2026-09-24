@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`memware beliefs --explain ID` says why a belief is, or is not, injected (#43).** `--stale`
+  explained what injection leaves out, but nothing explained what it lets in, so a stale belief
+  still reaching every prompt could only be diagnosed by driving the classifier's private
+  predicates by hand. `--explain` prints the class or `durable`, the test that decided it (the
+  rule that fired, or the check each class failed), the qualifier behind a veto and whether it
+  came from the subject or the relation, each exemption (reliability above 0.5, a source that is
+  not a `memware:session/` pointer, a confirmation), the manifest check and the
+  `inject.volatile_days` window, and `injected : yes` or `no`; `--json` too. `--explain
+  --subject S --relation R --value V` judges a triple that is not in the ledger and opens no
+  store. It reads the store through a handle SQLite refuses to write through. `--stale`, the
+  prompt hook, the digest and `--explain` all read one function, `Gate.explain`, and derive's
+  gate reads the same classification, so they cannot disagree.
+
+### Fixed
+- **An incidental word no longer turns a measurement durable (#42).** The qualifier veto split
+  `scheduled_export` on the underscore and found `scheduled`, and it ran before the relations the
+  module calls unconditional, so `scheduled_export | null rate | 41% null` was injected as a
+  durable fact. An identifier in the subject is now a name, read whole, unless it names a setting
+  itself (`max_rows`, `page_size`); a relation that is exactly progress, coverage or null rate is
+  a measurement whatever the subject says; and an "N of M" figure finds its counted noun in the
+  subject too (`appointment rows | eligible and exported | 2,454 of 10,346`). A count qualified in
+  the relation (`scheduled row count`, `spec-required row count`) stays durable: a target, not a
+  reading.
+
+### Changed
+- **Two narrow status rules, from beliefs that stayed injected after going stale.** A relation
+  ending in status or state (`memware PR #31 | ci status | green`, `connection status |
+  connected`) is a status when its value is a status word or its subject names an instance, unless
+  a qualifier or a state-machine word modifies it (`default state`, `final state`, `end state`,
+  `status check`). A relation naming a finding or a defect (`known issue`, `open issue`, `must-fix
+  issue`, `should-fix issue`, `blocker`) is a status whatever the value, which also catches
+  `memware 0.4.0 | known issue` outside its project, where the manifest rule cannot. Derive's
+  prompt now rejects "a defect, a review finding or an open issue: it stops being true when
+  someone fixes it". The labeled corpus grows from 115 to 140 cases with no durable case left out;
+  `memware sync at 50k turns | latency | 3.7 s` and `personal-os board | open cards count | 55`
+  stay missed on purpose, too close to durable configuration for a word rule.
+
 ## [0.8.0] - 2026-09-24
 
 ### Added

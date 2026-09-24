@@ -155,8 +155,9 @@ that names a belief no longer current is refused. Run `--stale` from inside the 
 `--cwd DIR`, so the manifest rules apply to it. A belief a person stated is never listed.
 
 **One the gate misses.** The rules catch only unambiguous cases, so some stale beliefs are still
-injected (`api p95 latency: 340ms`, a `known issue` read outside its project). Retract one by id:
-`memware beliefs SUBJECT` shows its id, and `memware beliefs retract ID --apply` retracts it.
+injected (`api p95 latency: 340ms`, `personal-os board open cards count: 55`). `memware beliefs
+--explain ID` says which test let it through. Retract one by id: `memware beliefs SUBJECT` shows
+its id, and `memware beliefs retract ID --apply` retracts it.
 
 **Keeping one the gate got wrong.** If `--stale` lists a fact you rely on, state it yourself:
 `memware assert SUBJECT RELATION VALUE` with the same value (or `remember` from an agent)
@@ -456,6 +457,7 @@ directory with an outsized share, which is the cue to mark it, list it or prune 
 | remove already-indexed runs | `memware prune --containing TEXT` / `--glob GLOB`, then again with `--apply` |
 | retract beliefs whose session is gone | `memware beliefs retract --orphaned`, then again with `--apply` |
 | see or retract measurements, moving versions and statuses injection leaves out | `memware beliefs --stale`; `memware beliefs retract --stale`, then again with `--apply` |
+| see why one belief is, or is not, injected | `memware beliefs --explain ID`; for a triple not in the ledger, `--explain --subject S --relation R --value V` |
 | remove runs already mirrored | delete them from `<dest>/transcripts` by hand; `memware backup` lists those it recognises, `memware scan --backups` finds any holding a text |
 | remove a value pasted into a session you keep | from a plain terminal: `memware prune --turns-containing` (it asks for the value), then again with `--apply`, then `memware scan --backups` ([runbook](#removing-a-value-a-token-a-password)) |
 | check whether a value is still stored anywhere | `memware scan --backups` (it asks for the value): transcripts (indexed or not), the store file and its index, backups |

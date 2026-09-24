@@ -67,6 +67,16 @@
 {"subject": "memware", "relation": "version", "value": "v0.6.1", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "the declared version"}
 {"subject": "memware 0.10.0", "relation": "planned feature", "value": "scan", "expect": "durable", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "a newer version, compared as a version"}
 {"subject": "dynpkg 1.2.0", "relation": "fixed in", "value": "x", "expect": "durable", "project": {"names": ["dynpkg", "dynpkg-ui"], "declared": [["dynpkg-ui", "1.4.0", "package.json"]]}, "from": "review-2", "why": "dynpkg declares no version (setuptools-scm); dynpkg-ui's 1.4.0 is not its version"}
+{"subject": "export job", "relation": "scheduled row count", "value": "4,200 rows", "expect": "durable", "from": "issue-42", "why": "a scheduled count is a target, not a reading"}
+{"subject": "field audit", "relation": "spec-required row count", "value": "4,200 rows", "expect": "durable", "from": "issue-42", "why": "a count the spec requires is a target"}
+{"subject": "rate limit", "relation": "requests", "value": "1,000", "expect": "durable", "from": "t_571a37a3", "why": "the subject names a limit"}
+{"subject": "max upload", "relation": "size", "value": "20 MB", "expect": "durable", "from": "t_571a37a3", "why": "the subject names a maximum"}
+{"subject": "k8s deployment", "relation": "desired state", "value": "running", "expect": "durable", "from": "t_571a37a3", "why": "a desired state is a setting"}
+{"subject": "order state machine", "relation": "end state", "value": "completed", "expect": "durable", "from": "probe", "why": "a state-machine term, like final state"}
+{"subject": "release policy", "relation": "blocker", "value": "any open P0", "expect": "durable", "from": "probe", "why": "a policy's blocker is a rule; the qualifier vetoes the finding rule"}
+{"subject": "max_rows", "relation": "set to", "value": "10,000 rows", "expect": "durable", "from": "probe", "why": "an identifier holding a bound names a setting"}
+{"subject": "page_size", "relation": "value", "value": "1,000 rows", "expect": "durable", "from": "probe", "why": "an identifier joining a qualifier to a measured noun names a setting"}
+{"subject": "memware", "relation": "coverage target", "value": "90%", "expect": "durable", "from": "probe", "why": "a target in the relation still vetoes; only an exact measure skips the veto"}
 {"subject": "the table", "relation": "row count", "value": "4.2 million rows", "expect": "measurement", "from": "issue-38", "why": "the row count derive filed"}
 {"subject": "staging table", "relation": "row count", "value": "4.2 million", "expect": "measurement", "from": "issue-38", "why": "a row count"}
 {"subject": "staging table", "relation": "duplicate rows removed", "value": "10,671", "expect": "measurement", "from": "issue-38", "why": "a tally of one run"}
@@ -77,7 +87,7 @@
 {"subject": "memware main branch", "relation": "current version", "value": "0.4.0", "expect": "moving_version", "from": "hub-session", "why": "where main was"}
 {"subject": "memware main branch", "relation": "current version", "value": "0.4.0", "expect": "contradicted", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "hub-session", "why": "pyproject.toml says 0.6.1"}
 {"subject": "memware 0.4.0", "relation": "known issue", "value": "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder", "expect": "older_version", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "hub-session", "why": "names 0.4.0 inside a 0.6.1 project"}
-{"subject": "memware 0.4.0", "relation": "known issue", "value": "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder", "expect": "status", "miss": true, "from": "hub-session", "why": "outside the project nothing says 0.4.0 is old, and 'known issue' is not an exact status relation"}
+{"subject": "memware 0.4.0", "relation": "known issue", "value": "MEMWARE_NO_CAPTURE sessions get indexed and copied to the backup folder", "expect": "status", "from": "hub-session", "why": "'known issue' names a finding: it stops being true once fixed"}
 {"subject": "card t_cd03d14d", "relation": "status", "value": "review", "expect": "status", "from": "hub-session", "why": "a card's lane"}
 {"subject": "Card", "relation": "status", "value": "blocked", "expect": "status", "from": "hub-session", "why": "a card's lane"}
 {"subject": "de-orphan card t_09736013", "relation": "status", "value": "archived", "expect": "status", "from": "hub-session", "why": "a card's lane"}
@@ -101,6 +111,22 @@
 {"subject": "memware", "relation": "version", "value": "0.5.0", "expect": "contradicted", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "pyproject.toml says 0.6.1"}
 {"subject": "memware 0.4.0", "relation": "config format", "value": "toml", "expect": "older_version", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "names 0.4.0"}
 {"subject": "memware@0.5.2", "relation": "regression", "value": "context hook slow", "expect": "older_version", "project": {"names": ["memware"], "declared": [["memware", "0.6.1", "pyproject.toml"]]}, "from": "probe", "why": "names 0.5.2"}
+{"subject": "export job", "relation": "row count", "value": "4,200 rows", "expect": "measurement", "from": "issue-42", "why": "control: a row count"}
+{"subject": "field audit", "relation": "row count", "value": "4,200 rows", "expect": "measurement", "from": "issue-42", "why": "control: a row count"}
+{"subject": "scheduled_export", "relation": "null rate", "value": "41% null", "expect": "measurement", "from": "issue-42", "why": "an exact measure, and the identifier is a name, not a schedule"}
+{"subject": "nightly_export", "relation": "null rate", "value": "41% null", "expect": "measurement", "from": "issue-42", "why": "control: an exact measure"}
+{"subject": "appointment rows", "relation": "eligible and exported", "value": "2,454 of 10,346", "expect": "measurement", "from": "issue-42", "why": "an N of M over the subject's noun"}
+{"subject": "appointment rows", "relation": "rows exported", "value": "2,454 of 10,346", "expect": "measurement", "from": "issue-42", "why": "control: an N of M over the relation's noun"}
+{"subject": "memware PR #31", "relation": "ci status", "value": "green", "expect": "status", "from": "hub-session", "why": "a relation ending in status, injected after it went stale"}
+{"subject": "Eric 17 Pro", "relation": "connection status", "value": "connected", "expect": "status", "from": "hub-session", "why": "a connection's state, injected after it went stale"}
+{"subject": "nightly_cron_job", "relation": "status", "value": "failing", "expect": "status", "from": "probe", "why": "an identifier is a name: 'cron' inside it does not veto"}
+{"subject": "memware", "relation": "known issue", "value": "the digest header repeats on resume", "expect": "status", "from": "t_571a37a3", "why": "a finding: stale once fixed"}
+{"subject": "memware", "relation": "open issue", "value": "beliefs --stale lists confirmed rows", "expect": "status", "from": "t_571a37a3", "why": "a finding: stale once fixed"}
+{"subject": "memware PR #31", "relation": "must-fix issue", "value": "retract skips confirmed rows", "expect": "status", "from": "hub-session", "why": "a review finding, injected for a week after the fix merged"}
+{"subject": "memware PR #31", "relation": "should-fix issue", "value": "the docstring promises the wrong order", "expect": "status", "from": "hub-session", "why": "a review finding, injected for a week after the fix merged"}
+{"subject": "memware", "relation": "build status", "value": "green", "expect": "status", "from": "probe", "why": "a relation ending in status, with a status word for a value"}
+{"subject": "memware", "relation": "open issues", "value": "the digest header", "expect": "status", "from": "probe", "why": "'open issues' names a finding"}
+{"subject": "the release", "relation": "blocker", "value": "notarisation", "expect": "status", "from": "probe", "why": "'blocker' names a finding"}
 {"subject": "memware #22", "relation": "feature", "value": "the no-capture fix", "expect": "status", "miss": true, "from": "hub-session", "why": "what a PR contains; 'feature' is not a status relation"}
 {"subject": "memware ci", "relation": "checks passed", "value": "3 of 5", "expect": "measurement", "miss": true, "from": "probe", "why": "'checks' is a qualifier"}
 {"subject": "api", "relation": "p95 latency", "value": "340ms", "expect": "measurement", "miss": true, "from": "probe", "why": "latency is not an accumulating count"}
@@ -109,7 +135,6 @@
 {"subject": "ingest queue", "relation": "run count", "value": "12", "expect": "measurement", "miss": true, "from": "probe", "why": "runs are not on the accumulating list"}
 {"subject": "kanban boards", "relation": "open card count", "value": "305", "expect": "measurement", "miss": true, "from": "hub-session", "why": "cards are not on the accumulating list"}
 {"subject": "kanban review 2026-09-16", "relation": "boards audited", "value": "18 boards, 454 open cards total, 76 audited", "expect": "measurement", "miss": true, "from": "hub-session", "why": "not a bare quantity"}
-{"subject": "memware", "relation": "build status", "value": "green", "expect": "status", "miss": true, "from": "probe", "why": "'build status' is not exactly status"}
-{"subject": "memware", "relation": "open issues", "value": "the digest header", "expect": "status", "miss": true, "from": "probe", "why": "'open issues' is not a status relation"}
-{"subject": "the release", "relation": "blocker", "value": "notarisation", "expect": "status", "miss": true, "from": "probe", "why": "'blocker' is not a status relation"}
 {"subject": "load balancer health check", "relation": "status", "value": "failing", "expect": "status", "miss": true, "from": "probe", "why": "'check' in the subject is a qualifier"}
+{"subject": "memware sync at 50k turns", "relation": "latency", "value": "3.7 s", "expect": "measurement", "from": "hub-session", "why": "a latency beside a load figure reads like a budget; too close to config for a word rule", "miss": true}
+{"subject": "personal-os board", "relation": "open cards count", "value": "55", "expect": "measurement", "from": "hub-session", "why": "cards are not on the accumulating list, and an open-card count reads like a WIP limit", "miss": true}

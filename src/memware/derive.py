@@ -229,6 +229,9 @@ REJECT (keep: false) — expect to reject MOST excerpts:
     pinned or required version would not ("ruff is pinned to 0.16.5"); a current
     or built version would. A configured limit would not ("the retry limit is
     5"); a count would.
+  - a defect, a review finding or an open issue: it stops being true when
+    someone fixes it ("known issue: retract skips confirmed rows", "must-fix:
+    the docstring promises the wrong order")
   - a prediction, an intention, or an option under discussion — only what IS
   - anything whose subject or value would be a pronoun ("it", "this", "that")
 

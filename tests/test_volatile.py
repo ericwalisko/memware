@@ -37,6 +37,94 @@ def test_a_qualifier_names_a_setting(relation):
     assert v.names_setting(relation)
 
 
+@pytest.mark.parametrize(
+    "subject, relation, want",
+    [
+        ("export job", "scheduled row count", ("scheduled", "relation", "")),
+        ("field audit", "spec-required row count", ("required", "relation", "")),  # split
+        ("rate limit", "requests", ("limit", "subject", "")),  # a plain word qualifies
+        ("max upload", "size", ("max", "subject", "")),
+        ("scheduled_export", "null rate", None),  # an identifier is a name, read whole
+        ("spec-required fields", "row count", None),
+        ("nightly_cron_job", "status", None),
+        ("max_rows", "set to", ("max", "subject", "max_rows")),  # it holds a bound
+        ("page_size", "value", ("page", "subject", "page_size")),  # qualifier + measured noun
+        ("export.max_rows", "value", ("max", "subject", "max_rows")),
+    ],
+)
+def test_the_veto_reads_an_identifier_in_the_subject_whole(subject, relation, want):
+    """#42: `_tokens` split `scheduled_export` on the underscore and found `scheduled`. An
+    identifier names a thing unless it names a setting itself; the relation still splits."""
+    got = v.veto(subject, relation)
+    assert (None if got is None else tuple(got)) == want
+
+
+def test_an_exact_measure_is_decided_before_the_veto():
+    """The docstring's unconditional relations: nothing in the subject turns them off, while a
+    target named in the relation itself still keeps a belief durable."""
+    assert v.classify("coverage target", "coverage", "90%") == v.MEASUREMENT
+    assert v.classify("memware", "coverage target", "90%") is None
+
+
+def test_decide_names_the_test_that_decided_and_each_one_that_did_not():
+    d = v.decide("export job", "scheduled row count", "4,200 rows")
+    assert d.cls is None
+    assert [t.fired for t in d.tests] == [False, False, False]
+    assert d.tests[0].veto == v.Veto("scheduled", "relation")
+    assert d.because.startswith("not a measurement: a quantity, not an exact measure, but")
+    d = v.decide("appointment rows", "eligible and exported", "2,454 of 10,346")
+    assert d.cls == v.MEASUREMENT
+    assert d.because == "measurement: an N of M over 'rows', the subject's noun"
+    assert v.decide("the release", "blocker", "notarisation").because == (
+        "status: the relation names a finding, 'blocker'"
+    )
+    assert v.decide("order state machine", "end state", "completed").tests[2].because == (
+        "'end state' is a state-machine term"
+    )
+    assert v.decide("memware PR #31", "review state", "two approvals").because == (
+        "status: 'review state' of an instance, '#31'"
+    )
+
+
+def test_one_decision_path_serves_classify_the_gate_and_explain():
+    """What makes --stale, --explain and derive's gate unable to drift: each reads decide() or
+    Gate.explain(), and the boolean predicates are its tests."""
+    import json
+    from pathlib import Path
+
+    corpus = Path(__file__).parent / "data" / "volatility_cases.jsonl"
+    gate = v.Gate()
+    for line in corpus.read_text(encoding="utf-8").splitlines():
+        c = json.loads(line)
+        s, r, val = c["subject"], c["relation"], c["value"]
+        d = v.decide(s, r, val)
+        assert d.cls == v.classify(s, r, val)
+        assert [t.fired for t in d.tests] == [
+            v.is_measurement(s, r, val),
+            v.is_moving_version(s, r, val),
+            v.is_status(s, r, val),
+        ]
+        row = {**_row(s, r, val), **DERIVED}
+        e = gate.explain(row)
+        assert e.decision == d and e.verdict == gate.verdict(row)
+        assert e.injected == (gate.verdict(row) is None)
+
+
+def test_explain_shows_every_exemption_whether_or_not_it_applies():
+    row = {**_row("memware PR #31", "ci status", "green"), **DERIVED}
+    assert [c.name for c in v.Gate().explain(row).checks] == [
+        "reliability",
+        "source",
+        "confirmed",
+        "manifest",
+        "window",
+    ]
+    assert not v.Gate().explain(row).injected
+    kept = v.Gate().explain({**row, "confirmed": 1})
+    assert kept.injected and kept.checks[2].applies
+    assert kept.why.startswith("a person's belief, never left out (a person asserted")
+
+
 def test_a_person_is_anyone_derive_is_not():
     assert not v.human_stated(0.5, "memware:session/s/turn/1")
     assert v.human_stated(0.9, "memware:session/s/turn/1")

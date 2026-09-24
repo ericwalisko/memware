@@ -743,6 +743,10 @@ def test_issue_38_the_gate_rejects_the_measurements_and_admits_the_retry_limit(
         ("graph_health scan", "status", "clean 0 for three weeks", "status"),
         ("ingest worker", "retry limit", "x", "value too short"),
         ("ingest queue", "row count", "12,000", "measurement"),
+        ("memware PR #31", "must-fix issue", "retract skips confirmed rows", "status"),
+        ("memware", "known issue", "the digest header repeats on resume", "status"),
+        ("memware PR #31", "ci status", "green", "status"),
+        ("scheduled_export", "null rate", "41% null", "measurement"),
     ],
 )
 def test_the_gate_refuses_a_snapshot_or_a_thing_with_no_name(subject, relation, value, reason):
@@ -799,6 +803,7 @@ def test_the_prompt_rejects_measurements_and_transient_state_and_tests_a_vague_s
         "the status of an issue, PR,",
         "what a PR contains",
         "would the value need re-checking to know it is still true?",
+        "a defect, a review finding or an open issue: it stops being true when someone fixes it",
         '("the table", "the repo", "the worker"',
     ):
         assert phrase in " ".join(md.SYSTEM.split()), phrase

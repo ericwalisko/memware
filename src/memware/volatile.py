@@ -15,20 +15,31 @@ sees the excerpt; this sees only a triple. ``tests/data/volatility_cases.jsonl``
 corpus: no durable case may classify volatile, and the volatile cases these rules miss are kept
 there, marked, so the tradeoff stays visible.
 
-A qualifier anywhere in the subject or relation always means durable: slo, sla, target,
-threshold, budget, commitment, fail under, min, max, limit, default, initial, final, required,
-desired, every, schedule, check, and words like them (:data:`QUALIFIERS`). Past that:
+A qualifier always means durable: slo, sla, target, threshold, budget, commitment, fail under,
+min, max, limit, default, initial, final, required, desired, every, schedule, check, and words
+like them (:data:`QUALIFIERS`), anywhere in the relation or as a word of the subject. An
+identifier in the subject (``scheduled_export``, words joined by ``_`` or ``-``) is a name and
+is read whole, unless it names a setting itself (``max_rows``, ``page_size``): see :func:`veto`.
+Past that:
 
-* **measurement**: a bare quantity that is one of: a count, total or "number of" over an
-  accumulating noun (rows, records, tests, files, lines, commits, duplicates, accounts, users,
-  downloads); a magnitude word or a comma-grouped number of 1,000 or more beside such a noun;
-  an "N of M" figure over one, or over a completion word ("backfilled", "passed"); or a relation
-  that is exactly progress, coverage or null rate.
+* **measurement**: a bare quantity under a relation that is exactly progress, coverage or null
+  rate, whatever the subject says; or, unless a qualifier vetoes it, one that is: a count, total
+  or "number of" over an accumulating noun (rows, records, tests, files, lines, commits,
+  duplicates, accounts, users, downloads); a magnitude word or a comma-grouped number of 1,000 or
+  more beside such a noun; an "N of M" figure over one, in the relation or as the subject's noun
+  ("appointment rows"), or over a completion word ("backfilled", "passed").
 * **moving version**: a version string under a version noun that the subject or relation calls
   current, latest, built, installed, deployed, released, or on main.
-* **status**: a relation that is exactly status, state or progress, whose value is a status word
-  (open, merged, review, blocked, failing, archived, …) or whose subject names an instance (an
-  id such as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card).
+* **status**: a relation that names a finding or a defect (known issue, open issue, must-fix
+  issue, should-fix issue, blocker), whatever the value; or a relation ending in status or state
+  ("ci status", "connection status"), or exactly progress, whose value is a status word (open,
+  merged, review, blocked, failing, connected, …) or whose subject names an instance (an id such
+  as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card). A
+  state-machine word before the noun ("end state") keeps it durable, as a qualifier does.
+
+:func:`decide` returns the class with the test each class ran, :meth:`Gate.explain` adds the
+exemptions and the manifest; ``classify``, derive's gate, ``memware beliefs --stale`` and
+``--explain`` all read them, so none of them can disagree.
 
 Two rules need the project a session runs in, and apply to a belief whose subject names the
 package that declares the version (``pyproject.toml``, ``package.json``, ``Cargo.toml``):
@@ -129,13 +140,13 @@ VERSION_NOUNS = frozenset({"version", "versions", "release", "tag"})
 MOVING = wordset("current currently latest newest built installed deployed released")
 _ON_MAIN = re.compile(r"\bon (?:main|master)\b", re.I)
 
-STATUS_RELATIONS = frozenset({"status", "state", "progress"})
+STATUS_NOUNS = frozenset({"status", "state"})
 _STATUS_LEAD = wordset("current overall latest")
 STATUS_VALUE_WORDS = wordset(
     """
     open opened closed merged unmerged review reviewing blocked failing failed passing passed
     archived done pending green red draft queued running cancelled canceled approved rejected
-    stale stuck waiting started complete completed progress
+    stale stuck waiting started complete completed progress connected disconnected
     """
 )
 _STATUS_FILLER = wordset("and but still now in not yet")
@@ -143,6 +154,43 @@ INSTANCE_NOUNS = wordset(
     "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
 )
 _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
+STATE_MACHINE = wordset("start starting end ending terminal steady resting accepting next previous")
+"""Words that make "X state" a design term like "final state", not a reading: "end state"."""
+FINDINGS = frozenset(
+    {
+        *(
+            f"{lead} {noun}"
+            for lead in ("known", "open", "must fix", "should fix")
+            for noun in ("issue", "issues")
+        ),
+        "blocker",
+        "blockers",
+    }
+)
+"""Relations that name a finding or a defect: true until someone fixes it, whatever the value."""
+
+BOUNDS = wordset(
+    """
+    min minimum max maximum limit limits cap ceiling floor quota threshold thresholds target
+    targets budget slo sla ttl timeout timeouts default defaults
+    """
+)
+MEASURED_NOUNS = ACCUMULATING | COUNT_WORDS | wordset("size sizes rate rates length number")
+_SUBJECT_WORD = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
+
+
+class Veto(NamedTuple):
+    """The qualifier that makes a triple a rule, a target or a setting, and where it was."""
+
+    token: str
+    where: str
+    """``subject`` or ``relation``."""
+    within: str = ""
+    """The identifier it is part of, when it is one (``max_rows``)."""
+
+    def __str__(self) -> str:
+        inside = f" (in '{self.within}')" if self.within else ""
+        return f"qualifier '{self.token}' in the {self.where}{inside}"
 
 
 def names_setting(relation: str) -> bool:
@@ -150,39 +198,115 @@ def names_setting(relation: str) -> bool:
     return bool(set(_tokens(relation)) & QUALIFIERS)
 
 
-def _qualified(subject: str, relation: str) -> bool:
-    return bool(set(_tokens(f"{subject} {relation}")) & QUALIFIERS)
+def _setting_identifier(parts: list[str], qualifiers: list[str]) -> bool:
+    return bool(set(qualifiers) & BOUNDS or set(parts) & MEASURED_NOUNS)
+
+
+def veto(subject: str, relation: str) -> Veto | None:
+    """The qualifier that makes a triple durable, or None. Every word of the relation counts:
+    "scheduled row count" and "spec-required row count" are rules. In the subject, an identifier
+    (words joined by ``_`` or ``-``) is a name and is read whole, so ``scheduled_export`` is an
+    export, not a schedule; unless the identifier names a setting itself, by holding a bound
+    (``max_upload``, ``default_timeout``) or by joining a qualifier to what would be measured
+    (``page_size``, ``batch_rows``). A plain subject word counts as it always has: "rate limit",
+    "max upload" and "nightly backup cron" are settings."""
+    for token in _tokens(relation):
+        if token in QUALIFIERS:
+            return Veto(token, "relation")
+    for word in _SUBJECT_WORD.findall(subject.lower()):
+        parts = _tokens(word)
+        qualifiers = [p for p in parts if p in QUALIFIERS]
+        if not qualifiers:
+            continue
+        if len(parts) == 1:
+            return Veto(word, "subject")
+        if _setting_identifier(parts, qualifiers):
+            return Veto(qualifiers[0], "subject", word)
+    return None
+
+
+class Test(NamedTuple):
+    """One class's test on a triple: whether it fired, and the rule that fired or the check that
+    failed."""
+
+    cls: str
+    """One of :data:`CLASSES`."""
+    fired: bool
+    because: str
+    veto: Veto | None = None
+
+
+def measurement_test(subject: str, relation: str, value: str) -> Test:
+    """A quantity, then: a relation that is exactly an exact measure (whatever else the subject
+    says), or, unless a qualifier vetoes it, a count, magnitude or N of M over what accumulates."""
+    if not _QUANTITY.match(value.strip()):
+        return Test(MEASUREMENT, False, "the value is not a bare quantity")
+    rel = _tokens(relation)
+    joined = " ".join(rel)
+    if joined in EXACT_MEASURES:
+        return Test(MEASUREMENT, True, f"the relation is exactly '{joined}'")
+    v = veto(subject, relation)
+    if v is not None:
+        return Test(MEASUREMENT, False, f"a quantity, not an exact measure, but {v} vetoes it", v)
+    words = set(rel) | set(_tokens(value))
+    counted_by = sorted(set(rel) & COUNT_WORDS) or (["number of"] if "number of" in joined else [])
+    if counted_by and words & ACCUMULATING:
+        noun = sorted(words & ACCUMULATING)[0]
+        return Test(MEASUREMENT, True, f"'{counted_by[0]}' over '{noun}'")
+    if (magnitude := _MAGNITUDE.search(value)) and words & ACCUMULATING_PLURAL:
+        noun = sorted(words & ACCUMULATING_PLURAL)[0]
+        return Test(MEASUREMENT, True, f"'{magnitude.group(0)}' beside '{noun}'")
+    if _N_OF_M.match(value):
+        over = sorted(set(rel) & (ACCUMULATING | COMPLETION_WORDS))
+        if over:
+            return Test(MEASUREMENT, True, f"an N of M over '{over[0]}' in the relation")
+        head = _tokens(subject)[-1:]
+        if head and head[0] in ACCUMULATING:
+            return Test(MEASUREMENT, True, f"an N of M over '{head[0]}', the subject's noun")
+        return Test(
+            MEASUREMENT, False, "an N of M, but not over a counted noun or a completion word"
+        )
+    return Test(
+        MEASUREMENT,
+        False,
+        "a quantity, but no count, magnitude or N of M over rows, tests, files or the like",
+    )
 
 
 def is_measurement(subject: str, relation: str, value: str) -> bool:
-    """An unambiguous measurement; see the module docstring. A qualifier makes it durable."""
-    if not _QUANTITY.match(value.strip()) or _qualified(subject, relation):
-        return False
-    rel = _tokens(relation)
-    words = set(rel) | set(_tokens(value))
-    if " ".join(rel) in EXACT_MEASURES:
-        return True
-    counted = (set(rel) & COUNT_WORDS or "number of" in " ".join(rel)) and words & ACCUMULATING
-    grouped = _MAGNITUDE.search(value) and words & ACCUMULATING_PLURAL
-    fraction = _N_OF_M.match(value) and set(rel) & (ACCUMULATING | COMPLETION_WORDS)
-    return bool(counted or grouped or fraction)
+    """An unambiguous measurement; see the module docstring and :func:`measurement_test`."""
+    return measurement_test(subject, relation, value).fired
 
 
 def is_version(value: str) -> bool:
     return bool(_VERSION.match(value.strip()))
 
 
-def is_moving_version(subject: str, relation: str, value: str) -> bool:
+def moving_version_test(subject: str, relation: str, value: str) -> Test:
     """A version string under a version noun called current, latest, built, installed, deployed,
     released or on main; not one a qualifier pins ("minimum version", "first released version")."""
     text = f"{subject} {relation}"
     words = set(_tokens(text))
-    return (
-        is_version(value)
-        and bool(words & VERSION_NOUNS)
-        and bool(words & MOVING or _ON_MAIN.search(text))
-        and not words & QUALIFIERS
-    )
+    if not is_version(value):
+        return Test(MOVING_VERSION, False, "the value is not a version")
+    if not words & VERSION_NOUNS:
+        return Test(MOVING_VERSION, False, "no version, release or tag in the subject or relation")
+    moving = sorted(words & MOVING) or (["on main"] if _ON_MAIN.search(text) else [])
+    if not moving:
+        return Test(
+            MOVING_VERSION,
+            False,
+            "nothing calls it current, latest, built, installed, deployed, released or on main",
+        )
+    v = veto(subject, relation)
+    if v is not None:
+        return Test(MOVING_VERSION, False, f"a version called '{moving[0]}', but {v} vetoes it", v)
+    return Test(MOVING_VERSION, True, f"a version called '{moving[0]}'")
+
+
+def is_moving_version(subject: str, relation: str, value: str) -> bool:
+    """See :func:`moving_version_test`."""
+    return moving_version_test(subject, relation, value).fired
 
 
 def _status_value(value: str) -> bool:
@@ -194,35 +318,128 @@ def _status_value(value: str) -> bool:
     )
 
 
-def _names_instance(subject: str) -> bool:
+def _instance(subject: str) -> str | None:
+    m = _INSTANCE_ID.search(subject)
+    if m:
+        return m.group(0)
     words = _tokens(subject)
-    return bool(_INSTANCE_ID.search(subject)) or bool(words and words[-1] in INSTANCE_NOUNS)
+    return words[-1] if words and words[-1] in INSTANCE_NOUNS else None
 
 
-def is_status(subject: str, relation: str, value: str) -> bool:
-    """A relation that is exactly status, state or progress (after "current" or "overall"), with
-    a status word for a value or an instance for a subject. "final state", "status check",
-    "review state" and "default state" are not: a qualifier, or a word before the noun."""
-    if _qualified(subject, relation):
-        return False
+def status_test(subject: str, relation: str, value: str) -> Test:
+    """A relation naming a finding ("known issue", "blocker"), whatever the value; or a relation
+    ending in status or state ("ci status", "connection status"), or exactly progress, with a
+    status word for a value or an instance for a subject. A qualifier vetoes both: "default
+    state", "status check", "final state". So does a state-machine word: "end state"."""
     rel = _tokens(relation)
     while rel and rel[0] in _STATUS_LEAD:
         rel = rel[1:]
-    if len(rel) != 1 or rel[0] not in STATUS_RELATIONS:
-        return False
-    return _status_value(value) or _names_instance(subject)
+    joined = " ".join(rel)
+    finding = joined in FINDINGS
+    if not finding and not (rel and (rel[-1] in STATUS_NOUNS or rel == ["progress"])):
+        return Test(STATUS, False, "the relation does not end in status or state")
+    v = veto(subject, relation)
+    if v is not None:
+        return Test(STATUS, False, f"'{joined}', but {v} vetoes it", v)
+    if finding:
+        return Test(STATUS, True, f"the relation names a finding, '{joined}'")
+    machine = sorted(set(rel[:-1]) & STATE_MACHINE)
+    if machine:
+        return Test(STATUS, False, f"'{machine[0]} {rel[-1]}' is a state-machine term")
+    if _status_value(value):
+        return Test(STATUS, True, f"'{joined}' with a status word for a value")
+    instance = _instance(subject)
+    if instance:
+        return Test(STATUS, True, f"'{joined}' of an instance, '{instance}'")
+    return Test(
+        STATUS, False, f"'{joined}', but the value is not a status word and no instance is named"
+    )
+
+
+def is_status(subject: str, relation: str, value: str) -> bool:
+    """See :func:`status_test`."""
+    return status_test(subject, relation, value).fired
+
+
+@dataclass(frozen=True)
+class Decision:
+    """How a triple was classified: its class (None for durable) and each class's test, in the
+    order :func:`classify` tries them. The first test that fired decided it."""
+
+    cls: str | None
+    tests: tuple[Test, ...]
+
+    @property
+    def because(self) -> str:
+        """The deciding rule, or, for a durable triple, every test's failed check."""
+        for t in self.tests:
+            if t.fired:
+                return f"{label(t.cls)}: {t.because}"
+        return "; ".join(f"not a {label(t.cls)}: {t.because}" for t in self.tests)
+
+
+def decide(subject: str, relation: str, value: str) -> Decision:
+    """The classification of a triple with the path that decided it: what :func:`classify`
+    returns, what ``derive``'s gate rejects, and what ``memware beliefs --explain`` prints."""
+    tests = (
+        measurement_test(subject, relation, value),
+        moving_version_test(subject, relation, value),
+        status_test(subject, relation, value),
+    )
+    fired = [t.cls for t in tests if t.fired]
+    return Decision(fired[0] if fired else None, tests)
 
 
 def classify(subject: str, relation: str, value: str) -> str | None:
     """The volatile class of a triple (:data:`CLASSES`), or None for a durable one. Regex and
     word lists only: it runs in ``derive``'s gate and on every prompt."""
-    if is_measurement(subject, relation, value):
-        return MEASUREMENT
-    if is_moving_version(subject, relation, value):
-        return MOVING_VERSION
-    if is_status(subject, relation, value):
-        return STATUS
-    return None
+    return decide(subject, relation, value).cls
+
+
+class Check(NamedTuple):
+    """One test the injection gate applies to a row besides the classes, and what it found."""
+
+    name: str
+    """``reliability``, ``source``, ``confirmed``, ``manifest`` or ``window``."""
+    applies: bool
+    """For the first three, whether it makes the belief a person's; for ``manifest``, whether
+    the manifest overrules it; for ``window``, whether the window lets a volatile one in."""
+    detail: str
+
+
+def person_checks(
+    reliability: object, source: object, confirmed: object = False
+) -> tuple[Check, ...]:
+    """The three exemptions, each with what it found: reliability above derive's, a source that
+    is not a session pointer, a confirmation by a person."""
+    try:
+        above = float(str(reliability)) > DERIVED_RELIABILITY
+    except ValueError:
+        above = False
+    pointer = str(source or "").startswith(DERIVED_SOURCE)
+    return (
+        Check(
+            "reliability",
+            above,
+            f"{reliability}, above the {DERIVED_RELIABILITY} derive writes"
+            if above
+            else f"{reliability}, not above the {DERIVED_RELIABILITY} derive writes",
+        ),
+        Check(
+            "source",
+            not pointer,
+            f"{source}, a session pointer: derive wrote it"
+            if pointer
+            else f"{source or 'none'}, not a {DERIVED_SOURCE} pointer: a person stated it",
+        ),
+        Check(
+            "confirmed",
+            bool(confirmed),
+            "a person asserted the same value or approved it in review"
+            if confirmed
+            else "no person has confirmed it",
+        ),
+    )
 
 
 def human_stated(reliability: object, source: object, confirmed: object = False) -> bool:
@@ -230,18 +447,17 @@ def human_stated(reliability: object, source: object, confirmed: object = False)
     (``remember`` and ``memware assert`` take free text, or none), or a person confirmed the
     derived belief since (``confirmed``, from the ``confirmation`` table: the same value
     asserted again, or a review approval)."""
-    try:
-        above = float(str(reliability)) > DERIVED_RELIABILITY
-    except ValueError:
-        above = False
-    return bool(confirmed) or above or not str(source or "").startswith(DERIVED_SOURCE)
+    return any(c.applies for c in person_checks(reliability, source, confirmed))
+
+
+def _row_confirmed(row: Any) -> object:
+    columns = row.keys()  # a sqlite3.Row: `in` would search its values, not its column names
+    return row["confirmed"] if "confirmed" in columns else False
 
 
 def row_human_stated(row: Any) -> bool:
     """:func:`human_stated` for a belief row; ``confirmed`` counts when the query selected it."""
-    columns = row.keys()  # a sqlite3.Row: `in` would search its values, not its column names
-    confirmed = row["confirmed"] if "confirmed" in columns else False
-    return human_stated(row["reliability"], row["source"], confirmed)
+    return human_stated(row["reliability"], row["source"], _row_confirmed(row))
 
 
 def volatility(row: Any) -> str | None:
@@ -399,28 +615,57 @@ class Gate:
         named = [d for d in self.declared if d.name and _subject_terms(d.name) & terms]
         return named[0] if named else None
 
+    def explain(self, row: Any) -> Explanation:
+        """Every test the gate applies to ``row`` (a belief row), what each found, and the
+        verdict. :meth:`verdict` is this verdict, so ``memware beliefs --stale``, ``--explain``,
+        the prompt hook and the digest cannot disagree."""
+        subject, relation, value = str(row["subject"]), str(row["relation"]), str(row["value"])
+        decision = decide(subject, relation, value)
+        person = person_checks(row["reliability"], row["source"], _row_confirmed(row))
+        declared = self.declared_for(subject)
+        ruled: Verdict | None = None
+        if not self.declared:
+            manifest = Check("manifest", False, "no manifest here declares a version")
+        elif declared is None:
+            names = ", ".join(sorted({d.name for d in self.declared if d.name}))
+            manifest = Check("manifest", False, f"the subject names no declaring package ({names})")
+        else:
+            found = manifest_rule(subject, relation, value, declared.name, declared.version)
+            where = f"{declared.path} says {declared.version}"
+            if found is None:
+                manifest = Check("manifest", False, f"{where}; the belief does not contradict it")
+            else:
+                reason, named = found
+                detail = f"names {named}, {where}" if reason == OLDER_VERSION else where
+                ruled = Verdict(reason, detail)
+                manifest = Check("manifest", True, f"{label(reason)}: {detail}")
+        window, young = self._window(row, decision.cls)
+        if any(c.applies for c in person):
+            verdict = None
+        elif ruled is not None:
+            verdict = ruled
+        elif decision.cls is None or young:
+            verdict = None
+        else:
+            verdict = Verdict(decision.cls, DESCRIBE[decision.cls])
+        return Explanation(decision, (*person, manifest, window), verdict)
+
+    def _window(self, row: Any, cls: str | None) -> tuple[Check, bool]:
+        if cls is None:
+            return Check("window", False, "durable: the window does not apply"), False
+        if not self.volatile_days:
+            return Check("window", False, f"{WINDOW_KEY} is 0: never injected"), False
+        age = _age_days(row["valid_from"], self.now or datetime.now(UTC))
+        days = f"{WINDOW_KEY} is {self.volatile_days:g}"
+        if age is None:
+            return Check("window", False, f"no recorded date; {days}"), False
+        young = age < self.volatile_days
+        inside = "inside" if young else "outside"
+        return Check("window", young, f"{age:.1f} days old, {inside} it: {days}"), young
+
     def verdict(self, row: Any) -> Verdict | None:
         """Why ``row`` (a belief row) is left out, or None to inject it."""
-        if row_human_stated(row):
-            return None
-        subject, relation, value = str(row["subject"]), str(row["relation"]), str(row["value"])
-        declared = self.declared_for(subject)
-        if declared is not None:
-            ruled = manifest_rule(subject, relation, value, declared.name, declared.version)
-            if ruled is not None:
-                reason, named = ruled
-                where = f"{declared.path} says {declared.version}"
-                if reason == OLDER_VERSION:
-                    return Verdict(reason, f"names {named}, {where}")
-                return Verdict(reason, where)
-        cls = classify(subject, relation, value)
-        if cls is None:
-            return None
-        if self.volatile_days:
-            age = _age_days(row["valid_from"], self.now or datetime.now(UTC))
-            if age is not None and age < self.volatile_days:
-                return None
-        return Verdict(cls, DESCRIBE[cls])
+        return self.explain(row).verdict
 
     def admits_hit(self, volatile: str | None, valid_from: str | None) -> bool:
         """For a reader that has only a recall hit (the Hermes provider): its ``volatile`` mark,
@@ -431,6 +676,41 @@ class Gate:
             return False
         age = _age_days(valid_from, self.now or datetime.now(UTC))
         return age is not None and age < self.volatile_days
+
+
+@dataclass(frozen=True)
+class Explanation:
+    """What :meth:`Gate.explain` found for one belief."""
+
+    decision: Decision
+    """The triple's classification, with each class's test."""
+    checks: tuple[Check, ...]
+    """reliability, source, confirmed, manifest, window: in that order."""
+    verdict: Verdict | None
+    """Why injection leaves it out, or None: it is injected."""
+
+    @property
+    def injected(self) -> bool:
+        return self.verdict is None
+
+    @property
+    def why(self) -> str:
+        """One line: what decided it."""
+        person = [c for c in self.checks[:3] if c.applies]
+        if person:
+            cls = self.decision.cls
+            reads = f"; it reads as a {label(cls)}" if cls else ""
+            return f"a person's belief, never left out ({person[0].detail}){reads}"
+        if self.verdict is not None and self.verdict.reason not in CLASSES:
+            return str(self.verdict)
+        if self.decision.cls is not None:
+            window = self.checks[-1]
+            rule = self.decision.because
+            return f"{rule}; but {window.detail}" if window.applies else rule
+        vetoed = [t for t in self.decision.tests if t.veto is not None]
+        if vetoed:
+            return f"durable: {vetoed[0].veto} vetoes a {label(vetoed[0].cls)}"
+        return "durable: no rule fired"
 
 
 DESCRIBE = {
