@@ -131,15 +131,29 @@ derived belief that was a measurement, a moving version or a status when recorde
 List the current beliefs the prompt hook and the digest leave out, each with its reason and
 why: a derived
 .B measurement
-(a count or total of rows, tests, files and the like, or a relation that is exactly progress,
-coverage or null rate),
+(a relation that is exactly progress, coverage or null rate; or a count, total or N of M over
+rows, tests, files and the like, in the relation or as the subject's noun; not when the relation
+says it must hold),
 .B moving_version
 (a version called current, latest, built, installed, deployed, released or on main) or
 .B status
 (a relation that is exactly status, state or progress, with a status word for a value or an
-instance such as a PR, card or run for a subject). Only unambiguous cases count: a qualifier
-(slo, target, threshold, budget, commitment, min, max, limit, default, initial, final, required,
-every, schedule, check, and the like) always means durable. And, inside a project whose
+instance such as a PR, card or run for a subject; a relation ending in status, with a status
+word for a value or an instance id such as #31 named; or a relation that names a finding:
+known issue, open issue, must\-fix issue, should\-fix issue or blocker, unless the value points
+at where it is tracked or states a by\-design limitation or a workaround). Only unambiguous
+cases count: a qualifier (slo, target, threshold, budget, commitment, min, max, limit, default,
+initial, final, required, every, schedule, retention, pin, check, and the like), as any word of
+the relation or a whole word of the subject, means durable, before any rule. An identifier in
+the subject
+.RI ( scheduled_export )
+is a name, unless it names a setting: its last part is the qualifier
+.RI ( export\-schedule ),
+it holds a bound
+.RI ( min_coverage ),
+or it joins a qualifier to what would be measured
+.RI ( max_rows ).
+And, inside a project whose
 .IR pyproject.toml ,
 .I package.json
 or
@@ -159,6 +173,29 @@ names the project; the default is the current directory. See
 .B inject.volatile_days
 under
 .BR FILES .
+.TP
+.BI "beliefs \-\-explain " ID
+Why one belief is or is not injected: its class, or durable; the test that decided it (the rule
+that fired, or the check each class failed); for a veto, the qualifier and whether it came from
+the subject or the relation; each exemption (reliability above 0.5, a source that is not a
+.I memware:session/
+pointer, a confirmation by a person), the manifest check and the
+.B inject.volatile_days
+window, each with what it found; and
+.BR "injected : yes" " or " no .
+A belief that is not current is never injected, and says so. It is what
+.B \-\-stale
+and the prompt hook decide, from the same function. Read\-only.
+.B \-\-cwd
+names the project;
+.B \-\-json
+prints the same as one object.
+.TP
+.BI "beliefs \-\-explain \-\-subject " S " \-\-relation " R " \-\-value " V
+The same for a triple that is not in the ledger, judged as
+.B derive
+would file it (reliability 0.5, a session pointer), so the rules can be probed before a derive
+run. It opens no store.
 .TP
 .BI "beliefs retract " "\-\-stale | ID ..."
 Retract what
@@ -485,6 +522,15 @@ Recall a belief with several phrasings:
 .RS
 .EX
 memware recall "which port does the api use" "api port" "8443" \-\-what beliefs
+.EE
+.RE
+.PP
+Ask why a belief is still injected, or how a triple would be judged:
+.PP
+.RS
+.EX
+memware beliefs \-\-explain 147
+memware beliefs \-\-explain \-\-subject api \-\-relation "error rate" \-\-value 2%
 .EE
 .RE
 .PP

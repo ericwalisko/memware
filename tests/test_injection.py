@@ -214,20 +214,21 @@ def test_an_older_version_named_beside_the_project_is_history(db, app, capsys, m
     assert code == 0 and json.loads(out) == []
 
 
-def test_a_known_issue_is_history_in_its_project_and_a_documented_miss_elsewhere(
+def test_a_known_issue_is_history_in_its_project_and_a_finding_elsewhere(
     db, app, capsys, monkeypatch
 ):
     """Inside memware 0.6.1 the manifest ages "memware 0.4.0 known issue" out. From another
-    repository nothing says 0.4.0 is old, and "known issue" is not an exact status relation, so
-    it is injected: a miss kept on purpose (tests/data/volatility_cases.jsonl) rather than a
-    broad rule that hides durable facts."""
+    repository nothing says 0.4.0 is old, but "known issue" names a finding, which stops being
+    true once someone fixes it, so it is left out there too, as a status."""
     _derived(db, STALE[2], LICENSE)
     assert _injected(_context(capsys, db)) == {_line(LICENSE)}
     elsewhere = app.parent / "other-repo"
     elsewhere.mkdir()
     (elsewhere / "pyproject.toml").write_text('[project]\nname = "other"\nversion = "2.0.0"\n')
     monkeypatch.chdir(elsewhere)
-    assert _injected(_context(capsys, db)) == {_line(LICENSE), _line(STALE[2])}
+    assert _injected(_context(capsys, db)) == {_line(LICENSE)}
+    code, out, _ = _run(capsys, "--db", db, "beliefs", "--stale", "--json")
+    assert code == 0 and [r["reason"] for r in json.loads(out)] == ["status"]
 
 
 # ── the review's cases: config is durable, status is not, whatever the words overlap ────────
