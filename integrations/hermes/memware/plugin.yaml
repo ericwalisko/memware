@@ -10,3 +10,9 @@ hooks:
   - on_session_end
   - on_pre_compress
   - on_memory_write
+# Hermes' package manager installs this into the gateway's venv whenever it rebuilds one
+# (`hermes update`, `hermes pm install`, a desktop-app update), because memory.provider
+# names this plugin. Without it a rebuild drops memware and the provider reports
+# unavailable. Raise the floor when __init__.py starts using a newer memware API.
+python_dependencies:
+  - "memware>=0.9.0"

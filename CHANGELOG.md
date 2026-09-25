@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Hermes keeps memware across a venv rebuild.** The Hermes plugin declared no Python
+  dependency, so Hermes' package manager left memware out of every venv it built. The venv had
+  memware only because someone installed it by hand, and a rebuild dropped it. On 2026-09-24 a
+  desktop-app update rebuilt the venv, and the provider reported unavailable until memware was
+  reinstalled by hand. `integrations/hermes/memware/plugin.yaml` now carries
+  `python_dependencies: ["memware>=0.9.0"]`. Hermes installs it from PyPI at `hermes memory
+  setup` and puts it back in every venv it builds later (`hermes update`, `hermes pm install`, a
+  desktop-app update). This was verified against Hermes 0.21.4+3643 in a scratch Hermes home.
+  Each release raises the floor to its own version, and `tests/test_plugin_manifest.py` fails CI
+  when the two differ, because Hermes keeps the memware version already in its lock while the
+  floor is met.
+
+### Changed
+- **RELEASING.md has a Deploy section.** Publishing never updated the copies of memware running
+  on the maintainer's Mac, and the Hermes plugin copy sat three releases behind. "Cutting a
+  release" now ends with a Deploy step that updates each of those copies and checks it: the uv
+  tool CLI, the Claude Code plugin, the Hermes plugin copy, the Hermes gateway's venv, and the
+  gateway restart. It also covers what to do after a Hermes desktop-app update.
+
 ## [0.9.0] - 2026-09-24
 
 ### Added

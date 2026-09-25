@@ -165,6 +165,19 @@ copying it to `$HERMES_HOME/plugins/memware/` and running `hermes memory setup`.
 Both plugins share one store by default, so Claude Code and Hermes remember the
 same things.
 
+The plugin's `plugin.yaml` declares memware as a Python dependency
+(`python_dependencies: ["memware>=X.Y.Z"]`, the release the copy came from). Hermes' package
+manager installs a dependency like this into Hermes' own venv at setup, for every enabled
+plugin and for the provider `memory.provider` names. It installs it again in every venv it
+rebuilds afterwards: `hermes update`, `hermes pm install`, and a desktop-app update. It keeps
+the version already in its lock as long as the floor is met, so a Hermes install moves to a new
+memware release only when a plugin copy with a higher floor arrives, followed by
+`hermes pm install`. Two things do not survive a rebuild: a memware installed into Hermes' venv
+by hand, and a plugin copy with no declaration. On 2026-09-24 a Hermes update rebuilt the venv
+and the provider reported unavailable until memware was reinstalled. `hermes pm repair` does not
+help here. It rebuilds the package set Hermes recorded, so it cannot add a declaration Hermes
+has not seen. RELEASING.md's Deploy section has the full update for one Mac.
+
 `integrations/hermes/upstream/` stages the same provider packaged as
 hermes-agent's own `plugins/memory/<name>/` tree, for contributing it in-tree so
 `hermes memory setup` lists memware on a clean install with no manual copy. It
