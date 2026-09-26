@@ -25,31 +25,22 @@ All notable changes to this project are documented here. The format follows
   release" now ends with a Deploy step that updates each of those copies and checks it: the uv
   tool CLI, the Claude Code plugin, the Hermes plugin copy, the Hermes gateway's venv, and the
   gateway restart. It also covers what to do after a Hermes desktop-app update.
-- **More finding relations are a status, and a plural never is.** Both blind holdouts on
-  0.9.0's status rules missed `recall | open bug | … needs a fix` and `PR #88 review | must-fix
-  finding | …`, because the finding relations were only issue and blocker forms. A relation that
-  names one finding now counts: a known, open, must-fix or should-fix issue, bug or defect; an
-  open, must-fix or should-fix finding; `bug` or `blocker` alone; and a review finding when the
-  subject names a PR, card or run (a study's review finding is a fact). A plural finding relation
-  no longer counts, including the `known issues`, `open issues`, `must-fix issues` and `blockers`
-  that 0.9.0 caught. A plural is a list or a class, and blind holdouts found it holding rules as
-  often as defects: `release checklist | open bugs | a release ships only with zero open P0 or
-  P1 bugs`, `code-review skill | must-fix findings | block merge until resolved`, `kanban board |
-  blockers | a card with an unfinished blocker link stays out of the ready lane`. They also found
-  it holding history: `Therac-25 | known defects | … between 1985 and 1987`. A value that says
-  where a finding was fixed (`fixed in 0.5.0`, `resolved by #40`) or that it will not be fixed
-  (`won't fix`, `not a bug`) keeps the belief durable, as a tracker pointer or a by-design
-  limitation already did. `beliefs --explain` names the finding rule when it declines a
-  relation, and says why, instead of "no rule fired". The labeled corpus grows from 160 to 181
-  cases, still with no durable case left out; `memware | open issues | the digest header` is now
-  a marked miss. A fresh blind holdout of 60 adversarial probes on these relation words, scored
-  once against the final rule, found 8 of its 40 durable facts hidden, against 5 on 0.9.0. The
-  plural rule clears two of 0.9.0's, and the five new ones are singular finding relations whose
-  value is history, a definition or deliberate (`Heartbleed | bug | CVE-2014-0160, …`, `defect
-  lifecycle | open defect | any defect in the New, Assigned or Reopened state`). The rule caught
-  10 of its 20 stale findings, against 3. A finding relation reads only the relation's words, so
-  any value under a singular one is hidden unless it points at a tracker, states a limitation
-  or a won't-fix, or says where the finding was fixed.
+- **A plural finding relation is never a status.** 0.9.0 left out a belief whose relation named
+  a finding (`known issue`, `open issue`, `must-fix issue`, `should-fix issue`, `blocker`) and
+  their plurals. A plural is a list or a class, and blind holdouts found it holding rules as
+  often as defects: `kanban board | blockers | a card with an unfinished blocker link stays out
+  of the ready lane`, `hermes plugin PRs | should-fix issues | fixed in the same PR when under
+  about 20 lines`. Only the singular forms count now. A value that says where a finding was fixed
+  (`fixed in 0.5.0`, `resolved by #40`, but not `not yet fixed`) or that it will not be fixed
+  (`won't fix`, `not a bug`, `working as intended`) keeps the belief durable, as a tracker
+  pointer or a by-design limitation already did. `beliefs --explain` names the finding rule when
+  it declines a belief this way, and says why, where it said "no rule fired". Both changes only
+  narrow the rule: nothing 0.9.0 injected is left out now. Other phrasings are not added: `open
+  bug` and `must-fix finding` came from synthetic holdout probes, not from a stale belief on a
+  real ledger, and a rule that reads only the relation would also hide the history and
+  definitions written under them (`Heartbleed | bug | CVE-2014-0160, …`). They stay in the
+  labeled corpus as marked misses. The corpus grows from 160 to 181 cases, with no durable case
+  left out; 0.9.0 left out 4 of them.
 
 ## [0.9.0] - 2026-09-24
 

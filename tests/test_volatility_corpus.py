@@ -193,53 +193,40 @@ def test_the_corpus_holds_what_the_pr51_review_named():
 
 
 def test_the_corpus_holds_what_card_t_91e28415_named():
-    """Two findings both PR #51 holdouts missed, the forms of the same kind the card listed, and
-    the pointer and by-design variants that must stay durable. The rest are durable facts the
-    card's two blind holdouts found hidden by a draft of the rule, or by 0.9.0's plural rule: a
-    plural relation is a list or a class, and a study's review finding is a fact."""
+    """The card's two findings are kept as misses: they came from synthetic holdout probes, not
+    from a belief that stayed injected on a real ledger, and a finding rule that reads only the
+    relation would also hide the history and definitions written under them. The pointer and
+    by-design variants stay durable. The plural rule is kept: a plural finding relation is a
+    list or a class, and two of 0.9.0's durable facts hidden under one are pinned here."""
     got = {
         (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
         for c in CASES
         if not c.get("project")
     }
+    hub = "a finding rule that reads only the relation hides history and definitions; not seen on the real ledger"
+    for triple in [
+        ("recall", "open bug", "the fuzzy branch drops quoted phrases and needs a fix"),
+        ("PR #88 review", "must-fix finding", "retract leaves the FTS row behind"),
+    ]:
+        assert got.get(triple) == "miss", triple
+        assert (
+            next(c["why"] for c in CASES if (c["subject"], c["relation"], c["value"]) == triple)
+            == hub
+        )
     for triple, expect in [
-        (("recall", "open bug", "the fuzzy branch drops quoted phrases and needs a fix"), "status"),
-        (("PR #88 review", "must-fix finding", "retract leaves the FTS row behind"), "status"),
-        (
-            ("memware sync", "open defect", "the last turn of a resumed session is dropped"),
-            "status",
-        ),
-        (
-            ("memware PR #31", "should-fix finding", "the docstring promises the wrong order"),
-            "status",
-        ),
-        (("memware PR #31", "review finding", "beliefs --stale lists confirmed rows"), "status"),
-        (("memware digest", "bug", "the header repeats on resume"), "status"),
         (("memware", "open bugs", "tracked at github.com/ericwalisko/memware/issues"), "durable"),
         (("sqlite fts5", "known bug", "no infix matching, by design"), "durable"),
         (
-            (
-                "code-review skill",
-                "must-fix findings",
-                "block merge until resolved or explicitly waived by the repo owner",
-            ),
+            ("memware", "open issue", "tracked at github.com/ericwalisko/memware/issues/88"),
             "durable",
         ),
+        (("memware digest", "known issue", "fixed in 0.5.0"), "durable"),
         (
             (
-                "SmartBear/Cisco code review study",
-                "review finding",
-                "defect detection drops sharply when reviewing more than about 400 lines in one"
-                " session",
+                "kanban board",
+                "blockers",
+                "a card with an unfinished blocker link stays out of the ready lane",
             ),
-            "durable",
-        ),
-        (
-            ("memware", "open bug", "tracked at github.com/ericwalisko/memware/issues/88"),
-            "durable",
-        ),
-        (
-            ("release checklist", "OPEN BUGS", "a release ships only with zero open P0 or P1 bugs"),
             "durable",
         ),
         (
@@ -252,5 +239,9 @@ def test_the_corpus_holds_what_card_t_91e28415_named():
             "durable",
         ),
         (("memware", "open issues", "the digest header"), "miss"),
+        (
+            ("memware", "known issue", "retract skips confirmed rows, not yet fixed in main"),
+            "status",
+        ),
     ]:
         assert got.get(triple) == expect, triple
