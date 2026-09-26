@@ -15,4 +15,4 @@ hooks:
 # names this plugin. Without it a rebuild drops memware and the provider reports
 # unavailable. Raise the floor when __init__.py starts using a newer memware API.
 python_dependencies:
-  - "memware>=0.9.0"
+  - "memware>=0.10.0"
