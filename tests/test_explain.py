@@ -161,6 +161,73 @@ def test_a_durable_belief_with_no_veto_lists_each_failed_test(db, capsys):
     ]
 
 
+NO_RULE = "durable: no rule fired"
+DECLINED_FINDINGS = [  # card t_91e28415: (subject, relation, value, why)
+    (
+        "memware",
+        "open issues",
+        "the digest header",
+        "durable: 'open issues' is a finding relation, but a plural is a list or a class, which"
+        " holds rules and history, not one finding",
+    ),
+    (
+        "memware",
+        "open issue",
+        "tracked at github.com/ericwalisko/memware/issues/88",
+        "durable: the relation names a finding, 'open issue', but the value points at where it"
+        " is tracked",
+    ),
+    (
+        "sqlite fts5",
+        "known issue",
+        "no infix matching (by design)",
+        "durable: the relation names a finding, 'known issue', but the value states a by-design"
+        " limitation, a workaround or a won't-fix",
+    ),
+    (
+        "memware digest",
+        "known issue",
+        "fixed in 0.5.0",
+        "durable: the relation names a finding, 'known issue', but the value says where it was"
+        " fixed",
+    ),
+    # the card's own triples: phrasings seen only in synthetic probes, so no rule fires
+    (
+        "recall",
+        "open bug",
+        "the fuzzy branch drops quoted phrases and needs a fix",
+        NO_RULE,
+    ),
+    ("PR #88 review", "must-fix finding", "retract leaves the FTS row behind", NO_RULE),
+    ("memware", "open bugs", "tracked at github.com/ericwalisko/memware/issues", NO_RULE),
+    ("sqlite fts5", "known bug", "no infix matching, by design", NO_RULE),
+]
+
+
+def test_explain_names_the_finding_rule_when_it_declines_a_belief(tmp_path, home, capsys):
+    """A plural finding relation, and a finding whose value outlives the fix, are durable, and
+    ``--explain`` says so in the finding rule's words, in its headline and its status test,
+    where it used to say "no rule fired". The card's own phrasings are no finding relation."""
+    path = str(tmp_path / "findings.db")
+    with Store(path) as s:
+        for subject, relation, value, _ in DECLINED_FINDINGS:
+            assert_belief(
+                s, subject, relation, value, valid_from="2026-09-01T00:00:00Z", source=DERIVED
+            )
+    for i, (_, relation, _, why) in enumerate(DECLINED_FINDINGS, start=1):
+        r = _explain(capsys, path, str(i))
+        assert (r["relation"], r["class"], r["why"]) == (relation, "durable", why)
+        assert r["injected"] is True
+        status = r["tests"][2]
+        assert status["fired"] is False
+        if why != NO_RULE:
+            assert status["because"] == why.removeprefix("durable: ")
+    code, out, _ = _run(capsys, "--db", path, "--plain", "beliefs", "--explain", "1")
+    assert code == 0 and "is a status : no: 'open issues' is a finding relation, but" in out
+    code, out, _ = _run(capsys, "--db", path, "beliefs", "--stale", "--json")
+    assert code == 0 and json.loads(out) == []
+
+
 def test_the_window_can_let_a_young_volatile_belief_in(db, home, capsys):
     (home / "config.json").write_text(
         json.dumps(

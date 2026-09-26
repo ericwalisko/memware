@@ -190,3 +190,58 @@ def test_the_corpus_holds_what_the_pr51_review_named():
         (("scheduled_test_run", "status", "failing"), "miss"),
     ]:
         assert got.get(triple) == expect, triple
+
+
+def test_the_corpus_holds_what_card_t_91e28415_named():
+    """The card's two findings are kept as misses: they came from synthetic holdout probes, not
+    from a belief that stayed injected on a real ledger, and a finding rule that reads only the
+    relation would also hide the history and definitions written under them. The pointer and
+    by-design variants stay durable. The plural rule is kept: a plural finding relation is a
+    list or a class, and two of 0.9.0's durable facts hidden under one are pinned here."""
+    got = {
+        (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
+        for c in CASES
+        if not c.get("project")
+    }
+    hub = "a finding rule that reads only the relation hides history and definitions; not seen on the real ledger"
+    for triple in [
+        ("recall", "open bug", "the fuzzy branch drops quoted phrases and needs a fix"),
+        ("PR #88 review", "must-fix finding", "retract leaves the FTS row behind"),
+    ]:
+        assert got.get(triple) == "miss", triple
+        assert (
+            next(c["why"] for c in CASES if (c["subject"], c["relation"], c["value"]) == triple)
+            == hub
+        )
+    for triple, expect in [
+        (("memware", "open bugs", "tracked at github.com/ericwalisko/memware/issues"), "durable"),
+        (("sqlite fts5", "known bug", "no infix matching, by design"), "durable"),
+        (
+            ("memware", "open issue", "tracked at github.com/ericwalisko/memware/issues/88"),
+            "durable",
+        ),
+        (("memware digest", "known issue", "fixed in 0.5.0"), "durable"),
+        (
+            (
+                "kanban board",
+                "blockers",
+                "a card with an unfinished blocker link stays out of the ready lane",
+            ),
+            "durable",
+        ),
+        (
+            (
+                "hermes plugin PRs",
+                "should-fix issues",
+                "fixed in the same PR when under about 20 lines; otherwise filed as a follow-up"
+                " card",
+            ),
+            "durable",
+        ),
+        (("memware", "open issues", "the digest header"), "miss"),
+        (
+            ("memware", "known issue", "retract skips confirmed rows, not yet fixed in main"),
+            "status",
+        ),
+    ]:
+        assert got.get(triple) == expect, triple

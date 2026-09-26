@@ -108,6 +108,97 @@ def test_a_finding_is_status_unless_the_value_outlives_the_fix(value, fired):
 
 
 @pytest.mark.parametrize(
+    "subject, relation",
+    [
+        ("memware", "known issue"),
+        ("memware", "Open Issue"),
+        ("memware PR #31", "must-fix issue"),
+        ("memware PR #31", "should fix issue"),
+        ("the release", "blocker"),
+    ],
+)
+def test_each_finding_relation_is_status(subject, relation):
+    """0.9.0's singular forms, which caught stale findings on a real ledger and hid nothing."""
+    t = v.status_test(subject, relation, "the digest header repeats on resume")
+    assert t.fired and t.because.startswith("the relation names a finding, '")
+
+
+@pytest.mark.parametrize(
+    "subject, relation",
+    [
+        ("recall", "open bug"),  # card t_91e28415: a synthetic holdout's miss, not the ledger's
+        ("PR #88 review", "must-fix finding"),  # card t_91e28415
+        ("memware", "known bug"),
+        ("memware sync", "open defect"),
+        ("memware PR #31", "should-fix finding"),
+        ("memware PR #31", "review finding"),
+        ("memware digest", "bug"),
+    ],
+)
+def test_a_phrasing_seen_only_in_synthetic_probes_is_not_a_finding(subject, relation):
+    """Each form would hide history and definitions too ("Heartbleed | bug | CVE-2014-0160 …"),
+    so a form joins :data:`FINDINGS` only from a stale belief seen on a real ledger."""
+    assert v.classify(subject, relation, "the digest header repeats on resume") is None
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value",
+    [
+        # a plural is a list or a class, which holds rules and history as often as defects
+        ("kanban board", "blockers", "a card with an unfinished blocker stays out of ready"),
+        ("hermes plugin PRs", "should-fix issues", "fixed in the same PR when under 20 lines"),
+        ("memware", "must-fix issues", "block the release tag"),
+        ("memware", "known issues", "documented in the README, revised every release"),
+        ("memware", "open issues", "the digest header"),
+        ("code-review skill", "must-fix findings", "block merge until resolved"),
+        ("release checklist", "OPEN BUGS", "a release ships only with zero open P0 or P1 bugs"),
+        ("Therac-25", "known defects", "race conditions caused overdoses in 1985-87"),
+        # a study's result
+        ("code review study", "review finding", "defect detection drops past 400 lines"),
+        ("aspirin trial", "known findings", "lowers the risk of a first heart attack"),
+        ("2026 security audit", "finding", "no secrets in the repository history"),
+    ],
+)
+def test_a_relation_that_is_a_fact_as_often_as_a_defect_is_not_a_finding(subject, relation, value):
+    assert v.classify(subject, relation, value) is None
+
+
+def test_a_plural_finding_relation_is_declined_by_name():
+    """``--explain`` names the finding rule for a plural it declines, and says why."""
+    t = v.status_test("memware", "open issues", "the digest header")
+    assert not t.fired and t.because == (
+        "'open issues' is a finding relation, but a plural is a list or a class, which holds"
+        " rules and history, not one finding"
+    )
+    assert v.status_test("kanban board", "Blockers", "x").declined.startswith("a plural")
+    assert {r.removesuffix("s") for r in v.PLURAL_FINDINGS} == set(v.FINDINGS)
+    assert not v.PLURAL_FINDINGS & v.FINDINGS
+
+
+@pytest.mark.parametrize(
+    "value, fired, outlives",
+    [
+        ("tracked at github.com/ericwalisko/memware/issues", False, "points at where"),
+        ("no infix matching, by design", False, "by-design"),
+        ("won't fix: the flag stays for compatibility", False, "won't-fix"),
+        ("wontfix", False, "won't-fix"),
+        ("not a bug: working as intended", False, "won't-fix"),
+        ("fixed in 0.5.0", False, "where it was fixed"),
+        ("the header repeated on resume; resolved by #40", False, "where it was fixed"),
+        ("not yet fixed in main", True, ""),
+        ("isn't fixed in 0.5.0", True, ""),
+        ("retract leaves the FTS row behind and needs a fix", True, ""),
+    ],
+)
+def test_a_value_that_outlives_the_fix_keeps_any_finding_durable(value, fired, outlives):
+    t = v.status_test("memware", "known issue", value)
+    assert t.fired is fired
+    assert outlives in t.declined and bool(t.declined) is not fired
+    if not fired:
+        assert t.because.startswith("the relation names a finding, 'known issue', but the value")
+
+
+@pytest.mark.parametrize(
     "subject, relation, value, want",
     [
         ("memware PR #31", "ci status", "green", v.STATUS),  # a status word

@@ -37,8 +37,10 @@ counts only when the identifier names a setting (``export-schedule``, ``min_cove
   id such as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card);
   a relation ending in status ("ci status"), whose value is a status word or where an instance
   id is named (a noun is not enough; a compound "… state" is a design term); or a relation that
-  names a finding (known issue, open issue, must-fix issue, should-fix issue, blocker), unless
-  the value points at where it is tracked or states a by-design limitation or a workaround.
+  names one finding (known issue, open issue, must-fix issue, should-fix issue, blocker), unless
+  the value points at where it is tracked, states a by-design limitation, a workaround or a
+  won't-fix, or says where it was fixed. A plural ("known issues", "blockers") is a list or a
+  class, which holds rules and history as often as defects, and is never a finding.
 
 :func:`decide` returns the class with the test each class ran, :meth:`Gate.explain` adds the
 exemptions and the manifest; ``classify``, derive's gate, ``memware beliefs --stale`` and
@@ -157,18 +159,18 @@ INSTANCE_NOUNS = wordset(
     "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
 )
 _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
-FINDINGS = frozenset(
-    {
-        *(
-            f"{lead} {noun}"
-            for lead in ("known", "open", "must fix", "should fix")
-            for noun in ("issue", "issues")
-        ),
-        "blocker",
-        "blockers",
-    }
-)
-"""Relations that name a finding or a defect: true until someone fixes it."""
+_FINDING_LEADS = ("known", "open", "must fix", "should fix")
+FINDINGS = frozenset({*(f"{lead} issue" for lead in _FINDING_LEADS), "blocker"})
+"""Relations that name one finding or defect: true until someone fixes it. Known, open, must-fix
+or should-fix issue, or blocker. Other phrasings ("open bug", "must-fix finding") are not added
+from synthetic probes: a finding rule reads only the relation, so each new form also hides the
+history and definitions written under it ("Heartbleed | bug | CVE-2014-0160 …"). A form joins
+this list only from a stale belief seen on a real ledger."""
+PLURAL_FINDINGS = frozenset({*(f"{lead} issues" for lead in _FINDING_LEADS), "blockers"})
+"""The plural of a finding relation: a list or a class, never one finding. It holds rules
+("kanban board | blockers | a card with an unfinished blocker link stays out of the ready lane",
+"hermes plugin PRs | should-fix issues | fixed in the same PR when under about 20 lines") and
+history as often as open defects, so it is durable, and ``--explain`` says why."""
 _POINTER = re.compile(
     r"^\s*tracked\s+(?:at|in|on)\b"  # "tracked at github.com/…"
     r"|^\s*(?:(?:see|at|in)\s+)?(?:https?://|www\.|~/|\.{0,2}/)?[\w.@:~+-]*/[\w./@:~+%#?=&-]*\s*$"
@@ -178,8 +180,26 @@ _POINTER = re.compile(
 )
 """A value that points at where a finding lives (a URL, a path, "tracked at …"), not at the
 defect: it stays true after the fix."""
-_LIMITATION = re.compile(r"\bby design\b|\bwork[- ]?arounds?\b|\buse\b.+\binstead\b", re.I)
-"""A value stating a by-design limitation or a workaround: true after any fix."""
+_LIMITATION = re.compile(
+    r"\bby design\b|\bwork[- ]?arounds?\b|\buse\b.+\binstead\b"
+    r"|\bwon'?t[- ]?fix\b|\bwill not fix\b|\bnot a bug\b|\b(?:working|works) as intended\b",
+    re.I,
+)
+"""A value stating a by-design limitation or a workaround, or that it will not be fixed: true
+after any fix."""
+_RESOLVED = re.compile(
+    r"(?<!not )(?<!yet )(?<!n't )(?<!never )"
+    r"\b(?:fixed|resolved|addressed|patched)\s+(?:in|by|on|with|since|as of)\b",
+    re.I,
+)
+"""A value saying where or when it was fixed ("fixed in 0.5.0", "resolved by #40"): history, true
+after the fix. Not "not yet fixed in main"."""
+_OUTLIVES = (
+    (_POINTER, "the value points at where it is tracked"),
+    (_LIMITATION, "the value states a by-design limitation, a workaround or a won't-fix"),
+    (_RESOLVED, "the value says where it was fixed"),
+)
+"""The values that keep a finding relation durable, in the order they are checked."""
 _REQUIREMENT = re.compile(r"\bmust\b|\bat least\b", re.I)
 """Requirement words that are not qualifiers everywhere ("must-fix issue" is a finding), but
 make a relation's quantity a rule: "must pass | 3 of 3"."""
@@ -262,6 +282,9 @@ class Test(NamedTuple):
     fired: bool
     because: str
     veto: Veto | None = None
+    declined: str = ""
+    """When the relation is a finding's but the finding rule declines it: why (a plural, or a
+    value that stays true after a fix)."""
 
 
 def measurement_test(subject: str, relation: str, value: str) -> Test:
@@ -367,13 +390,19 @@ def status_test(subject: str, relation: str, value: str) -> Test:
       value or an instance id (``#31``, ``t_31080683``) in the subject or relation: a subject
       noun is not enough ("backup job exit status: non-zero on failure" is a rule). A compound
       "… state" is a design term ("error state", "review state") and is never a status;
-    * a relation naming a finding (known issue, open issue, must-fix or should-fix issue,
-      blocker), unless the value points at where it is tracked (a URL, a path, "tracked at …")
-      or states a by-design limitation or a workaround: those stay true after a fix."""
+    * a relation naming one finding (:data:`FINDINGS`: known issue, open issue, must-fix or
+      should-fix issue, blocker), unless the value points at where it is tracked (a URL, a path,
+      "tracked at …"), states a by-design limitation, a workaround or a won't-fix, or says where
+      it was fixed ("fixed in 0.5.0"): those stay true after a fix. A plural
+      (:data:`PLURAL_FINDINGS`) is a list or a class and never a finding."""
     rel = _tokens(relation)
     while rel and rel[0] in _STATUS_LEAD:
         rel = rel[1:]
     joined = " ".join(rel)
+    if joined in PLURAL_FINDINGS:
+        declined = "a plural is a list or a class, which holds rules and history, not one finding"
+        because = f"'{joined}' is a finding relation, but {declined}"
+        return Test(STATUS, False, because, declined=declined)
     finding = joined in FINDINGS
     exact = len(rel) == 1 and rel[0] in STATUS_RELATIONS
     compound = len(rel) > 1 and rel[-1] == "status"
@@ -387,15 +416,11 @@ def status_test(subject: str, relation: str, value: str) -> Test:
     if v is not None:
         return Test(STATUS, False, f"'{joined}', but {v} vetoes it", v)
     if finding:
-        if _POINTER.search(value):
-            return Test(STATUS, False, f"'{joined}', but the value points at where it is tracked")
-        if _LIMITATION.search(value):
-            return Test(
-                STATUS,
-                False,
-                f"'{joined}', but the value states a by-design limitation or a workaround",
-            )
-        return Test(STATUS, True, f"the relation names a finding, '{joined}'")
+        names = f"the relation names a finding, '{joined}'"
+        outlives = next((why for pattern, why in _OUTLIVES if pattern.search(value)), "")
+        if outlives:
+            return Test(STATUS, False, f"{names}, but {outlives}", declined=outlives)
+        return Test(STATUS, True, names)
     if _status_value(value):
         return Test(STATUS, True, f"'{joined}' with a status word for a value")
     if exact:
@@ -771,6 +796,9 @@ class Explanation:
         vetoed = [t for t in self.decision.tests if t.veto is not None]
         if vetoed:
             return f"durable: {vetoed[0].veto} vetoes a {label(vetoed[0].cls)}"
+        declined = [t for t in self.decision.tests if t.declined]
+        if declined:
+            return f"durable: {declined[0].because}"
         return "durable: no rule fired"
 
 

@@ -40,6 +40,22 @@ All notable changes to this project are documented here. The format follows
   release" now ends with a Deploy step that updates each of those copies and checks it: the uv
   tool CLI, the Claude Code plugin, the Hermes plugin copy, the Hermes gateway's venv, and the
   gateway restart. It also covers what to do after a Hermes desktop-app update.
+- **A plural finding relation is never a status.** 0.9.0 left out a belief whose relation named
+  a finding (`known issue`, `open issue`, `must-fix issue`, `should-fix issue`, `blocker`) and
+  their plurals. A plural is a list or a class, and blind holdouts found it holding rules as
+  often as defects: `kanban board | blockers | a card with an unfinished blocker link stays out
+  of the ready lane`, `hermes plugin PRs | should-fix issues | fixed in the same PR when under
+  about 20 lines`. Only the singular forms count now. A value that says where a finding was fixed
+  (`fixed in 0.5.0`, `resolved by #40`, but not `not yet fixed`) or that it will not be fixed
+  (`won't fix`, `not a bug`, `working as intended`) keeps the belief durable, as a tracker
+  pointer or a by-design limitation already did. `beliefs --explain` names the finding rule when
+  it declines a belief this way, and says why, where it said "no rule fired". Both changes only
+  narrow the rule: nothing 0.9.0 injected is left out now. Other phrasings are not added: `open
+  bug` and `must-fix finding` came from synthetic holdout probes, not from a stale belief on a
+  real ledger, and a rule that reads only the relation would also hide the history and
+  definitions written under them (`Heartbleed | bug | CVE-2014-0160, …`). They stay in the
+  labeled corpus as marked misses. The corpus grows from 160 to 181 cases, with no durable case
+  left out; 0.9.0 left out 4 of them.
 
 ## [0.9.0] - 2026-09-24
 
