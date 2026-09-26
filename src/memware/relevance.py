@@ -11,8 +11,9 @@ is an optional extra that is off by default, as CONTRIBUTING asks of any such ca
 ``relevance.mode`` in the config decides, and only these exact words switch it on:
 
 * ``off`` (the default, and how any other value reads): no key is read, no request is made and
-  nothing is logged. The callers do not reach this module, and they inject exactly what they
-  injected before it existed.
+  nothing is logged. The callers reach this module only for :func:`typed`, and they inject
+  exactly what they injected before it existed, except on a turn nobody typed, which gets
+  nothing in every mode.
 * ``shadow``: the request is made and each candidate's answer is appended to :func:`log_path`,
   but the injected block is exactly what ``off`` injects. Use it to measure and to label pairs
   before you trust a threshold.
@@ -23,12 +24,12 @@ is an optional extra that is off by default, as CONTRIBUTING asks of any such ca
 What leaves the machine when it is on: the prompt, cut to :data:`MAX_PROMPT_CHARS`, and each
 candidate as ``subject relation: value``. They are sent to :data:`ENDPOINT`, with the key in an
 ``Authorization`` header. No session id, path, transcript or date is sent. Two kinds of turn are
-never sent. One is a turn nobody typed: a background task's notification, which Claude Code
-submits as a prompt, or a hook that fires inside a subagent; filter mode injects nothing on it
-and shadow mode injects what ``off`` does. The other is a session memware keeps out of its store
-(:func:`kept_out`: ``MEMWARE_NO_CAPTURE``, the no-capture list, a ``capture.exclude`` glob, an
-ignore marker in the prompt); it gets what ``off`` injects. What memware would not index, it
-does not send.
+never sent. One is a turn nobody typed (:func:`typed`): a background task's notification, which
+Claude Code submits as a prompt and Hermes runs a turn on, or a hook that fires inside a
+subagent; the callers inject nothing on it in any mode. The other is a session memware keeps out
+of its store (:func:`kept_out`: ``MEMWARE_NO_CAPTURE``, the no-capture list, a
+``capture.exclude`` glob, an ignore marker in the prompt); it gets what ``off`` injects. What
+memware would not index, it does not send.
 
 Every failure falls back to what ``off`` injects: no key, a timeout, a refused connection, an
 HTTP error, or a reply that is not one probability per candidate. There is one attempt and no
@@ -48,6 +49,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -74,8 +76,24 @@ LOG_NAME = "relevance-log.jsonl"
 USAGE_NAME = "relevance-usage.jsonl"
 USD_PER_INPUT_TOKEN = 0.042 / 1_000_000  # jev-1.13 list price (2026-09); output tokens are free
 
-# A turn Claude Code submits as a prompt although no person typed it.
-NOT_TYPED = ("<task-notification>",)
+# The start of a turn submitted as a prompt although no person typed it: Claude Code's
+# background-task notification, and the notices Hermes's gateway runs a turn on when a background
+# process finishes, matches a watch pattern or reports a heartbeat, when an async delegation
+# finishes, or when a CLI session is handed off to a channel (hermes-agent
+# tools/process_registry*.py, gateway/run_notifications.py, gateway/run_startup.py). Each is the
+# exact text Hermes writes, so a typed "[IMPORTANT: Watch out…" stays typed. Whitespace, a byte
+# order mark and zero-width characters before it do not hide it.
+NOT_TYPED = re.compile(
+    r"[\s﻿​-‍⁠]*"
+    r"(?:<task-notification>"
+    r"|\[IMPORTANT: (?:Background process "
+    r"|\d+ background (?:processes|subagent delegations) completed"
+    r"|Watch patterns disabled for process "
+    r"|Watch-pattern (?:notifications resumed|overflow))"
+    r"|\[Background process \S+ heartbeat "
+    r"|\[ASYNC DELEGATION "
+    r"|\[Session was just handed off from CLI )"
+)
 
 QUESTION = "Does the fact `facts.{id}` bear on the task `prompt` asks for?"
 CRITERIA = {
@@ -201,9 +219,11 @@ def fact(subject: str, relation: str, value: str) -> str:
 
 
 def typed(prompt: str, *, agent: bool = False) -> bool:
-    """False for a turn no person typed: a background task's notification, or a hook fired
-    inside a subagent (Claude Code's payload then carries ``agent_id``)."""
-    return not agent and not prompt.lstrip().startswith(NOT_TYPED)
+    """False for a turn no person typed: a background task's notification (:data:`NOT_TYPED`),
+    or a hook fired inside a subagent (Claude Code's payload then carries ``agent_id``). Nobody
+    asked anything on such a turn, so the prompt hook and the Hermes provider inject nothing on
+    it, whatever ``relevance.mode`` says."""
+    return not agent and not NOT_TYPED.match(prompt)
 
 
 def kept_out(prompt: str, transcript: str | None = None) -> bool:
@@ -235,12 +255,13 @@ def choose(
     """Indices into ``facts`` to inject, in order. ``facts`` is memware's own ranking, best
     first and already past the gate, as ``(belief id, fact(...))``. When off, for a session
     memware keeps out (:func:`kept_out`), and after any failure, the answer is the first k: what
-    memware injects without this module."""
+    memware injects without this module. A turn nobody typed (:func:`typed`) gets none; the
+    callers check that before they get here, whatever the mode."""
+    if not typed(prompt, agent=agent):
+        return []
     today = list(range(min(k, len(facts))))
     if not rel.on or not today:
         return today
-    if not typed(prompt, agent=agent):
-        return today if rel.mode == "shadow" else []
     if kept_out(prompt, transcript):
         return today
     pool = list(facts[: max(rel.pool, k)])

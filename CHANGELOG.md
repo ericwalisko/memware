@@ -18,6 +18,21 @@ All notable changes to this project are documented here. The format follows
   Each release raises the floor to its own version, and `tests/test_plugin_manifest.py` fails CI
   when the two differ, because Hermes keeps the memware version already in its lock while the
   floor is met.
+- **Nothing is injected on a turn nobody typed.** The prompt hook injected facts on turns no
+  person typed: on 2026-09-24 it put 17 facts into 3 such turns of one session, none of them
+  relevant. Those turns are a background task's `<task-notification>`, which Claude Code submits
+  as a prompt, and a hook fired inside a subagent, whose payload carries `agent_id`. Only
+  `relevance.mode filter` skipped them. Now `memware context --from-hook` prints nothing on
+  either in every mode, the default included, and shadow mode matches. The Hermes provider's
+  `prefetch` does the same for the notices Hermes's gateway runs a turn on: a background process
+  that exited, matched a watch pattern or sent a heartbeat, a finished async delegation, and a
+  CLI session handed off to a channel (`[IMPORTANT: Background process …`, `[ASYNC DELEGATION …`,
+  `[Session was just handed off from CLI …`). A prompt a person typed gets byte-identical output;
+  `tests/test_relevance.py` pins it against origin/main's. The rule is
+  `memware.relevance.typed`. Only the exact start of a notice counts, so a typed
+  `[IMPORTANT: Watch out…` still gets its facts, and a byte order mark or a zero-width character
+  in front of a notice does not hide it. See
+  [turns nobody typed](docs/integrations.md#turns-nobody-typed).
 
 ### Changed
 - **RELEASING.md has a Deploy section.** Publishing never updated the copies of memware running

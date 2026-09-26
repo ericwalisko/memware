@@ -26,7 +26,7 @@ Hooks (`hooks/hooks.json`):
 | `SessionStart` | `memware notice --from-hook`, in the foreground | until `memware setup` has asked about `derive` (setup last ran before 0.4.0 or never, and `derive.auto` is unset), shows one line under the session header saying so; reads only the config, and prints nothing once either is true, after a compaction, or when the config will not parse |
 | `SessionStart` | `memware digest --from-hook`, in the foreground (5 s timeout) | injects a block of at most 1,200 characters: a line pointing at `recall`, this project's 5 most recent sessions (date and first prompt), and the beliefs whose subject names the project, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)); nothing for a project memware has no session for — see [the digest](#the-session-start-digest) |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
-| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext`; with the [optional relevance filter](../README.md#optional-a-relevance-filter-for-prompt-time-injection) switched on, less what it judges irrelevant too |
+| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext`; with the [optional relevance filter](../README.md#optional-a-relevance-filter-for-prompt-time-injection) switched on, less what it judges irrelevant too; nothing on [a turn nobody typed](#turns-nobody-typed) |
 
 `SessionEnd` runs when Claude Code exits cleanly, but some environments **force-kill** it (a worktree/pane manager may `SIGKILL` the process group on close), and a `SIGKILL` cannot run any hook. The `SessionStart` hook covers that: it runs a bare `memware sync` — which catches up the configured `backup.transcript_src` (default `~/.claude/projects`) — plus a throttled backup, **backgrounded** so it never delays startup. So the previous session is indexed at the next start even if its `SessionEnd` was skipped; the raw transcript is durable on disk regardless.
 
@@ -49,8 +49,11 @@ On a new machine, index existing transcripts once with `memware backfill` (defau
 
 Tools: `recall` (takes a list of phrasings — have the agent pass 3–5, including synonyms and the literal value it expects), `read_session`, `beliefs`, `remember`, `pending_reviews`.
 
-Subagents: the plugin does not inject into subagents. They can call the MCP
-tools. Their transcripts are synced with the parent session's.
+Subagents: the plugin injects nothing into subagents. Claude Code fires `SubagentStart`, not
+`SessionStart`, when it starts one, and the plugin has no `SubagentStart` hook, so the digest and
+the notice never reach a subagent. The prompt hook prints nothing when its payload carries
+`agent_id`, as every hook fired inside a subagent's does ([turns nobody typed](#turns-nobody-typed)).
+Subagents can call the MCP tools. Their transcripts are synced with the parent session's.
 
 ### The session-start digest
 
@@ -151,9 +154,50 @@ off by default. When `relevance.mode` is `filter`, it also leaves out candidates
 classifier judges irrelevant to the prompt. It works on what the gate admitted, widened to
 `relevance.pool` candidates, and never adds a belief the gate left out. Both the prompt hook and
 `prefetch` read the switch from memware's own config. In `shadow` mode it logs its judgments and
-leaves injection unchanged. A task notification, a hook fired inside a subagent (its payload
-carries `agent_id`) and a session memware keeps out of the store are never sent. With the filter
-off, a task notification still gets beliefs injected, as it did before the filter existed.
+leaves injection unchanged. A turn nobody typed and a session memware keeps out of the store are
+never sent, and a turn nobody typed gets nothing in any mode.
+
+### Turns nobody typed
+
+Some turns reach the prompt hook although no person typed them. Nobody asked anything on such a
+turn, so the beliefs that share its words are noise. On 2026-09-24 one session got 17 of them
+across 3 such turns, none relevant. The prompt hook injects nothing on:
+
+- **a background task's notification**, which Claude Code submits as a prompt starting
+  `<task-notification>`;
+- **a hook fired inside a subagent**, whose payload carries `agent_id`.
+
+This holds whatever `relevance.mode` says, and no request is made for either. A prompt a person
+typed gets exactly the bytes it got before; `tests/test_relevance.py` pins them against output
+captured from origin/main. Only the exact start of a notification counts: a typed prompt that
+quotes one later in its text, or starts `[IMPORTANT: Watch out…`, is still typed. Whitespace, a
+byte order mark or a zero-width character in front of a notification does not hide it. The test
+is `memware.relevance.typed`.
+
+One caveat, on `agent_id`. Claude Code's hooks reference does not say whether a prompt a person
+types into a subagent's or a fork's transcript fires `UserPromptSubmit`. If it does and the
+payload carries `agent_id`, that turn gets no injected facts. `recall` still works there, so this
+is one turn without the extra, not a fact hidden for good.
+
+The Hermes provider's `prefetch` applies the same rule. Hermes's gateway runs a turn on the notice
+it writes when a background process exits, matches a watch pattern or reports a heartbeat, when
+an async delegation finishes, and when a CLI session is handed off to a channel. Each notice
+starts with text Hermes writes verbatim, and `prefetch` returns nothing for it:
+
+- `[IMPORTANT: Background process ` (a process exited or matched a watch pattern);
+- `[IMPORTANT: N background processes completed` or `[IMPORTANT: N background subagent
+  delegations completed` (a batch);
+- `[IMPORTANT: Watch patterns disabled for process `, `[IMPORTANT: Watch-pattern notifications
+  resumed` or `[IMPORTANT: Watch-pattern overflow`;
+- `[Background process … heartbeat `;
+- `[ASYNC DELEGATION ` (complete, batch complete, task failed);
+- `[Session was just handed off from CLI `.
+
+Hermes passes a provider only the turn's text, so the start of the text is all there is to go on.
+Two kinds of turn are left alone. In a shared multi-user session Hermes puts the sender's name
+first (`[name] …`), so a notice there is not recognised and gets what a typed turn gets. A notice
+a plugin writes is not recognised either. Hermes's subagents (`delegate_task`) run without the
+memory provider, so `prefetch` never runs inside one.
 
 ## Hermes Agent
 

@@ -107,8 +107,9 @@ candidates that clear a threshold. It is off by default, following CONTRIBUTING'
 in the read path is an optional extra. It keeps these invariants:
 
 - **Off is off.** With `relevance.mode` unset or anything other than `shadow` or `filter`, no key
-  is read and no socket is opened. The hook's output is byte-identical to the output before the
-  filter existed; `tests/test_relevance.py` pins it against output captured from origin/main.
+  is read and no socket is opened. For a prompt a person typed, the hook's output is
+  byte-identical to the output before the filter existed; `tests/test_relevance.py` pins it
+  against output captured from origin/main. A turn nobody typed gets nothing, in every mode.
 - **A subset, never an addition.** The classifier returns probabilities and never text. The
   injected block is a subset of the candidates that already passed the subject and volatility
   gates, capped at k, so no instruction in a prompt or a stored fact can add words to it.
