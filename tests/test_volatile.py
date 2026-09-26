@@ -112,9 +112,8 @@ def test_a_finding_is_status_unless_the_value_outlives_the_fix(value, fired):
     [
         ("recall", "open bug"),  # card t_91e28415: missed by both holdouts on PR #51
         ("PR #88 review", "must-fix finding"),  # card t_91e28415
-        ("memware", "open bugs"),
         ("memware", "known bug"),
-        ("memware", "Known Defects"),
+        ("memware", "Known Defect"),
         ("memware sync", "open defect"),
         ("memware PR #31", "should-fix finding"),
         ("memware PR #31", "should fix bug"),
@@ -133,21 +132,39 @@ def test_each_finding_relation_is_status(subject, relation):
 @pytest.mark.parametrize(
     "subject, relation, value",
     [
-        # the plural of must-fix or should-fix names a class, which a rule describes
+        # a plural is a list or a class, which holds rules and history as often as defects
         ("code-review skill", "must-fix findings", "block merge until resolved"),
-        ("memware", "must-fix issues", "block the release tag"),
-        ("memware", "should-fix bugs", "may wait for the next minor"),
+        ("release checklist", "OPEN BUGS", "a release ships only with zero open P0 or P1 bugs"),
+        ("Therac-25", "known defects", "race conditions caused overdoses in 1985-87"),
+        ("kanban board", "blockers", "a card with an unfinished blocker stays out of ready"),
+        ("memware", "open issues", "the digest header"),
+        ("memware", "bugs", "reported through GitHub issues"),
+        ("memware", "review findings", "go in PR comments"),
+        ("aspirin trial", "known findings", "lowers the risk of a first heart attack"),
         # a study's review finding is a fact; only a PR, card or run's is a finding
         ("code review study", "review finding", "defect detection drops past 400 lines"),
         ("memware", "review finding", "the docstring promises the wrong order"),
-        ("memware", "review findings", "go in PR comments"),
-        ("aspirin trial", "known findings", "lowers the risk of a first heart attack"),
-        ("memware", "bugs", "reported through GitHub issues"),
+        # not finding relations at all
+        ("aspirin trial", "known finding", "lowers the risk of a first heart attack"),
         ("2026 security audit", "finding", "no secrets in the repository history"),
     ],
 )
 def test_a_relation_that_is_a_fact_as_often_as_a_defect_is_not_a_finding(subject, relation, value):
     assert v.classify(subject, relation, value) is None
+
+
+def test_a_plural_or_a_review_finding_with_no_instance_is_declined_by_name():
+    """``--explain`` names the finding rule for a relation it declines, and says why."""
+    t = v.status_test("memware", "open bugs", "tracked at github.com/ericwalisko/memware/issues")
+    assert not t.fired and t.because == (
+        "'open bugs' is a finding relation, but a plural is a list or a class, which holds rules"
+        " and history, not one finding"
+    )
+    t = v.status_test("code review study", "review finding", "defect detection drops")
+    assert not t.fired and t.declined.startswith("the subject names no PR, card or run")
+    assert v.classify("memware PR #31", "review findings", "two nits") is None  # plural first
+    for relation in v.PLURAL_FINDINGS:
+        assert relation not in v.FINDINGS and relation not in v.INSTANCE_FINDINGS
 
 
 @pytest.mark.parametrize(
@@ -168,7 +185,7 @@ def test_a_relation_that_is_a_fact_as_often_as_a_defect_is_not_a_finding(subject
 def test_a_value_that_outlives_the_fix_keeps_any_finding_durable(value, fired, outlives):
     t = v.status_test("memware", "known bug", value)
     assert t.fired is fired
-    assert outlives in t.outlives and bool(t.outlives) is not fired
+    assert outlives in t.declined and bool(t.declined) is not fired
     if not fired:
         assert t.because.startswith("the relation names a finding, 'known bug', but the value")
 

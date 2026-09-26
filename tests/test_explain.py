@@ -181,8 +181,16 @@ CARD_FINDINGS = [  # card t_91e28415: (subject, relation, value, class, why)
         "open bugs",
         "tracked at github.com/ericwalisko/memware/issues",
         "durable",
-        "durable: the relation names a finding, 'open bugs', but the value points at where it"
-        " is tracked",
+        "durable: 'open bugs' is a finding relation, but a plural is a list or a class, which"
+        " holds rules and history, not one finding",
+    ),
+    (
+        "memware",
+        "open bug",
+        "tracked at github.com/ericwalisko/memware/issues/88",
+        "durable",
+        "durable: the relation names a finding, 'open bug', but the value points at where it is"
+        " tracked",
     ),
     (
         "sqlite fts5",
@@ -197,8 +205,9 @@ CARD_FINDINGS = [  # card t_91e28415: (subject, relation, value, class, why)
 
 def test_explain_names_the_finding_rule_whichever_way_it_goes(tmp_path, home, capsys):
     """The two findings the PR #51 holdouts missed are status now, and the pointer and by-design
-    variants stay durable; ``--explain`` names the finding rule for all four, in its headline
-    and its status test, and ``--stale`` leaves out exactly the two."""
+    variants stay durable; ``--explain`` names the finding rule for each, in its headline and its
+    status test, and ``--stale`` leaves out exactly the two. The card's pointer variant is a
+    plural, which the rule declines by name; the singular pointer variant shows the exemption."""
     path = str(tmp_path / "findings.db")
     with Store(path) as s:
         for subject, relation, value, _, _ in CARD_FINDINGS:
@@ -211,7 +220,9 @@ def test_explain_names_the_finding_rule_whichever_way_it_goes(tmp_path, home, ca
         assert r["injected"] is (cls == "durable")
         status = r["tests"][2]
         assert status["fired"] is (cls == "status")
-        assert status["because"].startswith("the relation names a finding, '")
+        assert status["because"].startswith(
+            ("the relation names a finding, '", f"'{relation}' is a finding relation, but")
+        )
     code, out, _ = _run(capsys, "--db", path, "--plain", "beliefs", "--explain", "2")
     assert code == 0 and "is a status : yes: the relation names a finding" in out
     code, out, _ = _run(capsys, "--db", path, "beliefs", "--stale", "--json")

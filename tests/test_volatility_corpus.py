@@ -194,8 +194,9 @@ def test_the_corpus_holds_what_the_pr51_review_named():
 
 def test_the_corpus_holds_what_card_t_91e28415_named():
     """Two findings both PR #51 holdouts missed, the forms of the same kind the card listed, and
-    the pointer and by-design variants that must stay durable. The last two durable ones are the
-    facts the card's own blind holdout found hidden by the first draft of the rule."""
+    the pointer and by-design variants that must stay durable. The rest are durable facts the
+    card's two blind holdouts found hidden by a draft of the rule, or by 0.9.0's plural rule: a
+    plural relation is a list or a class, and a study's review finding is a fact."""
     got = {
         (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
         for c in CASES
@@ -233,5 +234,23 @@ def test_the_corpus_holds_what_card_t_91e28415_named():
             ),
             "durable",
         ),
+        (
+            ("memware", "open bug", "tracked at github.com/ericwalisko/memware/issues/88"),
+            "durable",
+        ),
+        (
+            ("release checklist", "OPEN BUGS", "a release ships only with zero open P0 or P1 bugs"),
+            "durable",
+        ),
+        (
+            (
+                "hermes plugin PRs",
+                "should-fix issues",
+                "fixed in the same PR when under about 20 lines; otherwise filed as a follow-up"
+                " card",
+            ),
+            "durable",
+        ),
+        (("memware", "open issues", "the digest header"), "miss"),
     ]:
         assert got.get(triple) == expect, triple

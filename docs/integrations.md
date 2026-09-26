@@ -90,7 +90,7 @@ and the digest leave out:
 |---|---|---|
 | `measurement` | a relation that is exactly progress, coverage or null rate; a count, total or "number of" over rows, records, tests, files, lines, commits, duplicates, accounts, users or downloads; a magnitude or a comma-grouped number of 1,000 or more beside one of those; an "N of M" over one, in the relation or as the subject's noun, or over a completion word ("backfilled"); not when the relation says it must hold ("must pass", "at least") | `memware test suite test count: 91 tests`, `appointment rows eligible and exported: 2,454 of 10,346` |
 | `moving_version` | a version string the subject or relation calls current, latest, built, installed, deployed, released or on main | `memware main branch current version: 0.4.0` |
-| `status` | a relation that is exactly status, state or progress, whose value is a status word (open, merged, review, blocked, failing, connected, …) or whose subject names an instance (`#12`, `t_cd03d14d`, or ending in run, scan, build, job, PR, issue or card); a relation ending in status, whose value is a status word or where an instance id (`#31`, `t_…`) is named; a relation that names a finding or a defect (a known or open issue, bug or defect, or an open finding, singular or plural; a must-fix or should-fix issue, bug, defect or finding, singular only; `bug` or `blocker` alone; a review finding of a named PR, card or run), unless the value points at where it is tracked, states a by-design limitation, a workaround or a won't-fix, or says where it was fixed | `card t_cd03d14d status: review`, `memware PR #31 ci status: green`, `memware known issue: …`, `recall open bug: …`, `PR #88 review must-fix finding: …` |
+| `status` | a relation that is exactly status, state or progress, whose value is a status word (open, merged, review, blocked, failing, connected, …) or whose subject names an instance (`#12`, `t_cd03d14d`, or ending in run, scan, build, job, PR, issue or card); a relation ending in status, whose value is a status word or where an instance id (`#31`, `t_…`) is named; a relation that names one finding or defect (a known, open, must-fix or should-fix issue, bug or defect; an open, must-fix or should-fix finding; `bug` or `blocker` alone; a review finding of a named PR, card or run), never a plural, unless the value points at where it is tracked, states a by-design limitation, a workaround or a won't-fix, or says where it was fixed | `card t_cd03d14d status: review`, `memware PR #31 ci status: green`, `memware known issue: …`, `recall open bug: …`, `PR #88 review must-fix finding: …` |
 | `contradicted` | inside a project: a belief about a package's own version that differs from the version that package declares | `built memware wheel version: 0.5.0` in a 0.6.1 checkout |
 | `older_version` | the same: a belief naming an older version beside the package's name | `memware 0.4.0 known issue: …` |
 
@@ -107,15 +107,17 @@ part is the qualifier (`export-schedule`, `ruff-pin`), it holds a bound (`min_co
 joins a qualifier to what would be measured (`max_rows`, `page_size`). A compound "… state" is a
 design term (`sync indicator error state: red`), and a finding that points at its tracker,
 states a by-design limitation or a won't-fix, or says where it was fixed stays (`memware open
-bugs: tracked at github.com/…`, `memware digest known bug: fixed in 0.5.0`). Some finding words
-are left out because they name a fact as often as a defect: the plural of must-fix or should-fix
-is how a rule names a class (`code-review skill must-fix findings: block merge until resolved`),
-a review finding counts only when the subject names a PR, card or run (a study's review finding
-is a fact), and `known findings`, `bugs` and `finding` alone never count. Anything else in doubt
-is durable too: `main branch python version: 3.12`, `feature flag dark_mode state: enabled`, `rollout percentage: 10%`. The fuzzy judgment belongs to derive's prompt, which sees the excerpt;
-this sees only a triple. `tests/data/volatility_cases.jsonl` is the labeled corpus the rules are
-held to: no durable case may be left out, and the volatile cases they miss (`api p95 latency:
-340ms`, `memware sync at 50k turns latency: 3.7 s`, …) are listed there, marked.
+bug: tracked at github.com/…`, `memware digest known bug: fixed in 0.5.0`). A plural finding
+relation is a list or a class, never one finding: it holds rules (`release checklist open bugs: a
+release ships only with zero open P0 or P1 bugs`) and history (`Therac-25 known defects: …
+between 1985 and 1987`) as often as open defects. A review finding counts only when the subject
+names a PR, card or run, because a study's review finding is a fact, and `known finding` never
+counts. Anything else in doubt is durable too: `main branch python version: 3.12`, `feature flag
+dark_mode state: enabled`, `rollout percentage: 10%`. The fuzzy judgment belongs to derive's
+prompt, which sees the excerpt; this sees only a triple. `tests/data/volatility_cases.jsonl` is
+the labeled corpus the rules are held to: no durable case may be left out, and the volatile cases
+they miss (`api p95 latency: 340ms`, `memware sync at 50k turns latency: 3.7 s`, …) are listed
+there, marked.
 
 To see why one belief is or is not injected, `memware beliefs --explain ID` prints its class or
 durable, the test that decided it (with the qualifier and the field it came from, for a veto),
