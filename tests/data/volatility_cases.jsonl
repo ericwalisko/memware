@@ -92,6 +92,14 @@
 {"subject": "sqlite fts5", "relation": "known issue", "value": "no infix matching (by design)", "expect": "durable", "from": "review-pr51", "why": "a by-design limitation stays true"}
 {"subject": "known issue", "relation": "workaround", "value": "pass --no-cache", "expect": "durable", "from": "review-pr51", "why": "a workaround is not a finding relation"}
 {"subject": "release gate tests", "relation": "must pass", "value": "3 of 3", "expect": "durable", "from": "review-pr51", "why": "a requirement word makes the N of M a rule"}
+{"subject": "memware", "relation": "open bugs", "value": "tracked at github.com/ericwalisko/memware/issues", "expect": "durable", "from": "t_91e28415", "why": "names a finding, but the value points at where bugs are tracked; true after any fix"}
+{"subject": "sqlite fts5", "relation": "known bug", "value": "no infix matching, by design", "expect": "durable", "from": "t_91e28415", "why": "names a finding, but a by-design limitation stays true"}
+{"subject": "memware digest", "relation": "known bug", "value": "fixed in 0.5.0", "expect": "durable", "from": "probe", "why": "names a finding, but says where it was fixed: history"}
+{"subject": "sqlite fts5", "relation": "open bug", "value": "won't fix: the tokenizer keeps its behaviour for compatibility", "expect": "durable", "from": "probe", "why": "names a finding, but a won't-fix is a decision that stays true"}
+{"subject": "code-review skill", "relation": "must-fix findings", "value": "block merge until resolved or explicitly waived by the repo owner", "expect": "durable", "from": "holdout-t_91e28415", "why": "the plural of must-fix names a class, and the value is the rule for it"}
+{"subject": "SmartBear/Cisco code review study", "relation": "review finding", "value": "defect detection drops sharply when reviewing more than about 400 lines in one session", "expect": "durable", "from": "holdout-t_91e28415", "why": "a study's review finding is a fact; no PR, card or run is named"}
+{"subject": "memware", "relation": "bugs", "value": "reported through GitHub issues", "expect": "durable", "from": "probe", "why": "'bugs' alone names where reports go as often as a defect"}
+{"subject": "aspirin trial", "relation": "known findings", "value": "lowers the risk of a first heart attack", "expect": "durable", "from": "probe", "why": "a study's known findings are facts"}
 {"subject": "the table", "relation": "row count", "value": "4.2 million rows", "expect": "measurement", "from": "issue-38", "why": "the row count derive filed"}
 {"subject": "staging table", "relation": "row count", "value": "4.2 million", "expect": "measurement", "from": "issue-38", "why": "a row count"}
 {"subject": "staging table", "relation": "duplicate rows removed", "value": "10,671", "expect": "measurement", "from": "issue-38", "why": "a tally of one run"}
@@ -145,6 +153,13 @@
 {"subject": "t_31080683 on personal-os board", "relation": "test status", "value": "1 failed, 14 passed", "expect": "status", "from": "review-pr51", "why": "a compound status of an instance id"}
 {"subject": "personal-os PR #152", "relation": "deployed status", "value": "deployed", "expect": "status", "from": "review-pr51", "why": "a compound status of an instance id"}
 {"subject": "memware belief classifier", "relation": "must-fix issue", "value": "Config values are treated as measurements", "expect": "status", "from": "review-pr51", "why": "a review finding: stale once fixed"}
+{"subject": "recall", "relation": "open bug", "value": "the fuzzy branch drops quoted phrases and needs a fix", "expect": "status", "from": "t_91e28415", "why": "an open bug: stale once fixed; missed by both PR #51 holdouts"}
+{"subject": "PR #88 review", "relation": "must-fix finding", "value": "retract leaves the FTS row behind", "expect": "status", "from": "t_91e28415", "why": "a review finding: stale once fixed; missed by both PR #51 holdouts ('must-fix issue' was the only form)"}
+{"subject": "memware sync", "relation": "open defect", "value": "the last turn of a resumed session is dropped", "expect": "status", "from": "t_91e28415", "why": "an open defect: stale once fixed"}
+{"subject": "memware PR #31", "relation": "should-fix finding", "value": "the docstring promises the wrong order", "expect": "status", "from": "t_91e28415", "why": "a review finding: stale once fixed"}
+{"subject": "memware PR #31", "relation": "review finding", "value": "beliefs --stale lists confirmed rows", "expect": "status", "from": "t_91e28415", "why": "a review finding of a named PR: stale once fixed"}
+{"subject": "memware digest", "relation": "bug", "value": "the header repeats on resume", "expect": "status", "from": "t_91e28415", "why": "'bug' as the whole relation names a defect: stale once fixed"}
+{"subject": "memware", "relation": "known bug", "value": "retract skips confirmed rows, not yet fixed in main", "expect": "status", "from": "probe", "why": "a known bug the value says is not fixed yet"}
 {"subject": "memware #22", "relation": "feature", "value": "the no-capture fix", "expect": "status", "miss": true, "from": "hub-session", "why": "what a PR contains; 'feature' is not a status relation"}
 {"subject": "memware ci", "relation": "checks passed", "value": "3 of 5", "expect": "measurement", "miss": true, "from": "probe", "why": "'checks' is a qualifier"}
 {"subject": "api", "relation": "p95 latency", "value": "340ms", "expect": "measurement", "miss": true, "from": "probe", "why": "latency is not an accumulating count"}

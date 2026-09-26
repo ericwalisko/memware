@@ -108,6 +108,72 @@ def test_a_finding_is_status_unless_the_value_outlives_the_fix(value, fired):
 
 
 @pytest.mark.parametrize(
+    "subject, relation",
+    [
+        ("recall", "open bug"),  # card t_91e28415: missed by both holdouts on PR #51
+        ("PR #88 review", "must-fix finding"),  # card t_91e28415
+        ("memware", "open bugs"),
+        ("memware", "known bug"),
+        ("memware", "Known Defects"),
+        ("memware sync", "open defect"),
+        ("memware PR #31", "should-fix finding"),
+        ("memware PR #31", "should fix bug"),
+        ("memware", "must-fix defect"),
+        ("security audit", "open finding"),
+        ("memware PR #31", "review finding"),  # an instance id
+        ("t_31080683", "review finding"),
+        ("memware digest", "bug"),
+    ],
+)
+def test_each_finding_relation_is_status(subject, relation):
+    t = v.status_test(subject, relation, "the digest header repeats on resume")
+    assert t.fired and t.because.startswith("the relation names a finding, '")
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value",
+    [
+        # the plural of must-fix or should-fix names a class, which a rule describes
+        ("code-review skill", "must-fix findings", "block merge until resolved"),
+        ("memware", "must-fix issues", "block the release tag"),
+        ("memware", "should-fix bugs", "may wait for the next minor"),
+        # a study's review finding is a fact; only a PR, card or run's is a finding
+        ("code review study", "review finding", "defect detection drops past 400 lines"),
+        ("memware", "review finding", "the docstring promises the wrong order"),
+        ("memware", "review findings", "go in PR comments"),
+        ("aspirin trial", "known findings", "lowers the risk of a first heart attack"),
+        ("memware", "bugs", "reported through GitHub issues"),
+        ("2026 security audit", "finding", "no secrets in the repository history"),
+    ],
+)
+def test_a_relation_that_is_a_fact_as_often_as_a_defect_is_not_a_finding(subject, relation, value):
+    assert v.classify(subject, relation, value) is None
+
+
+@pytest.mark.parametrize(
+    "value, fired, outlives",
+    [
+        ("tracked at github.com/ericwalisko/memware/issues", False, "points at where"),
+        ("no infix matching, by design", False, "by-design"),
+        ("won't fix: the flag stays for compatibility", False, "won't-fix"),
+        ("wontfix", False, "won't-fix"),
+        ("not a bug: working as intended", False, "won't-fix"),
+        ("fixed in 0.5.0", False, "where it was fixed"),
+        ("the header repeated on resume; resolved by #40", False, "where it was fixed"),
+        ("not yet fixed in main", True, ""),
+        ("isn't fixed in 0.5.0", True, ""),
+        ("retract leaves the FTS row behind and needs a fix", True, ""),
+    ],
+)
+def test_a_value_that_outlives_the_fix_keeps_any_finding_durable(value, fired, outlives):
+    t = v.status_test("memware", "known bug", value)
+    assert t.fired is fired
+    assert outlives in t.outlives and bool(t.outlives) is not fired
+    if not fired:
+        assert t.because.startswith("the relation names a finding, 'known bug', but the value")
+
+
+@pytest.mark.parametrize(
     "subject, relation, value, want",
     [
         ("memware PR #31", "ci status", "green", v.STATUS),  # a status word

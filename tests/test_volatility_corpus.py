@@ -190,3 +190,48 @@ def test_the_corpus_holds_what_the_pr51_review_named():
         (("scheduled_test_run", "status", "failing"), "miss"),
     ]:
         assert got.get(triple) == expect, triple
+
+
+def test_the_corpus_holds_what_card_t_91e28415_named():
+    """Two findings both PR #51 holdouts missed, the forms of the same kind the card listed, and
+    the pointer and by-design variants that must stay durable. The last two durable ones are the
+    facts the card's own blind holdout found hidden by the first draft of the rule."""
+    got = {
+        (c["subject"], c["relation"], c["value"]): "miss" if c.get("miss") else c["expect"]
+        for c in CASES
+        if not c.get("project")
+    }
+    for triple, expect in [
+        (("recall", "open bug", "the fuzzy branch drops quoted phrases and needs a fix"), "status"),
+        (("PR #88 review", "must-fix finding", "retract leaves the FTS row behind"), "status"),
+        (
+            ("memware sync", "open defect", "the last turn of a resumed session is dropped"),
+            "status",
+        ),
+        (
+            ("memware PR #31", "should-fix finding", "the docstring promises the wrong order"),
+            "status",
+        ),
+        (("memware PR #31", "review finding", "beliefs --stale lists confirmed rows"), "status"),
+        (("memware digest", "bug", "the header repeats on resume"), "status"),
+        (("memware", "open bugs", "tracked at github.com/ericwalisko/memware/issues"), "durable"),
+        (("sqlite fts5", "known bug", "no infix matching, by design"), "durable"),
+        (
+            (
+                "code-review skill",
+                "must-fix findings",
+                "block merge until resolved or explicitly waived by the repo owner",
+            ),
+            "durable",
+        ),
+        (
+            (
+                "SmartBear/Cisco code review study",
+                "review finding",
+                "defect detection drops sharply when reviewing more than about 400 lines in one"
+                " session",
+            ),
+            "durable",
+        ),
+    ]:
+        assert got.get(triple) == expect, triple

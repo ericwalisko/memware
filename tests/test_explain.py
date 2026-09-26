@@ -161,6 +161,64 @@ def test_a_durable_belief_with_no_veto_lists_each_failed_test(db, capsys):
     ]
 
 
+CARD_FINDINGS = [  # card t_91e28415: (subject, relation, value, class, why)
+    (
+        "recall",
+        "open bug",
+        "the fuzzy branch drops quoted phrases and needs a fix",
+        "status",
+        "status: the relation names a finding, 'open bug'",
+    ),
+    (
+        "PR #88 review",
+        "must-fix finding",
+        "retract leaves the FTS row behind",
+        "status",
+        "status: the relation names a finding, 'must fix finding'",
+    ),
+    (
+        "memware",
+        "open bugs",
+        "tracked at github.com/ericwalisko/memware/issues",
+        "durable",
+        "durable: the relation names a finding, 'open bugs', but the value points at where it"
+        " is tracked",
+    ),
+    (
+        "sqlite fts5",
+        "known bug",
+        "no infix matching, by design",
+        "durable",
+        "durable: the relation names a finding, 'known bug', but the value states a by-design"
+        " limitation, a workaround or a won't-fix",
+    ),
+]
+
+
+def test_explain_names_the_finding_rule_whichever_way_it_goes(tmp_path, home, capsys):
+    """The two findings the PR #51 holdouts missed are status now, and the pointer and by-design
+    variants stay durable; ``--explain`` names the finding rule for all four, in its headline
+    and its status test, and ``--stale`` leaves out exactly the two."""
+    path = str(tmp_path / "findings.db")
+    with Store(path) as s:
+        for subject, relation, value, _, _ in CARD_FINDINGS:
+            assert_belief(
+                s, subject, relation, value, valid_from="2026-09-01T00:00:00Z", source=DERIVED
+            )
+    for i, (_, relation, _, cls, why) in enumerate(CARD_FINDINGS, start=1):
+        r = _explain(capsys, path, str(i))
+        assert (r["relation"], r["class"], r["why"]) == (relation, cls, why)
+        assert r["injected"] is (cls == "durable")
+        status = r["tests"][2]
+        assert status["fired"] is (cls == "status")
+        assert status["because"].startswith("the relation names a finding, '")
+    code, out, _ = _run(capsys, "--db", path, "--plain", "beliefs", "--explain", "2")
+    assert code == 0 and "is a status : yes: the relation names a finding" in out
+    code, out, _ = _run(capsys, "--db", path, "beliefs", "--stale", "--json")
+    assert code == 0
+    assert sorted(r["relation"] for r in json.loads(out)) == ["must-fix finding", "open bug"]
+
+
 def test_the_window_can_let_a_young_volatile_belief_in(db, home, capsys):
     (home / "config.json").write_text(
         json.dumps(
