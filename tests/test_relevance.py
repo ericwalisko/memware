@@ -207,10 +207,13 @@ def test_default_prints_what_origin_main_printed_and_opens_no_socket(
 NOT_TYPED = [
     (f"<task-notification>\n{PROMPT}\n</task-notification>", {}),
     (f"  \n<task-notification>{PROMPT}</task-notification>", {}),
+    # a byte order mark or a zero-width character in front does not hide it
+    (f"\ufeff<task-notification>{PROMPT}</task-notification>", {}),
+    (f"\u200b\u200d \n<task-notification>{PROMPT}</task-notification>", {}),
     (PROMPT, {"agent_id": "a-123", "agent_type": "Explore"}),
 ]
-# How Hermes's notices begin (hermes-agent tools/process_registry_notifications.py and
-# gateway/run_notifications.py), each carrying the prompt's words so a keyword search would hit.
+# How Hermes's notices begin (hermes-agent tools/process_registry*.py, gateway/run_notifications.py
+# and gateway/run_startup.py), each carrying the prompt's words so a keyword search would hit.
 HERMES_NOTICES = [
     f"[IMPORTANT: Background process proc_1a2b exited (exit code 0).\nCommand: x\nOutput:\n{PROMPT}]",
     f'[IMPORTANT: Background process proc_1a2b matched watch pattern "502".\n{PROMPT}]',
@@ -218,10 +221,14 @@ HERMES_NOTICES = [
     f"[IMPORTANT: 2 background processes completed. Treat these as one batch.]\n\n{PROMPT}",
     f"[IMPORTANT: Watch patterns disabled for process proc_1a2b — {PROMPT}]",
     f"[IMPORTANT: Watch-pattern overflow: >20 notifications in 60s. {PROMPT}]",
+    f"[IMPORTANT: Watch-pattern notifications resumed. 3 match event(s) were suppressed. {PROMPT}]",
+    f"[IMPORTANT: 2 background subagent delegations completed for this session.]\n\n{PROMPT}",
     f"[Background process proc_1a2b heartbeat #3 — still running after 2m.\n{PROMPT}]",
     f"[ASYNC DELEGATION COMPLETE — d_77]\n{PROMPT}",
     f"[ASYNC DELEGATION BATCH COMPLETE — d_77]\n{PROMPT}",
     f"[ASYNC DELEGATION TASK FAILED — d_77, task 1/2]\n{PROMPT}",
+    f'[Session was just handed off from CLI ("{PROMPT}") to this channel. Briefly confirm.]',
+    f"\u2060\n[ASYNC DELEGATION COMPLETE — d_77]\n{PROMPT}",
 ]
 
 
@@ -246,11 +253,23 @@ def test_default_injects_nothing_on_a_turn_nobody_typed(
         f"Background process proc_1a2b exited. {PROMPT}",
         f"[Background process proc_1a2b] {PROMPT}",
         f"Quoting it: [ASYNC DELEGATION COMPLETE — d_77] {PROMPT}",
+        f"[IMPORTANT: Watch out, the billing api port changed] {PROMPT}",
+        "[IMPORTANT: Watch out, the billing api port changed] update the deploy script",
+        f"[IMPORTANT: Watch patterns, not symptoms] {PROMPT}",
+        f"[IMPORTANT: 2 background checks first] {PROMPT}",
+        f"[Session was just handed off to me by the on-call] {PROMPT}",
+        f"\ufeff{PROMPT}",
     ],
 )
-def test_a_typed_prompt_that_mentions_a_notice_is_still_typed(prompt):
+def test_a_typed_prompt_that_mentions_a_notice_is_still_typed(
+    capsys, monkeypatch, db, tmp_path, no_network, prompt
+):
+    """Only the exact start of a notice counts, so each of these still gets its facts."""
     assert relevance.typed(prompt)
     assert not relevance.typed(prompt, agent=True)
+    assert injected(hook(capsys, monkeypatch, db, prompt))
+    assert _hermes(tmp_path).prefetch(prompt)
+    assert no_network == []
 
 
 @pytest.mark.parametrize("notice", HERMES_NOTICES)

@@ -169,17 +169,34 @@ across 3 such turns, none relevant. The prompt hook injects nothing on:
 
 This holds whatever `relevance.mode` says, and no request is made for either. A prompt a person
 typed gets exactly the bytes it got before; `tests/test_relevance.py` pins them against output
-captured from origin/main. A typed prompt that quotes a notification later in its text is still
-typed: only the start of the prompt counts. The test is `memware.relevance.typed`.
+captured from origin/main. Only the exact start of a notification counts: a typed prompt that
+quotes one later in its text, or starts `[IMPORTANT: Watch out…`, is still typed. Whitespace, a
+byte order mark or a zero-width character in front of a notification does not hide it. The test
+is `memware.relevance.typed`.
+
+One caveat, on `agent_id`. Claude Code's hooks reference does not say whether a prompt a person
+types into a subagent's or a fork's transcript fires `UserPromptSubmit`. If it does and the
+payload carries `agent_id`, that turn gets no injected facts. `recall` still works there, so this
+is one turn without the extra, not a fact hidden for good.
 
 The Hermes provider's `prefetch` applies the same rule. Hermes's gateway runs a turn on the notice
-it writes when a background process exits, matches a watch pattern or reports a heartbeat, and
-when an async delegation finishes. The notice starts `[IMPORTANT: Background process `,
-`[IMPORTANT: N background processes completed`, `[IMPORTANT: Watch…`, `[Background process …
-heartbeat` or `[ASYNC DELEGATION `, and `prefetch` returns nothing for it. Hermes passes a
-provider only the turn's text, so the start of the text is all there is to go on. In a shared
-multi-user session Hermes puts the sender's name first (`[name] …`), so a notice there is not
-recognised and gets what a typed turn gets. Hermes's subagents (`delegate_task`) run without the
+it writes when a background process exits, matches a watch pattern or reports a heartbeat, when
+an async delegation finishes, and when a CLI session is handed off to a channel. Each notice
+starts with text Hermes writes verbatim, and `prefetch` returns nothing for it:
+
+- `[IMPORTANT: Background process ` (a process exited or matched a watch pattern);
+- `[IMPORTANT: N background processes completed` or `[IMPORTANT: N background subagent
+  delegations completed` (a batch);
+- `[IMPORTANT: Watch patterns disabled for process `, `[IMPORTANT: Watch-pattern notifications
+  resumed` or `[IMPORTANT: Watch-pattern overflow`;
+- `[Background process … heartbeat `;
+- `[ASYNC DELEGATION ` (complete, batch complete, task failed);
+- `[Session was just handed off from CLI `.
+
+Hermes passes a provider only the turn's text, so the start of the text is all there is to go on.
+Two kinds of turn are left alone. In a shared multi-user session Hermes puts the sender's name
+first (`[name] …`), so a notice there is not recognised and gets what a typed turn gets. A notice
+a plugin writes is not recognised either. Hermes's subagents (`delegate_task`) run without the
 memory provider, so `prefetch` never runs inside one.
 
 ## Hermes Agent

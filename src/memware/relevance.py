@@ -78,13 +78,21 @@ USD_PER_INPUT_TOKEN = 0.042 / 1_000_000  # jev-1.13 list price (2026-09); output
 
 # The start of a turn submitted as a prompt although no person typed it: Claude Code's
 # background-task notification, and the notices Hermes's gateway runs a turn on when a background
-# process finishes, matches a watch pattern or reports a heartbeat, or when an async delegation
-# finishes (hermes-agent tools/process_registry_notifications.py).
+# process finishes, matches a watch pattern or reports a heartbeat, when an async delegation
+# finishes, or when a CLI session is handed off to a channel (hermes-agent
+# tools/process_registry*.py, gateway/run_notifications.py, gateway/run_startup.py). Each is the
+# exact text Hermes writes, so a typed "[IMPORTANT: Watch out…" stays typed. Whitespace, a byte
+# order mark and zero-width characters before it do not hide it.
 NOT_TYPED = re.compile(
-    r"<task-notification>"
-    r"|\[IMPORTANT: (?:Background process |\d+ background processes completed|Watch)"
+    r"[\s﻿​-‍⁠]*"
+    r"(?:<task-notification>"
+    r"|\[IMPORTANT: (?:Background process "
+    r"|\d+ background (?:processes|subagent delegations) completed"
+    r"|Watch patterns disabled for process "
+    r"|Watch-pattern (?:notifications resumed|overflow))"
     r"|\[Background process \S+ heartbeat "
     r"|\[ASYNC DELEGATION "
+    r"|\[Session was just handed off from CLI )"
 )
 
 QUESTION = "Does the fact `facts.{id}` bear on the task `prompt` asks for?"
@@ -215,7 +223,7 @@ def typed(prompt: str, *, agent: bool = False) -> bool:
     or a hook fired inside a subagent (Claude Code's payload then carries ``agent_id``). Nobody
     asked anything on such a turn, so the prompt hook and the Hermes provider inject nothing on
     it, whatever ``relevance.mode`` says."""
-    return not agent and not NOT_TYPED.match(prompt.lstrip())
+    return not agent and not NOT_TYPED.match(prompt)
 
 
 def kept_out(prompt: str, transcript: str | None = None) -> bool:

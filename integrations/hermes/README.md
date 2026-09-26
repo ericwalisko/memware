@@ -22,7 +22,7 @@ Hermes to a new release, copy the plugin from that release (its floor names the 
 
 | hook / tool | what it does |
 |---|---|
-| `prefetch` | injects the few current beliefs relevant to the turn, each with the date it was recorded (never a superseded value, and never a derived measurement, moving version or status; see [what injection leaves out](../../docs/integrations.md#what-injection-leaves-out)); with the optional, off-by-default [relevance filter](../../README.md#optional-a-relevance-filter-for-prompt-time-injection) on, only those it judges relevant; nothing on a turn Hermes runs on a background process's or an async delegation's notice ([turns nobody typed](../../docs/integrations.md#turns-nobody-typed)) |
+| `prefetch` | injects the few current beliefs relevant to the turn, each with the date it was recorded (never a superseded value, and never a derived measurement, moving version or status; see [what injection leaves out](../../docs/integrations.md#what-injection-leaves-out)); with the optional, off-by-default [relevance filter](../../README.md#optional-a-relevance-filter-for-prompt-time-injection) on, only those it judges relevant; nothing on a turn Hermes runs on its own notice (a background process or an async delegation finished, a CLI session was handed off) ([turns nobody typed](../../docs/integrations.md#turns-nobody-typed)) |
 | `sync_turn` | appends the completed turn to `<hermes_home>/memware/sessions/<id>.jsonl` and indexes it, in a daemon thread |
 | `on_session_end` / `on_pre_compress` | flushes and re-syncs the session file |
 | `on_memory_write` | mirrors built-in `MEMORY.md` adds into the ledger as human-stated beliefs |

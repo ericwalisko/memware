@@ -11,7 +11,8 @@ Design:
 * ``prefetch`` injects only current beliefs, each with the date it was recorded, less a
   derived measurement, moving version or status (``memware.volatile``; small, bounded). It
   injects nothing on a turn nobody typed: the notice Hermes runs a turn on when a background
-  process or an async delegation finishes (``memware.relevance.typed``).
+  process or an async delegation finishes, or a CLI session is handed off
+  (``memware.relevance.typed``).
   Transcript recall is on demand through the ``memware_recall`` tool.
 * ``sync_turn`` is non-blocking: each completed turn is appended to a per-session
   JSONL file under ``<hermes_home>/memware/sessions/`` (which doubles as an
@@ -215,8 +216,9 @@ class MemwareProvider(MemoryProvider):
             from memware import relevance
         except ImportError:
             relevance = None  # type: ignore[assignment]
-        # A turn Hermes runs on a background process's or an async delegation's notice: nobody
-        # typed it, so nothing is injected, whatever relevance.mode says.
+        # A turn Hermes runs on its own notice (a background process or an async delegation
+        # finished, a CLI session was handed off): nobody typed it, so nothing is injected,
+        # whatever relevance.mode says.
         if relevance is not None and not relevance.typed(query):
             return ""
 
