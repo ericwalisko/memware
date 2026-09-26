@@ -46,8 +46,8 @@ A belief is injected unsolicited only if its subject and the prompt share either
 
 The index stores porter stems, and a word is looked up as the subject writes it. So a word the
 stemmer changes (`service` is indexed as `servic`) is not found, and it counts as rare however
-often it is used. That is how the rule was measured. A lookup by stem would drop more noise, and
-it would be a different rule that needs its own measurement.
+often it is used. That is how the rule was measured, and it is deliberate: see
+[why the lookup is not stem-aware](#why-the-lookup-is-not-stem-aware).
 
 **Small stores.** Under 1,000 indexed passages the share is not read, and one shared word is
 enough, as in 0.9.0. At 1,000 passages the 10% line sits 100 passages up, and a word's share is
@@ -61,6 +61,25 @@ Hermes `prefetch`, and the beliefs context of `memware eval`. Recall on demand (
 own name. `memware.index.subject_passes(store, prompt, subject)` answers
 for one pair. It writes nothing and runs on a read-only connection, so a labeled set can be
 re-scored against it.
+
+### Why the lookup is not stem-aware
+
+The shipped rule was re-scored on the adjudicated labels (1,068 pairs: 117 relevant, 951 noise),
+beside a stem-aware variant that counts `MATCH '"term"'` over `passage_fts`:
+
+| lookup | relevant kept | noise cut |
+|---|---|---|
+| as written, share <= 10% (the default) | 100% (0 dropped) | 31.1% |
+| stem-aware, share <= 10% | 91.5% (10 dropped) | 32.1% |
+| stem-aware, share <= 5% | 65.8% (40 dropped) | 69.9% |
+| stem-aware, share <= 30% | 100% | 0% |
+
+Relevant facts often match on a project name (`memware`), which is common in the user's
+conversations but stored under a stem, so the as-written lookup reads it as rare and keeps the
+fact. The words it does catch are plain words the index stores unchanged, such as `file`,
+`report`, `path` and `board`: the kind of word that collided in #47.
+`test_a_word_is_looked_up_as_written_so_a_stemmed_word_reads_as_rare` in
+`tests/test_subject_rule.py` pins the as-written lookup.
 
 ## The relevance filter on top
 
