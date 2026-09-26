@@ -194,7 +194,7 @@ Prompt-time injection (the hooks) stays deterministic and only injects beliefs w
 ## Optional: a relevance filter for prompt-time injection
 
 **Off by default.** Nothing in this section happens until you switch it on, and with it off memware
-makes no network call and injects exactly what it did before the filter existed.
+makes no network call and the filter changes nothing memware injects.
 
 The prompt hook picks beliefs by keyword, and a shared word is not relevance. A prompt about an
 incident report also gets a weekly report's file path, and a prompt that says "draft a short note"
@@ -212,7 +212,8 @@ TypeSafe does with the data is set by [its terms](https://docs.typesafe.ai/legal
 Two kinds of turn are never sent:
 
 - **A turn nobody typed:** a background task's notification, or a hook that fires inside a
-  subagent.
+  subagent. memware injects nothing on one, with the filter on or off
+  ([turns nobody typed](docs/integrations.md#turns-nobody-typed)).
 - **A session memware keeps out of its store:** `MEMWARE_NO_CAPTURE=1`, the no-capture list, a
   `capture.exclude` glob, or an ignore marker in the prompt.
 

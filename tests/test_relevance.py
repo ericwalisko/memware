@@ -1,8 +1,10 @@
 """The optional relevance filter (memware.relevance): off by default, and fails open.
 
-The default must not change a byte or open a socket, so those tests compare against output
-captured from origin/main (``tests/data/relevance_ledger.json``) under a guard that records any
-attempt to resolve or connect. The rest run against a local stand-in for TypeSafe's endpoint that
+The default must not change a byte for a prompt a person typed, or open a socket, so those tests
+compare against output captured from origin/main (``tests/data/relevance_ledger.json``) under a
+guard that records any attempt to resolve or connect. The one exception is a turn nobody typed
+(``relevance.typed``), which now gets nothing in every mode, the default included. The rest run
+against a local stand-in for TypeSafe's endpoint that
 answers by subject, stalls, errors, or replies with the wrong shape, as each test asks.
 """
 
@@ -185,7 +187,9 @@ def log_lines() -> list[dict[str, Any]]:
 def test_default_prints_what_origin_main_printed_and_opens_no_socket(
     capsys, monkeypatch, db, no_network, config
 ):
-    """With the key present in the environment, too: a key alone switches nothing on."""
+    """With the key present in the environment, too: a key alone switches nothing on. The golden
+    bytes are for a prompt a person typed. The one exception to them is a turn nobody typed,
+    which now gets nothing (test_default_injects_nothing_on_a_turn_nobody_typed)."""
     monkeypatch.setenv("TYPESAFE_API_KEY", KEY)
     if config is not None:
         memware_home().mkdir(parents=True, exist_ok=True)
@@ -200,10 +204,60 @@ def test_default_prints_what_origin_main_printed_and_opens_no_socket(
     assert not relevance.log_path().exists()
 
 
-def test_default_still_injects_on_a_task_notification(capsys, monkeypatch, db, no_network):
-    """Skipping turns nobody typed is part of the opt-in, so the default is unchanged there too."""
-    prompt = f"<task-notification>{PROMPT}</task-notification>"
-    assert injected(hook(capsys, monkeypatch, db, prompt))
+NOT_TYPED = [
+    (f"<task-notification>\n{PROMPT}\n</task-notification>", {}),
+    (f"  \n<task-notification>{PROMPT}</task-notification>", {}),
+    (PROMPT, {"agent_id": "a-123", "agent_type": "Explore"}),
+]
+# How Hermes's notices begin (hermes-agent tools/process_registry_notifications.py and
+# gateway/run_notifications.py), each carrying the prompt's words so a keyword search would hit.
+HERMES_NOTICES = [
+    f"[IMPORTANT: Background process proc_1a2b exited (exit code 0).\nCommand: x\nOutput:\n{PROMPT}]",
+    f'[IMPORTANT: Background process proc_1a2b matched watch pattern "502".\n{PROMPT}]',
+    f"[IMPORTANT: 3 background processes completed for this session.\n{PROMPT}",
+    f"[IMPORTANT: 2 background processes completed. Treat these as one batch.]\n\n{PROMPT}",
+    f"[IMPORTANT: Watch patterns disabled for process proc_1a2b — {PROMPT}]",
+    f"[IMPORTANT: Watch-pattern overflow: >20 notifications in 60s. {PROMPT}]",
+    f"[Background process proc_1a2b heartbeat #3 — still running after 2m.\n{PROMPT}]",
+    f"[ASYNC DELEGATION COMPLETE — d_77]\n{PROMPT}",
+    f"[ASYNC DELEGATION BATCH COMPLETE — d_77]\n{PROMPT}",
+    f"[ASYNC DELEGATION TASK FAILED — d_77, task 1/2]\n{PROMPT}",
+]
+
+
+@pytest.mark.parametrize("prompt, payload", NOT_TYPED + [(n, {}) for n in HERMES_NOTICES])
+def test_default_injects_nothing_on_a_turn_nobody_typed(
+    capsys, monkeypatch, db, no_network, prompt, payload
+):
+    """The one change to the default: nobody asked anything on such a turn, so the facts that
+    match its words are noise (17 of them across 3 turns of one session, 2026-09-24)."""
+    assert injected(hook(capsys, monkeypatch, db)) == injected(LEDGER["golden_hook"])
+    assert hook(capsys, monkeypatch, db, prompt, **payload) == ""
+    assert no_network == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        PROMPT,
+        f"Why did this arrive? <task-notification>{PROMPT}</task-notification>",
+        f"[IMPORTANT] {PROMPT}",
+        f"[IMPORTANT: read this first] {PROMPT}",
+        f"Background process proc_1a2b exited. {PROMPT}",
+        f"[Background process proc_1a2b] {PROMPT}",
+        f"Quoting it: [ASYNC DELEGATION COMPLETE — d_77] {PROMPT}",
+    ],
+)
+def test_a_typed_prompt_that_mentions_a_notice_is_still_typed(prompt):
+    assert relevance.typed(prompt)
+    assert not relevance.typed(prompt, agent=True)
+
+
+@pytest.mark.parametrize("notice", HERMES_NOTICES)
+def test_hermes_prefetch_injects_nothing_on_a_notice(tmp_path, monkeypatch, no_network, notice):
+    provider = _hermes(tmp_path)
+    assert provider.prefetch(PROMPT) == LEDGER["golden_hermes"]
+    assert provider.prefetch(notice) == ""
     assert no_network == []
 
 
@@ -428,22 +482,13 @@ def test_shadow_logs_a_failed_call_and_still_injects_unchanged(capsys, monkeypat
 # -- turns nobody typed, and sessions kept out of memware -----------------------------------
 
 
-@pytest.mark.parametrize(
-    "prompt, payload",
-    [
-        (f"<task-notification>\n{PROMPT}\n</task-notification>", {}),
-        (PROMPT, {"agent_id": "a-123", "agent_type": "Explore"}),
-    ],
-)
-def test_a_turn_nobody_typed_is_never_sent(capsys, monkeypatch, db, jev, prompt, payload):
-    """Filter injects nothing on it; shadow injects what off does; neither makes a request."""
-    configure(mode="off")
-    today = hook(capsys, monkeypatch, db, prompt, **payload)
-    assert today
-    configure(mode="filter")
+@pytest.mark.parametrize("prompt, payload", NOT_TYPED + [(HERMES_NOTICES[0], {})])
+@pytest.mark.parametrize("mode", ["off", "shadow", "filter"])
+def test_a_turn_nobody_typed_is_never_sent(capsys, monkeypatch, db, jev, prompt, payload, mode):
+    """Every mode injects nothing on it, as off does, and none makes a request or logs it."""
+    configure(mode=mode)
+    jev.p = dict.fromkeys(RELEVANT, 0.9)
     assert hook(capsys, monkeypatch, db, prompt, **payload) == ""
-    configure(mode="shadow")
-    assert hook(capsys, monkeypatch, db, prompt, **payload) == today
     assert jev.requests == [] and log_lines() == []
 
 
@@ -579,3 +624,11 @@ def test_hermes_shadow_returns_what_off_returns(tmp_path, jev):
     jev.p = dict.fromkeys(RELEVANT, 0.9)
     assert _hermes(tmp_path).prefetch(PROMPT) == LEDGER["golden_hermes"]
     assert len(log_lines()) == 12
+
+
+@pytest.mark.parametrize("mode", ["shadow", "filter"])
+def test_hermes_never_sends_a_notice(tmp_path, jev, mode):
+    configure(mode=mode)
+    jev.p = dict.fromkeys(RELEVANT, 0.9)
+    assert _hermes(tmp_path).prefetch(HERMES_NOTICES[0]) == ""
+    assert jev.requests == [] and log_lines() == []

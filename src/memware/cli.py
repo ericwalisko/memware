@@ -708,10 +708,12 @@ def _hook_store(db: str) -> Store | None:
 def cmd_context(a: argparse.Namespace) -> int:
     """Prompt-time helper: print the beliefs whose subject the prompt names, less what the
     injection gate leaves out (memware.volatile) and, when switched on, what the relevance filter
-    judges irrelevant (memware.relevance; off by default)."""
+    judges irrelevant (memware.relevance; off by default). A turn nobody typed, a background
+    task's notification or a hook fired inside a subagent, gets nothing."""
     payload = _hook_payload() if a.from_hook or not a.prompt else {}
     prompt = a.prompt or str(payload.get("prompt", ""))
-    if not prompt.strip():
+    agent = bool(payload.get("agent_id"))
+    if not prompt.strip() or not relevance.typed(prompt, agent=agent):
         return 0
     gate = injection_gate(resolve_project(Path(str(payload.get("cwd") or os.getcwd()))))
     store = _hook_store(a.db) if a.from_hook else Store(a.db)
@@ -742,7 +744,7 @@ def cmd_context(a: argparse.Namespace) -> int:
             harness="claude-code" if a.from_hook else "cli",
             session=str(payload.get("session_id") or "") or None,
             transcript=str(payload.get("transcript_path") or "") or None,
-            agent=bool(payload.get("agent_id")),
+            agent=agent,
         )
         admitted = [admitted[i] for i in picked]
     lines = [

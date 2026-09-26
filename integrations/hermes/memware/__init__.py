@@ -9,7 +9,9 @@ Design:
   — ``db_path`` defaults to ``~/.memware/memware.db``. Set it per profile if you
   want isolation instead of sharing.
 * ``prefetch`` injects only current beliefs, each with the date it was recorded, less a
-  derived measurement, moving version or status (``memware.volatile``; small, bounded).
+  derived measurement, moving version or status (``memware.volatile``; small, bounded). It
+  injects nothing on a turn nobody typed: the notice Hermes runs a turn on when a background
+  process or an async delegation finishes (``memware.relevance.typed``).
   Transcript recall is on demand through the ``memware_recall`` tool.
 * ``sync_turn`` is non-blocking: each completed turn is appended to a per-session
   JSONL file under ``<hermes_home>/memware/sessions/`` (which doubles as an
@@ -213,6 +215,10 @@ class MemwareProvider(MemoryProvider):
             from memware import relevance
         except ImportError:
             relevance = None  # type: ignore[assignment]
+        # A turn Hermes runs on a background process's or an async delegation's notice: nobody
+        # typed it, so nothing is injected, whatever relevance.mode says.
+        if relevance is not None and not relevance.typed(query):
+            return ""
 
         try:
             cfg = load_config()
