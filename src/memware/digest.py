@@ -288,7 +288,8 @@ def _plural(n: int, noun: str) -> str:
 
 def project_beliefs(conn: sqlite3.Connection, names: Iterable[str]) -> list[sqlite3.Row]:
     """Current beliefs whose subject shares a whole term with one of ``names``, newest first: the
-    same subject test the prompt hook applies (``require_subject``). Unfiltered: the digest
+    prompt hook's shared-term test without its rarity rule (:func:`memware.index.subject_passes`),
+    since a project's own name is common in its conversations by design. Unfiltered: the digest
     passes them through :func:`injection_gate`."""
     q = fts_query(" ".join(names))
     if not q:

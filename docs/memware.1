@@ -483,6 +483,13 @@ sent, for choosing a threshold. Delete it when done;
 .B nuke
 removes it.
 .TP
+.I <home>/labels/
+Prompts labeled relevant or not, for calibrating what is injected (see
+.IR docs/relevance-calibration.md ).
+They hold prompt text;
+.B nuke
+removes the directory.
+.TP
 .I <home>/relevance-usage.jsonl
 With the relevance filter on, one line per answered request: tokens, cost and latency, no text.
 .TP

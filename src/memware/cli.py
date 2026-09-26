@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import sys
 from collections.abc import Collection, Iterator
@@ -2691,8 +2692,9 @@ NUKE_PHRASE = "DELETE ALL MEMWARE DATA"
 
 
 def cmd_nuke(a: argparse.Namespace) -> int:
-    """Permanently delete the store, its config, review files, AND every snapshot in the
-    backup destination. Guarded by a typed confirmation so it cannot happen by accident."""
+    """Permanently delete the store, its config, review files, labeled prompts (``labels/``) AND
+    every snapshot in the backup destination. Guarded by a typed confirmation so it cannot happen
+    by accident."""
     from memware import backup as bk
     from memware.config import config_path, get_dotted, load_config, memware_home
 
@@ -2711,9 +2713,12 @@ def cmd_nuke(a: argparse.Namespace) -> int:
     ):
         targets.append(home / name)
     targets.append(config_path())
+    labels = home / "labels"  # prompts labeled relevant or not, to calibrate injection
     print("This permanently deletes:")
     print(f"  store:      {a.db} (+ wal/shm)")
     print(f"  config:     {config_path()}")
+    if labels.exists() or labels.is_symlink():
+        print(f"  labels:     {labels}/ (labeled prompt text)")
     print(
         f"  snapshots:  {len(snaps)} in {dest}"
         if dest
@@ -2737,6 +2742,12 @@ def cmd_nuke(a: argparse.Namespace) -> int:
         if t.exists():
             t.unlink()
             removed += 1
+    if labels.is_dir() and not labels.is_symlink():
+        removed += sum(1 for p in labels.rglob("*") if not p.is_dir() or p.is_symlink())
+        shutil.rmtree(labels)
+    elif labels.exists() or labels.is_symlink():  # a link is removed, never followed
+        labels.unlink()
+        removed += 1
     _out({"deleted_files": removed, "snapshots_deleted": len(snaps)}, a.json)
     return 0
 

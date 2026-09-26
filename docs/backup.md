@@ -115,8 +115,8 @@ itself reversible.
 
 ## Delete everything (guarded)
 
-`memware nuke` permanently deletes the store, its config, review files, **and every snapshot
-in the backup destination**. It cannot happen by accident — you must type the exact phrase:
+`memware nuke` permanently deletes the store, its config, review files, the relevance filter's
+logs, the labeled prompts in `<home>/labels/`, **and every snapshot in the backup destination**. It cannot happen by accident — you must type the exact phrase:
 
 ```bash
 memware nuke
