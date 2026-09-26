@@ -278,9 +278,11 @@ carries:
 - `chosen`: whether filter mode would have injected it
 - `prompt` and `fact`: the texts that were sent
 
-Label a few dozen pairs as relevant or not, and pick the threshold that keeps what you need.
-**The log holds the text of your prompts,** so delete it when you are done. `memware nuke` removes
-both files; `memware scan` and `prune` do not read them.
+Label a few dozen pairs as relevant or not, keep the labels in `~/.memware/labels/`, and pick the
+threshold that keeps what you need. [docs/relevance-calibration.md](docs/relevance-calibration.md)
+has one ledger's labeled result, which recommends 0.2. **The log and the labels hold the text of
+your prompts,** so delete them when you are done. `memware nuke` removes both files and the
+`labels/` directory; `memware scan` and `prune` do not read them.
 
 The model answers with probabilities and never with text. The injected block therefore holds only
 beliefs from your own ledger that passed memware's subject and staleness gates. A prompt or a

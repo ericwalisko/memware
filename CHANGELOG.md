@@ -7,6 +7,26 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **A belief matched only on a word common in your own conversations is no longer injected
+  (#47).** The prompt hook injected any belief whose subject shared one word with the prompt.
+  `any feedback to file about widget service?` also injected `config file location` and `export
+  job file retention`, because they share `file`. On one user's 198 labeled prompts, 88% of
+  injected facts matched on exactly one subject word, and 916 of the 1,029 scored were noise. Now
+  a belief is injected unsolicited only if its subject and the prompt share two or more words, or
+  one word that at most 10% of the indexed conversation passages hold. A word the index does not
+  hold as written, such as an id, a version or a path, counts as rare. On those labels the rule
+  kept every relevant belief and cut 30.3% of the noise. It applies to the prompt hook, Hermes
+  `prefetch` and `memware eval`. Recall and the session-start digest are unchanged. A store with
+  fewer than 1,000 indexed passages keeps the old behaviour: a share read from so few passages
+  cannot be trusted. The word shares are read through an `fts5vocab` table in the temp schema,
+  which works on a read-only connection. Each store object caches them until the database
+  changes. On a 50,000-turn synthetic store the hook's median time rose by 2.7 ms, and by 9.0 ms
+  on a prompt that forced five lookups of words in 69–96% of passages.
+  `memware.index.subject_passes(store, prompt, subject)` answers for one pair. The index stores
+  porter stems and a word is looked up as written, so a word the stemmer changes (`service` is
+  indexed as `servic`) counts as rare; that is how the rule was measured. The new
+  [docs/relevance-calibration.md](docs/relevance-calibration.md) gives the method and the
+  aggregate numbers, and recommends relevance-filter threshold 0.2 (the default stays 0.5).
 - **Hermes keeps memware across a venv rebuild.** The Hermes plugin declared no Python
   dependency, so Hermes' package manager left memware out of every venv it built. The venv had
   memware only because someone installed it by hand, and a rebuild dropped it. On 2026-09-24 a
@@ -35,6 +55,9 @@ All notable changes to this project are documented here. The format follows
   [turns nobody typed](docs/integrations.md#turns-nobody-typed).
 
 ### Changed
+- **`memware nuke` removes `<home>/labels/`.** Prompts labeled to calibrate injection live there,
+  and they hold the text of prompts. Nuke deletes the directory and everything in it, and lists
+  it before asking for the phrase. A symlink at that path is removed and not followed.
 - **RELEASING.md has a Deploy section.** Publishing never updated the copies of memware running
   on the maintainer's Mac, and the Hermes plugin copy sat three releases behind. "Cutting a
   release" now ends with a Deploy step that updates each of those copies and checks it: the uv

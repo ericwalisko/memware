@@ -96,8 +96,9 @@ conflict is reviewed; under `auto` the newest event time wins.
 
 ## 7. An optional relevance check before injection
 
-**The problem.** Unsolicited injection selects beliefs by BM25 and a subject term shared with the
-prompt. That is literal: "draft a short incident report" admits a short story's title and a weekly
+**The problem.** Unsolicited injection selects beliefs by BM25 and the subject words they share with
+the prompt: two, or one that is rare in the user's own conversations (see
+[relevance-calibration.md](relevance-calibration.md)). That is literal: "draft a short incident report" admits a short story's title and a weekly
 report's path. Recall on demand does not suffer this, because the agent that asked supplies the
 phrasings and reads the results. Injection has no reader until the model sees the block.
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -261,6 +262,112 @@ def _subject_terms(subject: str) -> set[str]:
     return {t.lower().strip(".-/") for t in _TOKEN.findall(subject)} - STOPWORDS
 
 
+def _query_terms(q: str) -> set[str]:
+    """The terms of an :func:`fts_query` string."""
+    return {t.strip('"') for t in q.split(" OR ")} if q else set()
+
+
+RARE_SHARE = 0.10
+"""A word in at most this share of indexed passages is rare enough for one shared subject word to
+carry an unsolicited injection. On one user's labeled prompts, the rule it sets (two shared words
+always pass) kept every relevant belief and cut 30.3% of the noise; docs/relevance-calibration.md
+has the method and the numbers."""
+
+RARITY_MIN_PASSAGES = 1_000
+"""Below this many indexed passages the share is not read, and one shared subject word is enough,
+as before. A share needs a sample: at 1,000 passages the 10% line sits 100 passages up and a word's
+share is known to about ±2 points (binomial, 95%), where at 100 passages it is ±6 and a word at 5%
+cannot be told from one at 15%. Passages come in conversations, which makes the real error larger,
+and a young store is a few conversations whose own subject would read as a common word. Past the
+floor the rule decides; under it nothing changes."""
+
+
+class _PassageVocab:
+    """How many indexed passages hold a term, read through an ``fts5vocab`` table in the temp
+    schema. Creating that writes nothing to the store, so a read-only connection can use it. Each
+    term is read once; the store's ``porter unicode61`` index keeps stems, so a term is looked up
+    exactly as the subject writes it, and one it does not hold counts as absent."""
+
+    _TABLE = "temp.memware_passage_vocab"
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.stamp = self._stamp(conn)
+        self._passages: int | None = None
+        self._docs: dict[str, int] = {}
+
+    @property
+    def passages(self) -> int:
+        if self._passages is None:
+            self._passages = int(self.conn.execute("SELECT count(*) FROM passage").fetchone()[0])
+        return self._passages
+
+    @staticmethod
+    def _stamp(conn: sqlite3.Connection) -> tuple[int, int]:
+        """Changes this connection has made, and whether another has committed since
+        (``data_version``): what the counts are good for."""
+        return conn.total_changes, int(conn.execute("PRAGMA data_version").fetchone()[0])
+
+    def current(self) -> bool:
+        return self._stamp(self.conn) == self.stamp
+
+    def share(self, term: str) -> float:
+        """The share of indexed passages that hold ``term``; 0.0 when the index has no such term."""
+        if term not in self._docs:
+            if not self._docs:
+                self.conn.execute(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {self._TABLE} "
+                    "USING fts5vocab(main, passage_fts, row)"
+                )
+            row = self.conn.execute(
+                f"SELECT doc FROM {self._TABLE} WHERE term = ?", (term,)
+            ).fetchone()
+            self._docs[term] = int(row[0]) if row else 0
+        return self._docs[term] / self.passages if self.passages else 0.0
+
+
+_VOCABS: weakref.WeakKeyDictionary[object, _PassageVocab] = weakref.WeakKeyDictionary()
+
+
+def _vocab(store: Store | sqlite3.Connection) -> _PassageVocab:
+    """The passage vocabulary for ``store``, kept for as long as the store object lives and
+    nothing changes the database. A bare connection cannot be weakly referenced, so it is read
+    fresh on each call."""
+    if isinstance(store, sqlite3.Connection):
+        return _PassageVocab(store)
+    vocab = _VOCABS.get(store)
+    if vocab is None or vocab.conn is not store.conn or not vocab.current():
+        vocab = _VOCABS[store] = _PassageVocab(store.conn)
+    return vocab
+
+
+def _names_subject(vocab: _PassageVocab, matched: set[str]) -> bool:
+    """The subject rule over the subject terms a query shares: two or more pass; one passes if it
+    is rare in the indexed passages (:data:`RARE_SHARE`), or if the store is too small to say
+    (:data:`RARITY_MIN_PASSAGES`); none fails."""
+    if len(matched) != 1:
+        return len(matched) > 1
+    if vocab.passages < RARITY_MIN_PASSAGES:
+        return True
+    return vocab.share(next(iter(matched))) <= RARE_SHARE
+
+
+def subject_passes(store: Store | sqlite3.Connection, query: str, subject: str) -> bool:
+    """Whether a belief with ``subject`` passes the subject rule for ``query``: the test
+    ``search_beliefs(..., require_subject=True)`` applies before ranking, and so the prompt hook,
+    Hermes prefetch and ``memware eval``. It reads only the subject. It writes nothing, so it works
+    on a read-only connection (``sqlite3.connect("file:...?mode=ro", uri=True)``).
+
+    It passes when the subject and the query share two or more distinct terms, or one term that at
+    most :data:`RARE_SHARE` of the indexed passages hold. A term missing from the passage index as
+    written counts as rare: ids, versions and paths tokenize into pieces, and they are specific.
+    Below :data:`RARITY_MIN_PASSAGES` passages one shared term is enough. Pass the
+    :class:`~memware.store.Store` (or any object whose ``conn`` is the connection) to reuse the
+    passage counts across calls."""
+    matched = _subject_terms(subject) & _query_terms(fts_query(query))
+    return bool(matched) and _names_subject(_vocab(store), matched)
+
+
 def search_beliefs(
     store: Store,
     query: str,
@@ -274,10 +381,11 @@ def search_beliefs(
     """Top-k *current, committed* beliefs. Superseded values never surface. A derived belief that
     was volatile when recorded still surfaces, marked with its class in ``volatile``.
 
-    ``require_subject=True`` keeps only beliefs whose *subject* shares a term with the
-    query. Use it for unsolicited prompt-time injection: relation and value words
-    ("decision", "recovery", "model") match almost any prompt, and a belief about
-    the wrong subject is noise, not memory.
+    ``require_subject=True`` keeps only beliefs whose *subject* the query names
+    (:func:`subject_passes`). Use it for unsolicited prompt-time injection: relation and value
+    words ("decision", "recovery", "model") match almost any prompt, and a belief about
+    the wrong subject is noise, not memory. So is one whose subject shares only a word the
+    user's conversations use everywhere: "feedback to file" is not about "config file location".
     """
     from memware.ledger import confirmed_sql
     from memware.volatile import volatility
@@ -293,8 +401,8 @@ def search_beliefs(
         (q,),
     ).fetchall()
     if require_subject:
-        qterms = {t.strip('"') for t in q.split(" OR ")}
-        rows = [r for r in rows if _subject_terms(r["subject"]) & qterms]
+        qterms, vocab = _query_terms(q), _vocab(store)
+        rows = [r for r in rows if _names_subject(vocab, _subject_terms(r["subject"]) & qterms)]
     hits = [
         Hit(
             id=r["id"],

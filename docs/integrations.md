@@ -26,7 +26,7 @@ Hooks (`hooks/hooks.json`):
 | `SessionStart` | `memware notice --from-hook`, in the foreground | until `memware setup` has asked about `derive` (setup last ran before 0.4.0 or never, and `derive.auto` is unset), shows one line under the session header saying so; reads only the config, and prints nothing once either is true, after a compaction, or when the config will not parse |
 | `SessionStart` | `memware digest --from-hook`, in the foreground (5 s timeout) | injects a block of at most 1,200 characters: a line pointing at `recall`, this project's 5 most recent sessions (date and first prompt), and the beliefs whose subject names the project, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)); nothing for a project memware has no session for — see [the digest](#the-session-start-digest) |
 | `SessionEnd`, `PreCompact` | `memware sync --harness claude-code --from-hook` | indexes the session's new turns from `transcript_path` |
-| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names, each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext`; with the [optional relevance filter](../README.md#optional-a-relevance-filter-for-prompt-time-injection) switched on, less what it judges irrelevant too; nothing on [a turn nobody typed](#turns-nobody-typed) |
+| `UserPromptSubmit` (optional) | `memware context --from-hook` | injects the few beliefs whose subject the prompt names ([how](#which-beliefs-a-prompt-names)), each with the date it was recorded, less the stale ones ([below](#what-injection-leaves-out)), as `additionalContext`; with the [optional relevance filter](../README.md#optional-a-relevance-filter-for-prompt-time-injection) switched on, less what it judges irrelevant too; nothing on [a turn nobody typed](#turns-nobody-typed) |
 
 `SessionEnd` runs when Claude Code exits cleanly, but some environments **force-kill** it (a worktree/pane manager may `SIGKILL` the process group on close), and a `SIGKILL` cannot run any hook. The `SessionStart` hook covers that: it runs a bare `memware sync` — which catches up the configured `backup.transcript_src` (default `~/.claude/projects`) — plus a throttled backup, **backgrounded** so it never delays startup. So the previous session is indexed at the next start even if its `SessionEnd` was skipped; the raw transcript is durable on disk regardless.
 
@@ -81,6 +81,21 @@ Two limits:
   remain searchable through `recall`.
 - **Removed worktrees drop out.** Git stops listing a worktree once it is removed, so sessions
   held only in a torn-down worktree leave the digest. `recall` still finds them.
+
+### Which beliefs a prompt names
+
+The prompt hook and Hermes `prefetch` inject a belief only when the prompt names its subject: the
+subject and the prompt share two or more words, or one word that at most 10% of your indexed
+conversation passages hold. A word you use everywhere does not name anything. In issue #47,
+`any feedback to file about widget service?` also injected `config file location` and `export
+job file retention`, because they share `file`. Over conversations that use `file` often and
+`widget` rarely, only the two widget beliefs are injected now. A word the passage index does not hold
+as written counts as rare, such as an id, a version or a path. Under 1,000 indexed passages the
+share is not read, and one shared word is enough.
+
+[relevance-calibration.md](relevance-calibration.md) has how the rule was chosen, what it cut on
+one user's labeled prompts, and the relevance-filter threshold those labels recommend. Recall on
+demand and the session-start digest do not use this rule.
 
 ### What injection leaves out
 
