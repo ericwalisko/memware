@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-26
+
 ### Fixed
 - **A belief matched only on a word common in your own conversations is no longer injected
   (#47).** The prompt hook injected any belief whose subject shared one word with the prompt.
