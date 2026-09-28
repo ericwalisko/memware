@@ -62,6 +62,7 @@ from typing import Any
 
 from memware import __version__
 from memware.config import get_dotted, load_config, memware_home
+from memware.fsperm import private_dir
 from memware.store import now_iso
 
 MODES = ("off", "shadow", "filter")
@@ -388,7 +389,7 @@ def _usage(usage: dict[str, Any], rel: Settings, ms: int, harness: str) -> None:
 
 def _append(path: Path, lines: list[str]) -> None:
     with contextlib.suppress(OSError):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(path.parent)
         with path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
 

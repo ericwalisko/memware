@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import unicodedata
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+from urllib.parse import quote, quote_plus
 
 from memware.residue import free_text_source
 from memware.store import Store, now_iso
@@ -628,37 +630,89 @@ class RedactionRefused(ValueError):
 def redaction_refusal(redaction: Redaction, text: str) -> str | None:
     """Why an applied prune should refuse this redaction, or None. It refuses when the redaction
     would rewrite more than :data:`REDACT_MAX_BELIEFS` beliefs, or any belief for a text shorter
-    than :data:`REDACT_MIN_CHARS`: whole, never in part, and never on a dry run, which only says."""
+    than :data:`REDACT_MIN_CHARS`: whole, never in part, and never on a dry run, which only says.
+    The length is of what :func:`redact` matches: the visible characters, composed, so invisible
+    padding or decomposed letters cannot make a short text pass as a long one."""
     n = redaction.rewrites
     if n > REDACT_MAX_BELIEFS:
         return f"it would redact {n:,} beliefs, more than {REDACT_MAX_BELIEFS}"
-    if n and len(text) < REDACT_MIN_CHARS:
+    length = len(_visible_secret(text))
+    if n and length < REDACT_MIN_CHARS:
         return (
-            f"the text is {len(text)} characters, shorter than {REDACT_MIN_CHARS}, and it would "
+            f"the text is {length} characters, shorter than {REDACT_MIN_CHARS}, and it would "
             f"redact {n:,} belief{'' if n == 1 else 's'}"
         )
     return None
 
 
-def _holds(field_text: object, text: str, prefix: bool) -> bool:
+_INVISIBLE = "\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff"
+_GAP = f"[{_INVISIBLE}]*"
+
+
+def _visible_secret(text: str) -> str:
+    """``text`` composed (NFC), without the invisible (format) characters it holds."""
+    core = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    return unicodedata.normalize("NFC", core)
+
+
+def _char_forms(c: str) -> str:
+    """One character of a secret as a pattern: itself, decomposed, and its fullwidth form."""
+    forms = {c, unicodedata.normalize("NFD", c)}
+    if "!" <= c <= "~":
+        forms.add(chr(ord(c) + 0xFEE0))
+    return "(?:" + "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True)) + ")"
+
+
+def _percent_forms(core: str) -> list[str]:
+    """``core`` percent-encoded as URLs and connection strings carry it, hex digits in either case."""
+    out = []
+    for encoded in (quote(core, safe=""), quote(core, safe="!'()*"), quote_plus(core, safe="")):
+        if encoded == core:
+            continue
+        pieces = re.split(r"(%[0-9A-F]{2})", encoded)
+        pattern = "".join(
+            f"%[{p[1]}{p[1].lower()}][{p[2]}{p[2].lower()}]" if p.startswith("%") else re.escape(p)
+            for p in pieces
+        )
+        if pattern not in out:
+            out.append(pattern)
+    return out
+
+
+def secret_pattern(text: str) -> re.Pattern[str]:
+    """What :func:`redact` matches for ``text``: its visible characters in order, each as given,
+    composed or decomposed (NFC, NFD) or in fullwidth form (NFKC folds those back), with any
+    invisible character between them; or the whole of it percent-encoded. Case is kept: a secret is
+    case-sensitive. A text with nothing visible matches nothing."""
+    core = _visible_secret(text)
+    if not core:
+        return re.compile(r"(?!)")
+    spelled = _GAP.join(_char_forms(c) for c in core)
+    return re.compile("|".join([spelled, *_percent_forms(core)]))
+
+
+def _holds(field_text: object, pattern: re.Pattern[str], prefix: bool) -> bool:
     if not isinstance(field_text, str):
         return False
-    return field_text.startswith(text) if prefix else text in field_text
+    return bool(pattern.match(field_text) if prefix else pattern.search(field_text))
 
 
-def _redacted(text: str | None, removed: str, prefix: bool) -> str | None:
+def _redacted(text: str | None, pattern: re.Pattern[str], prefix: bool) -> str | None:
     if text is None:
         return None
     if prefix:
-        return REDACTED + text[len(removed) :] if text.startswith(removed) else text
-    return text.replace(removed, REDACTED)
+        m = pattern.match(text)
+        return REDACTED + text[m.end() :] if m else text
+    return pattern.sub(REDACTED, text)
 
 
 def redact(store: Store, text: str, *, prefix: bool = False, apply: bool = False) -> Redaction:
     """Replace ``text`` with :data:`REDACTED` in every belief row that holds it, whatever its
     status, human-stated or derived: removing a secret outranks the rule that a prune never touches
-    what a person stated. Matching is literal and case-sensitive, anywhere in a field, or with
-    ``prefix`` only at its start, as the prune's selector matches turns. The subject, relation and
+    what a person stated. Matching is case-sensitive, anywhere in a field, or with ``prefix`` only
+    at its start, as the prune's selector matches turns, and it sees through the forms one secret
+    takes in text (:func:`secret_pattern`): composed or decomposed, fullwidth, percent-encoded, or
+    split by an invisible character. The subject, relation and
     value are rewritten, and so is a source when it is free text; a source memware wrote, such as
     derive's session pointer, is never matched or rewritten (:func:`memware.residue.free_text_source`).
     The key follows a rewritten subject or relation, and a confirmation's free-text source is
@@ -675,26 +729,19 @@ def redact(store: Store, text: str, *, prefix: bool = False, apply: bool = False
     Without ``apply`` nothing is written. The caller holds the write transaction and checks
     :func:`redaction_refusal` first."""
     conn = store.conn
-    op = "= 1" if prefix else "> 0"
-    held = " OR ".join(f"instr(coalesce({c}, ''), ?1) {op}" for c in (*_REDACTABLE, "source"))
-    rows = [
+    pattern = secret_pattern(text)
+    rows = [  # every row: SQL cannot match the forms; a ledger is thousands of rows, not millions
         r
         for r in conn.execute(
-            f"SELECT id, key, status, source, {', '.join(_REDACTABLE)} FROM belief "
-            f"WHERE {held} ORDER BY id",
-            (text,),
+            f"SELECT id, key, status, source, {', '.join(_REDACTABLE)} FROM belief ORDER BY id"
         )
-        if any(_holds(r[c], text, prefix) for c in _REDACTABLE)
-        or (free_text_source(r["source"]) and _holds(r["source"], text, prefix))
+        if any(_holds(r[c], pattern, prefix) for c in _REDACTABLE)
+        or (free_text_source(r["source"]) and _holds(r["source"], pattern, prefix))
     ]
     confirmations = [
         c
-        for c in conn.execute(
-            f"SELECT belief_id, source FROM confirmation WHERE instr(coalesce(source, ''), ?1) {op} "
-            "ORDER BY belief_id",
-            (text,),
-        )
-        if free_text_source(c["source"])
+        for c in conn.execute("SELECT belief_id, source FROM confirmation ORDER BY belief_id")
+        if free_text_source(c["source"]) and _holds(c["source"], pattern, prefix)
     ]
     ids = [int(r["id"]) for r in rows]
     reviews = [
@@ -715,9 +762,11 @@ def redact(store: Store, text: str, *, prefix: bool = False, apply: bool = False
         return plan
     ts = now_iso()
     for r in rows:
-        new = {c: _redacted(r[c], text, prefix) for c in _REDACTABLE}
+        new = {c: _redacted(r[c], pattern, prefix) for c in _REDACTABLE}
         source = (
-            _redacted(r["source"], text, prefix) if free_text_source(r["source"]) else r["source"]
+            _redacted(r["source"], pattern, prefix)
+            if free_text_source(r["source"])
+            else r["source"]
         )
         rekeyed = (new["subject"], new["relation"]) != (r["subject"], r["relation"])
         key = make_key(str(new["subject"]), str(new["relation"])) if rekeyed else r["key"]
@@ -734,7 +783,7 @@ def redact(store: Store, text: str, *, prefix: bool = False, apply: bool = False
     for c in confirmations:
         conn.execute(
             "UPDATE confirmation SET source=? WHERE belief_id=?",
-            (_redacted(c["source"], text, prefix), c["belief_id"]),
+            (_redacted(c["source"], pattern, prefix), c["belief_id"]),
         )
     for review_id in reviews:
         conn.execute(

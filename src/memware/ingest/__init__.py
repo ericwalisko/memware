@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from memware.fsperm import private_dir
 from memware.ledger import (
     Redaction,
     RedactionRefused,
@@ -198,7 +199,7 @@ def record_no_capture(path: str | os.PathLike[str]) -> bool:
     together all land and a reader never sees half a line."""
     source = str(Path(path).expanduser().resolve())
     target = no_capture_file()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(target.parent)
     with _exclusive(target.with_name(target.name + ".lock")):
         try:
             listed = [

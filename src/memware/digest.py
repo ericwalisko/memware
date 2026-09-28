@@ -33,6 +33,7 @@ from pathlib import Path
 
 from memware.config import get_dotted, load_config
 from memware.index import _subject_terms, fts_query
+from memware.instruction import one_line
 from memware.ledger import confirmed_sql
 from memware.store import Store
 from memware.term import ellipsis
@@ -53,9 +54,10 @@ and claims no more than the ledger knows: when each fact was recorded, not that 
 
 
 def belief_line(subject: str, relation: str, value: str, valid_from: str | None) -> str:
-    """One injected belief, as both unsolicited readers print it."""
+    """One injected belief, as both unsolicited readers print it: one line of plain text
+    (:func:`memware.instruction.one_line`), so a value cannot open a line or a turn of its own."""
     when = f" (recorded {valid_from[:10]})" if valid_from else ""
-    return f"- {subject} {relation}: {value}{when}"
+    return f"- {one_line(subject)} {one_line(relation)}: {one_line(value)}{when}"
 
 
 def _js_string_hash(text: str) -> int:

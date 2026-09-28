@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from memware.fsperm import PRIVATE_DIR, private_dir, tighten
+
 
 def memware_home() -> Path:
     """Directory for config, markers, and (by default) the store.
@@ -106,10 +108,11 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(cfg: dict[str, Any]) -> Path:
-    home = memware_home()
-    home.mkdir(parents=True, exist_ok=True)
+    home = private_dir(memware_home())
+    tighten(home, PRIVATE_DIR)
     p = config_path()
     p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    tighten(p)
     return p
 
 

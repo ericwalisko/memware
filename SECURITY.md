@@ -13,6 +13,9 @@ issues.
 
 ## Scope notes
 
+The threat model, what has been hardened and the known residual risks are in
+[docs/security.md](docs/security.md).
+
 memware indexes conversation transcripts, which routinely contain secrets pasted into
 chats. The database is local and unencrypted by default. Treat `~/.memware/` like you
 treat the transcripts themselves, and use the ingest filters (or a pre-ingest scrubber)

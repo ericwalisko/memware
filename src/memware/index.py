@@ -128,12 +128,24 @@ class Hit:
     volatile: str | None = None
 
 
+MAX_TERM_CHARS = 128
+"""The longest keyword :func:`fts_query` keeps. A dotted or slashed run (a minified line, a long
+path) is one keyword, and FTS5 reads a quoted keyword as a phrase of its pieces, so a runaway one
+is a slow search. A path or version is well under this; a longer run is a blob, not a search
+term."""
+
+
 def fts_query(text: str, max_terms: int = 24) -> str:
-    """Turn free text into an OR-joined FTS5 query of quoted keywords."""
+    """Turn free text into an OR-joined FTS5 query of quoted keywords.
+
+    This is the only way text reaches ``MATCH``: a keyword is word characters and ``-./``, so no
+    double quote, colon, star, caret or bracket survives, and each is quoted, so no FTS5 operator
+    or column filter does either. At most ``max_terms`` keywords of at most
+    :data:`MAX_TERM_CHARS`."""
     terms: list[str] = []
     for tok in _TOKEN.findall(text):
         t = tok.lower().strip(".-/")
-        if len(t) < 2 or t in STOPWORDS or t in terms:
+        if len(t) < 2 or len(t) > MAX_TERM_CHARS or t in STOPWORDS or t in terms:
             continue
         terms.append(t)
         if len(terms) >= max_terms:
