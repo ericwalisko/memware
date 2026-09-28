@@ -2,6 +2,7 @@
 under, the probe for a live process that the derive lock trusts, and the name Claude Code gives a
 project's transcript directory when the project lives on a Windows drive."""
 
+import json
 import os
 import subprocess
 import sys
@@ -143,3 +144,32 @@ def test_a_windows_project_directory_is_named_as_claude_code_names_it(cwd, name)
     """Claude Code makes every character of the cwd but a letter or digit a dash, the drive's
     colon and each backslash included."""
     assert project_dir_name(cwd) == name
+
+
+CLI = "import sys; from memware.cli import main; sys.exit(main())"
+
+
+def test_the_cli_reads_and_writes_utf8_through_pipes(tmp_path):
+    """Claude Code writes a hook's payload as UTF-8 and reads what the Bash tool's commands print
+    as UTF-8. Python on Windows reads and writes a pipe in the ANSI code page instead, which has
+    no arrow and no CJK: the prompt arrives garbled and misses the belief, and ``beliefs`` crashes
+    on the first value that holds one."""
+    db = str(tmp_path / "u.db")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    value = "café → 東京 build"
+
+    def cli(*args: str, stdin: str = "") -> str:
+        out = subprocess.run(
+            [sys.executable, "-c", CLI, "--db", db, *args],
+            input=stdin.encode("utf-8"),
+            capture_output=True,
+            env=env,
+        )
+        assert out.returncode == 0, out.stderr.decode("utf-8", "replace")
+        return out.stdout.decode("utf-8")
+
+    cli("assert", "déploiement", "target", value)
+    payload = json.dumps({"prompt": "what is the déploiement target"}, ensure_ascii=False)
+    hook = json.loads(cli("context", "--from-hook", stdin=payload))
+    assert value in hook["hookSpecificOutput"]["additionalContext"]
+    assert value in cli("beliefs")

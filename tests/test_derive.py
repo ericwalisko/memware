@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -369,6 +370,8 @@ def test_openai_rejected_credential_exits_4_after_one_call(db, tmp_path, monkeyp
 
 def fake_claude(tmp_path: Path, monkeypatch, body: str) -> Path:
     """A `claude` on PATH that records its argv/env and prints a canned envelope."""
+    if sys.platform == "win32":
+        pytest.skip("the fake claude is a POSIX shell script")
     log = tmp_path / "claude-calls.jsonl"
     script = tmp_path / "claude"
     script.write_text(
