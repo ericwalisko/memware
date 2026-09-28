@@ -173,3 +173,15 @@ def test_the_cli_reads_and_writes_utf8_through_pipes(tmp_path):
     hook = json.loads(cli("context", "--from-hook", stdin=payload))
     assert value in hook["hookSpecificOutput"]["additionalContext"]
     assert value in cli("beliefs")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a batch file on PATH is a Windows hazard")
+def test_derive_will_not_hand_transcript_text_to_a_batch_file(tmp_path, monkeypatch):
+    """An npm install of Claude Code puts ``claude.cmd`` on PATH. cmd.exe would parse the
+    transcript text in its arguments, so the provider refuses it and names the way out."""
+    from memware.derive import ClaudeCodeProvider, ProviderConfigError
+
+    (tmp_path / "claude.cmd").write_text("@echo off\r\n")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(ProviderConfigError, match="batch file"):
+        ClaudeCodeProvider({})

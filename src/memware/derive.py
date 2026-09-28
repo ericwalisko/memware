@@ -359,6 +359,19 @@ def _neutral_cwd() -> Path:
     return private_dir(memware_home())
 
 
+def _windows_binary(binary: str) -> str:
+    """The ``claude`` executable to run on Windows, by full path. An npm install puts a
+    ``claude.cmd`` on PATH, and a batch file hands its arguments to cmd.exe, which would read the
+    transcript text in them as commands: refused, rather than quoted and hoped for."""
+    found = shutil.which(binary) or binary
+    if found.lower().endswith((".cmd", ".bat")):
+        raise ProviderConfigError(
+            f"provider claude-code will not run {found}: a batch file passes the transcript text "
+            "to cmd.exe. Install Claude Code's native claude.exe, or use --provider openai"
+        )
+    return found
+
+
 class ClaudeCodeProvider:
     """The Claude Code CLI on your own subscription: ``claude -p`` with the API key unset.
 
@@ -380,6 +393,8 @@ class ClaudeCodeProvider:
                 f"provider claude-code needs the `{binary}` CLI on PATH "
                 "(https://claude.com/claude-code), or use --provider openai"
             )
+        if sys.platform == "win32":
+            self.binary = _windows_binary(binary)
 
     @staticmethod
     def resolve_model(env: dict[str, str], model: str | None = None) -> str:
@@ -422,6 +437,9 @@ class ClaudeCodeProvider:
             argv,
             capture_output=True,
             text=True,
+            # claude prints UTF-8, and Windows would decode it in the ANSI code page
+            encoding="utf-8" if sys.platform == "win32" else None,
+            errors="replace" if sys.platform == "win32" else None,
             timeout=timeout,
             env=env,
             stdin=subprocess.DEVNULL,  # else claude waits 3 s for piped stdin
