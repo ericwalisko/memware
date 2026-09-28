@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
+from memware.fsperm import private_dir, tighten
 from memware.ledger import approve, reject
 from memware.store import Store, now_iso
 
@@ -119,10 +120,11 @@ class JsonlReviewBackend:
         self.inbox = Path(inbox).expanduser()
 
     def publish(self, items: list[ReviewItem]) -> None:
-        self.outbox.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(self.outbox.parent)
         with self.outbox.open("w", encoding="utf-8") as fh:
             for it in items:
                 fh.write(json.dumps({**asdict(it), "published_at": now_iso()}) + "\n")
+        tighten(self.outbox)  # it quotes belief values
 
     def collect(self) -> list[Decision]:
         if not self.inbox.exists():

@@ -68,6 +68,7 @@ from typing import Any, NamedTuple
 
 from memware.config import get_dotted, load_config
 from memware.index import _subject_terms
+from memware.instruction import instruction_shaped
 
 DERIVED_RELIABILITY = 0.5
 """What ``memware derive`` writes (``memware.derive.RELIABILITY``); anything above is a person's."""
@@ -78,8 +79,11 @@ MOVING_VERSION = "moving_version"
 STATUS = "status"
 CONTRADICTED = "contradicted"
 OLDER_VERSION = "older_version"
+INSTRUCTION = "instruction"
+"""An order to the agent rather than a fact (:mod:`memware.instruction`): never injected, whoever
+stated it."""
 CLASSES = (MEASUREMENT, MOVING_VERSION, STATUS)
-REASONS = (CONTRADICTED, OLDER_VERSION, *CLASSES)
+REASONS = (INSTRUCTION, CONTRADICTED, OLDER_VERSION, *CLASSES)
 """Every reason injection leaves a belief out, in the order they are checked."""
 
 WINDOW_KEY = "inject.volatile_days"
@@ -548,10 +552,14 @@ def row_human_stated(row: Any) -> bool:
 
 def volatility(row: Any) -> str | None:
     """The mark a belief row carries in ``memware beliefs``, recall and the MCP tools: its class
-    when derive wrote it, None when a person stated or confirmed it, or it is durable."""
+    when derive wrote it, None when a person stated or confirmed it, or it is durable.
+    :data:`INSTRUCTION` whoever wrote it, when it reads as an order to the agent."""
+    subject, relation, value = str(row["subject"]), str(row["relation"]), str(row["value"])
+    if instruction_shaped(subject, relation, value):
+        return INSTRUCTION
     if row_human_stated(row):
         return None
-    return classify(str(row["subject"]), str(row["relation"]), str(row["value"]))
+    return classify(subject, relation, value)
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +734,10 @@ class Gate:
                 ruled = Verdict(reason, detail)
                 manifest = Check("manifest", True, f"{label(reason)}: {detail}")
         window, young = self._window(row, decision.cls)
-        if any(c.applies for c in person):
+        order = instruction_shaped(subject, relation, value)
+        if order is not None:  # before the person exemption: it applies whoever wrote it
+            verdict = Verdict(INSTRUCTION, order)
+        elif any(c.applies for c in person):
             verdict = None
         elif ruled is not None:
             verdict = ruled
@@ -756,6 +767,8 @@ class Gate:
     def admits_hit(self, volatile: str | None, valid_from: str | None) -> bool:
         """For a reader that has only a recall hit (the Hermes provider): its ``volatile`` mark,
         honouring the window. No manifest rule: a hit does not say which project it is in."""
+        if volatile == INSTRUCTION:
+            return False
         if volatile is None:
             return True
         if not self.volatile_days:
@@ -782,6 +795,8 @@ class Explanation:
     @property
     def why(self) -> str:
         """One line: what decided it."""
+        if self.verdict is not None and self.verdict.reason == INSTRUCTION:
+            return f"{self.verdict}; never injected, whoever stated it"
         person = [c for c in self.checks[:3] if c.applies]
         if person:
             cls = self.decision.cls

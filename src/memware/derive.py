@@ -68,6 +68,8 @@ from typing import Any
 
 from memware import __version__
 from memware.config import get_dotted, load_config, memware_home
+from memware.fsperm import private_dir
+from memware.instruction import instruction_shaped
 from memware.ledger import Policy, assert_belief
 from memware.store import Store, age_hours
 from memware.volatile import DESCRIBE, classify, label, names_setting, wordset
@@ -354,9 +356,7 @@ _LIMIT = re.compile(
 
 def _neutral_cwd() -> Path:
     """The memware home (created if absent): a directory with no CLAUDE.md for the CLI to load."""
-    home = memware_home()
-    home.mkdir(parents=True, exist_ok=True)
-    return home
+    return private_dir(memware_home())
 
 
 class ClaudeCodeProvider:
@@ -619,6 +619,9 @@ def validate(item: dict[str, Any], region: str) -> tuple[dict[str, str] | None, 
         return None, "value too short"
     if TASK_SHAPE.match(value):
         return None, "task instruction, not a fact"
+    order = instruction_shaped(subject, relation, value)
+    if order is not None:  # the excerpt may be a pasted document speaking to the agent
+        return None, f"instruction-shaped: {order}"
     if not grounded(value, region):
         return None, "NOT GROUNDED: value contains words the excerpt does not"
     cls = classify(subject, relation, value)

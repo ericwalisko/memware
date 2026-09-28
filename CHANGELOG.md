@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+- **Hardening from a security review; [docs/security.md](docs/security.md) has the threat model.**
+  - The store, its write-ahead log, snapshots, a restored store, transcript mirror copies,
+    `config.json` and the review outbox are created 0600. Directories memware creates are 0700.
+    An existing store is tightened to 0600 on its next open, and the memware home to 0700 when
+    the store is in it. A directory you named with `MEMWARE_DB` or `backup.dest` is left alone.
+  - The injection gate leaves out a belief that reads as an order to the agent rather than a
+    fact, whoever wrote it. `memware derive` no longer files one. Such a belief stays in the
+    ledger and recall, marked `volatile: "instruction"`, and `memware stats` counts it. Each
+    injected line is rendered as one line of plain text.
+  - The MCP tools bound their arguments: at most 16 recall phrasings, `k` within 1–50, a
+    `read_session` window within 0–50, and a `remember` `valid_from` that must be a real ISO-8601
+    time, not in the future.
+  - Keywords longer than 128 characters are left out of search queries.
+  - `memware prune` redaction now finds a secret in a belief in its decomposed, fullwidth or
+    percent-encoded form, or with an invisible character inside it. Its six-character minimum
+    counts visible characters.
+
 ## [0.10.0] - 2026-09-26
 
 ### Fixed

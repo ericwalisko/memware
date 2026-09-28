@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 
+from memware.fsperm import create_private, private_dir, tighten, tighten_store
 from memware.ingest import (
     capture_exclude_patterns,
     default_skip_markers,
@@ -38,14 +39,15 @@ def snapshot(store_path: str | os.PathLike[str], dest_dir: str | os.PathLike[str
     src = Path(store_path).expanduser()
     if not src.exists():
         raise FileNotFoundError(f"no store at {src}")
-    dest = Path(dest_dir).expanduser()
-    dest.mkdir(parents=True, exist_ok=True)
+    dest = private_dir(Path(dest_dir).expanduser())
     out = dest / f"memware-{_now().strftime('%Y%m%d-%H%M%S')}.db"
+    create_private(out)  # VACUUM INTO fills an empty file and keeps its 0600 (memware.fsperm)
     con = sqlite3.connect(str(src))
     try:
         con.execute("VACUUM INTO ?", (str(out),))  # atomic, self-contained, WAL-safe
     finally:
         con.close()
+    tighten(out)
     return out
 
 
@@ -197,10 +199,11 @@ def mirror_transcripts(
                 and target.stat().st_size == f.stat().st_size
             ):
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
+            private_dir(target.parent)
             tmp = target.with_name(f".{target.name}.mw-tmp")
             try:
                 shutil.copy2(f, tmp)
+                tighten(tmp)
                 os.replace(tmp, target)
             finally:
                 tmp.unlink(missing_ok=True)
@@ -217,11 +220,13 @@ def restore(snapshot_path: str | os.PathLike[str], store_path: str | os.PathLike
     if not snap.exists():
         raise FileNotFoundError(f"no snapshot at {snap}")
     store = Path(store_path).expanduser()
-    store.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(store.parent)
     backup_of_current = store.with_suffix(f".pre-restore-{_now().strftime('%Y%m%d-%H%M%S')}.db")
     if store.exists():
         shutil.copy2(store, backup_of_current)
+        tighten(backup_of_current)
     for suffix in ("-wal", "-shm"):
         Path(str(store) + suffix).unlink(missing_ok=True)  # drop stale WAL of the old store
     shutil.copy2(snap, store)
+    tighten_store(store)  # a snapshot an older memware wrote is 0644, and copy2 keeps its mode
     return backup_of_current

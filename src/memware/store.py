@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sqlite3
 import time
@@ -11,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from memware.fsperm import PRIVATE_DIR, create_private, private_dir, tighten, tighten_store
 from memware.residue import FTS_TABLES, deleted_terms
 
 SCHEMA = """
@@ -255,14 +257,30 @@ class Store:
         for a foreground path that only reads and records uses."""
         self.path = Path(path).expanduser() if path else DEFAULT_DB
         self.busy_timeout_ms = BUSY_TIMEOUT_MS if busy_timeout_ms is None else busy_timeout_ms
-        if str(self.path) != ":memory:":
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+        on_disk = str(self.path) != ":memory:"
+        if on_disk:
+            private_dir(self.path.parent)
+            with contextlib.suppress(OSError):  # SQLite says why a store cannot be created
+                create_private(self.path)  # 0600 before SQLite creates it 0644 (memware.fsperm)
         self.conn = sqlite3.connect(str(self.path), isolation_level=None)
         try:
             self._open()
         except BaseException:
             self.conn.close()  # a store that could not open, say locked mid-upgrade, holds nothing
             raise
+        if on_disk:
+            self._make_private()
+
+    def _make_private(self) -> None:
+        """Tighten a store an older memware created under the default umask: the file and its
+        ``-wal``/``-shm`` to 0600, and the memware home, when the store is in it, to 0700. A directory
+        ``MEMWARE_DB`` names elsewhere is not memware's to change."""
+        from memware.config import memware_home
+
+        tighten_store(self.path)
+        home = memware_home()
+        if self.path.parent.resolve() == home.resolve():
+            tighten(home, PRIVATE_DIR)
 
     def _open(self) -> None:
         """Set the connection up and bring the schema current. On a current store this takes no

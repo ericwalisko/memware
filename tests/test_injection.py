@@ -527,6 +527,7 @@ def test_stats_counts_what_injection_leaves_out_by_reason(db, app, capsys):
             "measurement": 1,
             "moving_version": 0,
             "status": 0,  # the 0.4.0 known issue is status too; the manifest reason comes first
+            "instruction": 0,  # an order to the agent (memware.instruction); none here
         },
     }
     code, out, _ = _run(capsys, "--db", db, "stats")
