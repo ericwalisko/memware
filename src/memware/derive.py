@@ -779,6 +779,8 @@ class RunLock:
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _win_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -786,6 +788,33 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+if sys.platform == "win32":
+
+    def _win_pid_alive(pid: int) -> bool:
+        """``os.kill(pid, 0)`` is no probe on Windows: it terminates the process. A handle to a
+        live process is not yet signalled; one that cannot be opened for lack of rights belongs
+        to a process that exists; any other failure means no such process."""
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        synchronize, query_limited, access_denied, wait_timeout = 0x100000, 0x1000, 5, 0x102
+        if not 0 < pid <= 0xFFFFFFFF:
+            return False
+        handle = kernel32.OpenProcess(synchronize | query_limited, False, pid)
+        if not handle:
+            return bool(ctypes.get_last_error() == access_denied)
+        try:
+            return bool(kernel32.WaitForSingleObject(handle, 0) == wait_timeout)
+        finally:
+            kernel32.CloseHandle(handle)
 
 
 def last_run_age_hours(state: dict[str, Any]) -> float | None:

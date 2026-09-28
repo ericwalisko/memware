@@ -452,6 +452,7 @@ def test_a_live_lock_skips_and_a_stale_lock_is_taken_over(db, tmp_path, monkeypa
     assert prov.usage.calls == 1 and state.exists() and not lock.exists()
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is POSIX-only")
 def test_last_run_age_is_utc_whatever_the_local_zone(monkeypatch):
     """A run that just finished is ~0 hours old. The old ``mktime - timezone`` arithmetic read
     an hour too old whenever the local zone was on daylight time — and on any given day one of

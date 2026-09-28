@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import os
 import stat
+import sys
 from pathlib import Path
 
 PRIVATE_FILE = 0o600
@@ -50,7 +51,7 @@ def create_private(path: str | os.PathLike[str]) -> bool:
 def tighten(path: str | os.PathLike[str], mode: int = PRIVATE_FILE) -> bool:
     """Clear from ``path`` any permission bit ``mode`` does not grant, if the current user owns it.
     Returns True when it changed the mode. Never raises."""
-    if not _POSIX:
+    if sys.platform == "win32" or not _POSIX:
         return False
     try:
         st = os.stat(path)
