@@ -362,12 +362,12 @@ def test_stats_and_backup_call_out_an_exclusion_hiding_most_transcripts(
 
 
 def test_stats_walks_no_transcripts_without_a_pattern(machine, capsys, monkeypatch):
-    import memware.cli as cli
+    import memware.cli.stats as stats_cmd
 
     def boom(src: str) -> list[str]:
         raise AssertionError("walked the transcript tree with no pattern set")
 
-    monkeypatch.setattr(cli, "_transcripts_on_disk", boom)
+    monkeypatch.setattr(stats_cmd, "_transcripts_on_disk", boom)
     assert main(["--db", machine["db"], "--json", "stats"]) == 0
     capture = json.loads(capsys.readouterr().out)["capture"]
     assert capture == {"exclude": [], "transcripts": None, "transcripts_excluded": None}
