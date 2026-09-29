@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from memware import __version__, relevance
-from memware.cli import notice
+from memware.cli import init, notice
 from memware.cli._common import (
     _ASK,
     _count,
@@ -139,13 +139,6 @@ _STALE_COLS = [
     ("source", "source"),
 ]
 _TURN_COLS = [("id", "id"), ("seq", "seq"), ("role", "role"), ("ts", "when"), ("text", "text")]
-
-
-def cmd_init(a: argparse.Namespace) -> int:
-    _maybe_setup_hint(a)
-    with Store(a.db) as s:
-        _out({"db": str(s.path), **s.stats()}, a.json)
-    return 0
 
 
 def cmd_sync(a: argparse.Namespace) -> int:
@@ -2531,8 +2524,7 @@ def build_parser() -> argparse.ArgumentParser:
             )
         return sp
 
-    s = add("init", "create the database")
-    s.set_defaults(fn=cmd_init)
+    init.register(add)
 
     s = add(
         "sync",
