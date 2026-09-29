@@ -1,4 +1,4 @@
-"""`memware notice`: what `memware setup` has not asked about yet, plus the setup hint other commands print."""
+"""`memware notice`, and the setup hint other commands print."""
 
 from __future__ import annotations
 
@@ -71,6 +71,7 @@ def _maybe_setup_hint(a: argparse.Namespace) -> None:
 
 
 STALE_NOTICE = "stale-beliefs"
+"""The key in the store's ``notice`` table that records the stale-belief notice was given."""
 
 
 def _notice_given(db: str, key: str) -> bool:

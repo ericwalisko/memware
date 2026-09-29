@@ -1,5 +1,9 @@
 """``memware`` command-line interface. Every command is also usable from a hook:
-pass ``--from-hook`` to read the harness's JSON payload on stdin."""
+pass ``--from-hook`` to read the harness's JSON payload on stdin.
+
+One module per command (``memware.cli.<command>``), each exposing ``register(add)`` to declare
+its subparser; :func:`build_parser` calls them in the order ``--help`` lists the commands.
+Helpers used by more than one command live in :mod:`memware.cli._common`."""
 
 from __future__ import annotations
 
@@ -31,23 +35,7 @@ from memware.cli import scan as scan_cmd
 from memware.cli import setup as setup_cmd
 from memware.cli import stats as stats_cmd
 from memware.cli import sync as sync_cmd
-from memware.cli._common import (
-    _HelpFormatter,
-)
-
-"""``capture.exclude`` hiding at least this share of the transcripts on disk is called out by
-``memware exclude``, ``memware stats`` and ``memware backup``."""
-
-
-"""Directory names Claude Code itself writes under a project directory."""
-
-
-"""The value argparse stores for a text option given without its text: read it from --value-file,
-a prompt that does not echo, or standard input."""
-
-
-"""The key in the store's ``notice`` table that records the stale-belief notice was given."""
-
+from memware.cli._common import _HelpFormatter
 
 _DESCRIPTION = (
     "Memory for AI agents that only remembers the latest truth — a local SQLite belief "
@@ -120,47 +108,26 @@ def build_parser() -> argparse.ArgumentParser:
         return sp
 
     init_cmd.register(add)
-
     sync_cmd.register(add)
-
     backfill_cmd.register(add)
-
     exclude_cmd.register(add)
-
     recall_cmd.register(add)
-
     context_cmd.register(add)
-
     notice_cmd.register(add)
-
     digest_cmd.register(add)
-
     assertion_cmd.register(add)
-
     beliefs_cmd.register(add)
-
     derive_cmd.register(add)
-
     read_cmd.register(add)
-
     review_cmd.register(add)
-
     prune_cmd.register(add)
-
     scan_cmd.register(add)
-
     stats_cmd.register(add)
-
     backup_cmd.register(add)
-
     restore_cmd.register(add)
-
     setup_cmd.register(add)
-
     config_cmd.register(add)
-
     nuke_cmd.register(add)
-
     completions_cmd.register(add)
 
     return p

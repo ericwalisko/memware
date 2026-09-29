@@ -35,6 +35,7 @@ def _path_names(src: str) -> set[str]:
 
 
 _LAYOUT_NAMES = ("subagents",)
+"""Directory names Claude Code itself writes under a project directory."""
 
 
 def _last_name(pattern: str, src_names: Collection[str] = ()) -> str | None:

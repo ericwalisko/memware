@@ -1,4 +1,4 @@
-"""`memware prune`: un-index sources or turns, retract what they left orphaned, scrub the store file; and the cascade/scrub reporting other commands reuse."""
+"""`memware prune`, and the cascade and scrub reporting that `exclude` and `beliefs` reuse."""
 
 from __future__ import annotations
 

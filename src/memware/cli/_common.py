@@ -1,4 +1,4 @@
-"""Plumbing shared by the command modules: output, hook input, and the text helpers more than one command uses."""
+"""Plumbing shared by the command modules: output, hook input, and shared text helpers."""
 
 from __future__ import annotations
 
@@ -104,6 +104,8 @@ def _out(obj: object, as_json: bool) -> None:
 
 
 EXCLUDE_SHARE_WARN = 0.5
+"""``capture.exclude`` hiding at least this share of the transcripts on disk is called out by
+``memware exclude``, ``memware stats`` and ``memware backup``."""
 
 
 def _transcripts_on_disk(src: str) -> list[str]:
@@ -177,6 +179,8 @@ def _plural(n: int, noun: str, verb: str = "") -> str:
 
 
 _ASK = "\0ask"
+"""The value argparse stores for a text option given without its text: read it from --value-file,
+a prompt that does not echo, or standard input."""
 
 
 class _NoText(Exception):
