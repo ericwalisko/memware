@@ -113,6 +113,48 @@ mirror: the hooks list its transcript, and every sync and backup skips what is l
 that runs no memware hook cannot be recognised that way. See
 [docs/integrations.md](docs/integrations.md) and [docs/keeping-memory-clean.md](docs/keeping-memory-clean.md).
 
+## Windows
+
+memware runs on native Windows; CI runs the whole suite there on Python 3.11–3.13. (Under WSL
+it is Linux: follow the steps above inside WSL.)
+
+```powershell
+winget install --id Git.Git -e        # Git for Windows: Claude Code runs hooks in its bash
+uv tool install "memware[mcp]"
+uv tool update-shell                   # puts uv's tool directory on PATH; open a new terminal
+memware --version
+```
+
+Then the [Claude Code steps](#use-it-from-claude-code) are the same. `pipx install
+"memware[mcp]"` works too; either way, `memware` must resolve in a new terminal, or the hooks
+do nothing.
+
+- **Hooks run in Git Bash.** The plugin's hooks are POSIX shell commands. Claude Code runs a
+  hook through Git for Windows' bash when it is installed, and there they work unchanged: CI
+  runs each command through Git Bash, including the backgrounded catch-up sync outliving the
+  Node process that started it. Without Git for Windows Claude Code falls back to PowerShell,
+  where the hooks fail.
+- **Where things live.** The store and config are in `%USERPROFILE%\.memware` unless
+  `MEMWARE_HOME` says otherwise. Claude Code keeps transcripts in
+  `%USERPROFILE%\.claude\projects\`, naming a project's directory after its path with every
+  character but a letter or digit made a dash: `C:\Users\you\dev\app` is `C--Users-you-dev-app`.
+  A `capture.exclude` pattern matches the whole path, and on Windows that match ignores case and
+  reads `/` and `\` alike.
+
+Known limits:
+
+- **No file modes.** The 0600/0700 modes memware gives its files on macOS and Linux do not
+  exist on Windows. The store takes the access list of the folder it is in, and your user
+  profile is private to you by default. A `MEMWARE_DB` or `backup.dest` outside it is as
+  private as that folder.
+- **Close Claude Code before `memware restore` or `memware nuke`.** Windows will not replace or
+  delete a file another process holds open, and a running session's MCP server holds the store.
+- **`derive --provider claude-code` needs the native `claude.exe`.** The npm install's
+  `claude.cmd` is refused, because a batch file would pass transcript text through `cmd.exe`.
+  Use Claude Code's native installer or `--provider openai`.
+- **Piped output is UTF-8.** memware reads and writes pipes as UTF-8 on Windows, as Claude Code
+  does, rather than in the ANSI code page. A console shows it either way.
+
 ## Deriving beliefs
 
 ```bash

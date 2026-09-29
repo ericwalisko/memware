@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import sys
 from datetime import UTC, datetime, timedelta
@@ -553,6 +554,7 @@ def test_an_upgrading_user_is_told_once(db, app, capsys, monkeypatch):
     assert _notice(monkeypatch, capsys, db, app) == ""  # once
 
 
+@pytest.mark.skipif(os.name != "posix", reason="a read-only directory needs POSIX mode bits")
 def test_the_notice_is_held_by_the_store_not_the_home(db, app, capsys, monkeypatch, tmp_path):
     """A memware home that takes no write, or holds a notices file that will not parse, neither
     keeps the notice from firing nor makes it repeat: the marker is a row in the store."""

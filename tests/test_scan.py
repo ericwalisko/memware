@@ -142,7 +142,10 @@ def test_nothing_found_exits_zero(tmp_path, capsys):
     }
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0,
+    reason="root reads a mode-000 file, and Windows has no mode bits",
+)
 def test_a_file_it_cannot_read_is_listed_and_the_scan_is_not_clean(tmp_path, capsys):
     src, db = _setup(tmp_path)
     locked = _write(src / "-b" / "locked.jsonl", ["whatever it holds is unknown"])
@@ -346,7 +349,10 @@ def test_a_symlinked_store_is_checked_where_sqlite_keeps_its_log(tmp_path, capsy
     assert r["store_check"]["wal_occurrences"] >= 1
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0,
+    reason="root reads a mode-000 file, and Windows has no mode bits",
+)
 def test_an_unreadable_store_is_not_called_missing(tmp_path, capsys):
     _, db = _setup(tmp_path)
     db.chmod(0)
@@ -404,7 +410,8 @@ def test_a_value_json_escaped_in_the_transcript_is_counted(tmp_path, capsys):
     _write(src / "-d" / "escaped.jsonl", [f"the password is {tricky} ok"])  # json.dumps escapes
     raw = src / "-d" / "raw.jsonl"
     raw.write_text(
-        json.dumps({"role": "user", "content": f"is {tricky}"}, ensure_ascii=False) + "\n"
+        json.dumps({"role": "user", "content": f"is {tricky}"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",  # as Claude Code writes it, whatever the platform's code page
     )
     assert tricky.encode() not in raw.read_bytes()
     _, r = _json(capsys, db, tricky)

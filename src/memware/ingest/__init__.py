@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -174,18 +176,58 @@ def is_excluded(source: str | os.PathLike[str], patterns: list[str] | None = Non
 
 @contextmanager
 def _exclusive(lock: Path) -> Iterator[None]:
-    """Hold an exclusive ``flock`` on ``lock`` for the block; unlocked where there is no flock."""
-    try:
-        import fcntl
-    except ImportError:  # Windows
-        yield
+    """Hold an exclusive lock on ``lock`` for the block, waiting while another thread or process
+    holds it: ``flock`` on POSIX, ``msvcrt.locking`` on Windows. The OS drops either lock when
+    its holder dies, so a hook killed mid-write blocks no one."""
+    if sys.platform == "win32":
+        with _locked_byte(lock):
+            yield
         return
+    import fcntl
+
     with lock.open("a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+if sys.platform == "win32":
+    import msvcrt
+
+    @contextmanager
+    def _locked_byte(lock: Path) -> Iterator[None]:
+        """The first byte of ``lock``, locked. ``LK_LOCK`` gives up after ten one-second tries,
+        so this polls the non-blocking form instead, waiting as long as the holder holds it.
+        Windows locks a range, not a file, and the range must be the same one each time."""
+        with lock.open("a+b") as fh:
+            fd = fh.fileno()
+            while True:
+                os.lseek(fd, 0, os.SEEK_SET)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    time.sleep(0.01)
+            try:
+                yield
+            finally:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
+def _replace(src: Path, dst: Path) -> None:
+    """``os.replace``. On Windows a reader that has ``dst`` open (one reading the list without
+    the lock) makes the rename fail until it closes the file, so it is retried for a second."""
+    if sys.platform == "win32":
+        for _ in range(100):
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                time.sleep(0.01)
+    os.replace(src, dst)
 
 
 def record_no_capture(path: str | os.PathLike[str]) -> bool:
@@ -214,7 +256,7 @@ def record_no_capture(path: str | os.PathLike[str]) -> bool:
         tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         try:
             tmp.write_text("".join(f"{p}\n" for p in [*listed, source]), encoding="utf-8")
-            os.replace(tmp, target)
+            _replace(tmp, target)
         finally:
             tmp.unlink(missing_ok=True)
     return True

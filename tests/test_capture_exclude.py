@@ -10,6 +10,7 @@ the file too. Every test here runs on a synthetic transcript tree and a scratch 
 from __future__ import annotations
 
 import json
+import shlex
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -183,6 +184,7 @@ def test_a_pattern_matches_the_whole_resolved_path(tmp_path, monkeypatch):
     assert not hit("-Users-me-gen-runs-archive/s.jsonl")
     assert not hit("-Users-me-llm-wiki/s.jsonl")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # what ~ means on Windows
     assert matches_exclude(root / "x" / "s.jsonl", "~/projects/x/*")
     assert not is_excluded(root / "x" / "s.jsonl", [])
 
@@ -487,7 +489,10 @@ def test_an_exclude_whose_scrub_is_blocked_exits_1_and_says_how_to_finish(
         "left in the search index : " in out
         and " of deleted rows on the index pages (passage_fts " in out
     )
-    assert "the scrub did not finish" in out and f"memware --db {db} prune --scrub" in out
+    assert (
+        "the scrub did not finish" in out
+        and f"memware --db {shlex.quote(str(db))} prune --scrub" in out
+    )
     assert [_turns_from(db, p) for p in _excluded(machine)] == [0, 0, 0]  # the un-index stands
     assert capture_exclude_patterns() == [GLOB]
 
@@ -513,7 +518,10 @@ def test_an_index_the_scrub_left_holding_deleted_terms_fails_the_exclude(
         "left in the search index : " in out
         and " of deleted rows on the index pages (passage_fts " in out
     )
-    assert "the search index still holds " in out and f"memware --db {db} prune --scrub" in out
+    assert (
+        "the search index still holds " in out
+        and f"memware --db {shlex.quote(str(db))} prune --scrub" in out
+    )
 
 
 def test_a_reader_mid_read_leaves_the_index_line_not_checked_and_the_exclude_failing(
@@ -546,7 +554,7 @@ def test_a_reader_mid_read_leaves_the_index_line_not_checked_and_the_exclude_fai
         "rewritten pages are still in the write-ahead log"
     ) in out
     assert "left in the search index : nothing" not in out
-    assert f"memware --db {db} prune --scrub" in out
+    assert f"memware --db {shlex.quote(str(db))} prune --scrub" in out
 
     assert main(["--db", db, "prune", "--scrub"]) == 0  # the reader is gone
     assert _copies(db) == 0

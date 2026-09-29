@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 from pathlib import Path
 
@@ -369,6 +370,8 @@ def test_openai_rejected_credential_exits_4_after_one_call(db, tmp_path, monkeyp
 
 def fake_claude(tmp_path: Path, monkeypatch, body: str) -> Path:
     """A `claude` on PATH that records its argv/env and prints a canned envelope."""
+    if sys.platform == "win32":
+        pytest.skip("the fake claude is a POSIX shell script")
     log = tmp_path / "claude-calls.jsonl"
     script = tmp_path / "claude"
     script.write_text(
@@ -452,6 +455,7 @@ def test_a_live_lock_skips_and_a_stale_lock_is_taken_over(db, tmp_path, monkeypa
     assert prov.usage.calls == 1 and state.exists() and not lock.exists()
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset is POSIX-only")
 def test_last_run_age_is_utc_whatever_the_local_zone(monkeypatch):
     """A run that just finished is ~0 hours old. The old ``mktime - timezone`` arithmetic read
     an hour too old whenever the local zone was on daylight time — and on any given day one of

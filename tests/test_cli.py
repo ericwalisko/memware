@@ -427,6 +427,7 @@ def test_memware_home_override_legacy_and_xdg(tmp_path, monkeypatch):
 
     monkeypatch.delenv("MEMWARE_HOME")
     monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "h"))  # what ~ means on Windows
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     assert memware_home() == tmp_path / "xdg" / "memware"  # fresh install -> XDG
 

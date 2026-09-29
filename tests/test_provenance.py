@@ -235,7 +235,9 @@ def test_only_the_non_interactive_entrypoints_are_skipped(store):
 # ── stats shows the breakdown ──────────────────────────────────────────
 
 
-def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, capsys):
+def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, capsys, monkeypatch):
+    for var in ("HOME", "USERPROFILE"):  # a Windows temp directory sits under the home
+        monkeypatch.setenv(var, str(projects.parent / "elsewhere"))
     with Store(db) as s:
         assert_belief(
             s,
@@ -303,15 +305,19 @@ def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, cap
 def test_stats_lists_at_most_five_project_directories_and_shortens_home(monkeypatch, tmp_path):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # what ~ means on Windows
+    native = home / ".claude" / "projects" / "-b"  # a Windows source uses backslashes
     report = {
         "by_entrypoint": [],
         "top_projects": [
             {"directory": f"{home}/.claude/projects/-a", "sessions": 1, "share": 1.0},
+            {"directory": str(native), "sessions": 1, "share": 1.0},
             {"directory": "/elsewhere/sessions", "sessions": 1, "share": 1.0},
         ],
     }
     assert _provenance_lines(report) == [
         ("project directory", "1 session (100.0%) ~/.claude/projects/-a"),
+        ("project directory", f"1 session (100.0%) ~{str(native)[len(str(home)) :]}"),
         ("project directory", "1 session (100.0%) /elsewhere/sessions"),
     ]
     with Store(tmp_path / "many.db") as s:
@@ -327,8 +333,9 @@ def test_stats_lists_at_most_five_project_directories_and_shortens_home(monkeypa
 
 
 def test_project_dir_lifts_a_subagent_transcript_to_its_project():
-    assert project_dir("/p/-Users-me/abc.jsonl") == "/p/-Users-me"
-    assert project_dir("/p/-Users-me/abc/subagents/agent-1.jsonl") == "/p/-Users-me"
+    project = str(Path("/p/-Users-me"))  # native separators, as sources are stored
+    assert project_dir("/p/-Users-me/abc.jsonl") == project
+    assert project_dir("/p/-Users-me/abc/subagents/agent-1.jsonl") == project
 
 
 # ── an existing store gains the column ─────────────────────────────────

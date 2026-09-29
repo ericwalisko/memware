@@ -2057,7 +2057,7 @@ def _provenance_lines(p: dict[str, Any]) -> list[tuple[str, str]]:
     for d in p["top_projects"]:
         where = (
             "~" + d["directory"][len(home) :]
-            if d["directory"].startswith(home + "/")
+            if d["directory"].startswith((home + "/", home + os.sep))
             else d["directory"]
         )
         lines.append(
@@ -3316,7 +3316,19 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _utf8_stdio() -> None:
+    """Read and write pipes as UTF-8 on Windows, where Python otherwise uses the ANSI code page.
+    Claude Code writes a hook's payload as UTF-8 and reads what a command prints as UTF-8, and
+    the code page has no room for most of what a transcript says: a prompt would arrive garbled
+    and the first arrow in a belief would crash the command. A console is unaffected."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper) and stream.encoding.lower() != "utf-8":
+            stream.reconfigure(encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
+    if sys.platform == "win32":
+        _utf8_stdio()
     a = build_parser().parse_args(argv)
     if getattr(a, "ascii", False):
         os.environ["MEMWARE_ASCII"] = "1"  # honoured by memware.term for glyph fallback

@@ -359,6 +359,19 @@ def _neutral_cwd() -> Path:
     return private_dir(memware_home())
 
 
+def _windows_binary(binary: str) -> str:
+    """The ``claude`` executable to run on Windows, by full path. An npm install puts a
+    ``claude.cmd`` on PATH, and a batch file hands its arguments to cmd.exe, which would read the
+    transcript text in them as commands: refused, rather than quoted and hoped for."""
+    found = shutil.which(binary) or binary
+    if found.lower().endswith((".cmd", ".bat")):
+        raise ProviderConfigError(
+            f"provider claude-code will not run {found}: a batch file passes the transcript text "
+            "to cmd.exe. Install Claude Code's native claude.exe, or use --provider openai"
+        )
+    return found
+
+
 class ClaudeCodeProvider:
     """The Claude Code CLI on your own subscription: ``claude -p`` with the API key unset.
 
@@ -380,6 +393,8 @@ class ClaudeCodeProvider:
                 f"provider claude-code needs the `{binary}` CLI on PATH "
                 "(https://claude.com/claude-code), or use --provider openai"
             )
+        if sys.platform == "win32":
+            self.binary = _windows_binary(binary)
 
     @staticmethod
     def resolve_model(env: dict[str, str], model: str | None = None) -> str:
@@ -422,6 +437,9 @@ class ClaudeCodeProvider:
             argv,
             capture_output=True,
             text=True,
+            # claude prints UTF-8, and Windows would decode it in the ANSI code page
+            encoding="utf-8" if sys.platform == "win32" else None,
+            errors="replace" if sys.platform == "win32" else None,
             timeout=timeout,
             env=env,
             stdin=subprocess.DEVNULL,  # else claude waits 3 s for piped stdin
@@ -779,6 +797,8 @@ class RunLock:
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _win_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -786,6 +806,33 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+if sys.platform == "win32":
+
+    def _win_pid_alive(pid: int) -> bool:
+        """``os.kill(pid, 0)`` is no probe on Windows: it terminates the process. A handle to a
+        live process is not yet signalled; one that cannot be opened for lack of rights belongs
+        to a process that exists; any other failure means no such process."""
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        synchronize, query_limited, access_denied, wait_timeout = 0x100000, 0x1000, 5, 0x102
+        if not 0 < pid <= 0xFFFFFFFF:
+            return False
+        handle = kernel32.OpenProcess(synchronize | query_limited, False, pid)
+        if not handle:
+            return bool(ctypes.get_last_error() == access_denied)
+        try:
+            return bool(kernel32.WaitForSingleObject(handle, 0) == wait_timeout)
+        finally:
+            kernel32.CloseHandle(handle)
 
 
 def last_run_age_hours(state: dict[str, Any]) -> float | None:
