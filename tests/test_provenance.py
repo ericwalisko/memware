@@ -235,7 +235,9 @@ def test_only_the_non_interactive_entrypoints_are_skipped(store):
 # ── stats shows the breakdown ──────────────────────────────────────────
 
 
-def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, capsys):
+def test_stats_breaks_the_store_down_by_entrypoint_and_project(db, projects, capsys, monkeypatch):
+    for var in ("HOME", "USERPROFILE"):  # a Windows temp directory sits under the home
+        monkeypatch.setenv(var, str(projects.parent / "elsewhere"))
     with Store(db) as s:
         assert_belief(
             s,
