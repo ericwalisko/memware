@@ -13,6 +13,7 @@ from memware.cli import assertion as assertion_cmd
 from memware.cli import backfill as backfill_cmd
 from memware.cli import backup as backup_cmd
 from memware.cli import beliefs as beliefs_cmd
+from memware.cli import completions as completions_cmd
 from memware.cli import config as config_cmd
 from memware.cli import context as context_cmd
 from memware.cli import derive as derive_cmd
@@ -84,20 +85,6 @@ Accessibility:
 
 See also: man memware  ·  https://github.com/ericwalisko/memware
 """
-
-
-def cmd_completions(a: argparse.Namespace) -> int:
-    """Print a shell completion script for bash/zsh/fish (generated from the parser by shtab)."""
-    try:
-        import shtab
-    except ImportError:
-        print(
-            "shell completions need shtab:  pip install 'memware[shell]'  (or: pip install shtab)",
-            file=sys.stderr,
-        )
-        return 2
-    print(shtab.complete(build_parser(), shell=a.shell))
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -174,18 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     nuke_cmd.register(add)
 
-    s = add(
-        "completions",
-        "print a shell completion script (bash/zsh/fish)",
-        epilog=(
-            "Examples:\n"
-            "  memware completions zsh  > ~/.zfunc/_memware\n"
-            "  memware completions bash > ~/.local/share/bash-completion/completions/memware\n"
-            "  memware completions fish > ~/.config/fish/completions/memware.fish"
-        ),
-    )
-    s.add_argument("shell", choices=["bash", "zsh", "fish"])
-    s.set_defaults(fn=cmd_completions)
+    completions_cmd.register(add)
+
     return p
 
 
