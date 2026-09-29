@@ -1,9 +1,10 @@
 """`--help` for the top level and every subcommand is recorded in ``tests/data/cli_help.txt``
-(``cli_help_py313.txt`` on Python 3.13+, whose argparse aligns the command column differently).
+(``cli_help_py313.txt`` for interpreters whose argparse aligns the command column differently:
+3.13, and later 3.12 patch releases). An interpreter must match one of the two byte for byte.
 
 The split of ``memware.cli`` into one module per subcommand must not change a byte of what a
 user reads, so this pins the whole help surface. After an intentional wording change,
-regenerate the fixture with ``python tests/test_cli_help.py`` under each Python family."""
+regenerate the fixtures with ``python tests/test_cli_help.py`` (``--wide`` for the second)."""
 
 from __future__ import annotations
 
@@ -15,10 +16,9 @@ from pathlib import Path
 
 import pytest
 
-FIXTURE = (
-    Path(__file__).parent
-    / "data"
-    / ("cli_help_py313.txt" if sys.version_info >= (3, 13) else "cli_help.txt")
+FIXTURES = (
+    Path(__file__).parent / "data" / "cli_help.txt",
+    Path(__file__).parent / "data" / "cli_help_py313.txt",
 )
 _DB = "/fixture/memware.db"  # the --db default is printed in every help; pin it
 _COLUMNS = "80"
@@ -34,8 +34,15 @@ def _walk(
                 yield from _walk(sub, (*path, name))
 
 
+def _read(path: Path) -> str:
+    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")  # a Windows checkout
+
+
 def _recorded() -> str:
-    return FIXTURE.read_bytes().decode("utf-8").replace("\r\n", "\n")  # a Windows checkout
+    """The fixture this interpreter's argparse reproduces; the first if it matches neither."""
+    got = render_all()
+    texts = [_read(f) for f in FIXTURES]
+    return next((t for t in texts if t == got), texts[0])
 
 
 def render_all() -> str:
@@ -79,5 +86,6 @@ def test_main_help_flag_matches_fixture(
 
 
 if __name__ == "__main__":
-    FIXTURE.write_bytes(render_all().encode("utf-8"))
-    sys.stdout.write(f"wrote {FIXTURE}\n")
+    target = FIXTURES[1] if sys.argv[1:] == ["--wide"] else FIXTURES[0]
+    target.write_bytes(render_all().encode("utf-8"))
+    sys.stdout.write(f"wrote {target}\n")
