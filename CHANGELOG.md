@@ -27,6 +27,11 @@ All notable changes to this project are documented here. The format follows
 ## [0.10.0] - 2026-09-26
 
 ### Fixed
+- **The plugin's `SessionEnd` sync now receives the hook payload.** It was backgrounded with
+  `nohup … &`, and a POSIX shell points a backgrounded command's stdin at `/dev/null`, so the sync
+  read `{}` and printed "nothing to sync"; the session was indexed only by the next `SessionStart`
+  catch-up. The entry now saves the hook's stdin on fd 3 and hands it back to the sync
+  (`exec 3<&0; nohup memware sync … <&3 3<&- … &`), which works in `sh` and in Git Bash alike.
 - **A belief matched only on a word common in your own conversations is no longer injected
   (#47).** The prompt hook injected any belief whose subject shared one word with the prompt.
   `any feedback to file about widget service?` also injected `config file location` and `export
