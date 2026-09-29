@@ -410,7 +410,8 @@ def test_a_value_json_escaped_in_the_transcript_is_counted(tmp_path, capsys):
     _write(src / "-d" / "escaped.jsonl", [f"the password is {tricky} ok"])  # json.dumps escapes
     raw = src / "-d" / "raw.jsonl"
     raw.write_text(
-        json.dumps({"role": "user", "content": f"is {tricky}"}, ensure_ascii=False) + "\n"
+        json.dumps({"role": "user", "content": f"is {tricky}"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",  # as Claude Code writes it, whatever the platform's code page
     )
     assert tricky.encode() not in raw.read_bytes()
     _, r = _json(capsys, db, tricky)

@@ -10,6 +10,7 @@ under the test's own tmp dir.
 from __future__ import annotations
 
 import json
+import shlex
 import sqlite3
 from pathlib import Path
 
@@ -219,7 +220,7 @@ def test_a_scrub_blocked_by_a_lock_reports_what_was_removed_and_how_to_finish(
     assert "turns removed : 1" in out
     assert "store file : NOT scrubbed: OperationalError: database is locked" in out
     assert "the scrub did not finish (OperationalError: database is locked)" in err
-    assert f"memware --db {db} prune --scrub" in err
+    assert f"memware --db {shlex.quote(str(db))} prune --scrub" in err
     assert VALUE not in out + err
 
     monkeypatch.setattr(Store, "scrub", real)

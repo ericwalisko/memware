@@ -2057,7 +2057,7 @@ def _provenance_lines(p: dict[str, Any]) -> list[tuple[str, str]]:
     for d in p["top_projects"]:
         where = (
             "~" + d["directory"][len(home) :]
-            if d["directory"].startswith(home + "/")
+            if d["directory"].startswith((home + "/", home + os.sep))
             else d["directory"]
         )
         lines.append(

@@ -41,6 +41,7 @@ def _corpus(
             for i, text in enumerate(contents)
         ),
         encoding="utf-8",
+        newline="\n",  # a transcript's lines end in LF on every platform
     )
     return path
 
