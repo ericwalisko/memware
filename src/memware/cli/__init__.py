@@ -24,6 +24,7 @@ from memware.cli import notice as notice_cmd
 from memware.cli import prune as prune_cmd
 from memware.cli import read as read_cmd
 from memware.cli import recall as recall_cmd
+from memware.cli import restore as restore_cmd
 from memware.cli import review as review_cmd
 from memware.cli import scan as scan_cmd
 from memware.cli import stats as stats_cmd
@@ -52,34 +53,6 @@ from memware.volatile import (
 
 """The value argparse stores for a text option given without its text: read it from --value-file,
 a prompt that does not echo, or standard input."""
-
-
-def _resolve_backup_dest(a: argparse.Namespace) -> str | None:
-    from memware.config import get_dotted, load_config
-
-    dest: str | None = a.dest or get_dotted(load_config(), "backup.dest")
-    return dest
-
-
-def cmd_restore(a: argparse.Namespace) -> int:
-    from memware import backup as bk
-
-    dest = _resolve_backup_dest(a)
-    snap = a.from_file
-    if not snap:
-        if not dest:
-            print("no backup destination configured; pass --from FILE", file=sys.stderr)
-            return 2
-        snaps = bk.list_snapshots(dest)
-        if not snaps:
-            print(f"no snapshots in {dest}", file=sys.stderr)
-            return 2
-        snap = str(snaps[0])
-    prev = bk.restore(snap, a.db)
-    with Store(a.db) as s:
-        stats = s.stats()
-    _out({"restored_from": snap, "previous_store_saved_to": str(prev), **stats}, a.json)
-    return 0
 
 
 def _prompt(msg: str, default: str = "") -> str:
@@ -530,15 +503,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     backup_cmd.register(add)
 
-    s = add("restore", "replace the store with a snapshot (the current store is saved aside first)")
-    s.add_argument(
-        "--from",
-        dest="from_file",
-        metavar="FILE",
-        help="snapshot file (default: latest in backup.dest)",
-    )
-    s.add_argument("--dest", metavar="DIR", help="backup destination to pick the latest from")
-    s.set_defaults(fn=cmd_restore)
+    restore_cmd.register(add)
 
     s = add(
         "setup",
