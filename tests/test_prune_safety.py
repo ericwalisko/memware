@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-import memware.cli as cli
+import memware.cli.prune as prune_cmd
 import memware.cli.sync as sync_cmd
 from memware.cli import main
 from memware.derive import source_pointer
@@ -395,6 +395,6 @@ def test_a_printed_key_never_holds_the_text_that_normalizing_would_change(text):
     }
     kw: dict = {f.name: [] for f in dataclasses.fields(Retraction)}
     kw["retract"] = [row]
-    key = cli._withheld_plan(Retraction(**kw), text).retract[0]["key"]
+    key = prune_cmd._withheld_plan(Retraction(**kw), text).retract[0]["key"]
     assert normalize(text) not in key
     assert key == "[removed]|r"

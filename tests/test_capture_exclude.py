@@ -561,7 +561,7 @@ def test_a_reader_mid_read_leaves_the_index_line_not_checked_and_the_exclude_fai
 
 
 def test_the_index_line_never_says_nothing_after_a_scrub_that_did_not_finish():
-    from memware.cli import _index_left_line
+    from memware.cli.prune import _index_left_line
     from memware.ingest import Pruned
     from memware.ledger import Retraction
 
