@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 
 from memware import backup as bk
-from memware.cli import _segment_forms, main
+from memware.cli import main
+from memware.cli.exclude import _segment_forms
 from memware.config import config_path, memware_home
 from memware.ingest import (
     capture_exclude_patterns,
