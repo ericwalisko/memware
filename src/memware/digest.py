@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -248,6 +249,11 @@ def transcript_dirs(project: Project, transcript_path: str | None = None) -> lis
         roots.append(Path(str(src)).expanduser())
     cwds = _unique(p for c in project.checkouts for p in (c, c.resolve()))
     dirs = [r.resolve() / project_dir_name(str(c)) for r in _unique(roots) for c in cwds]
+    if sys.platform == "win32":
+        # Claude Code names the directory from the cwd as it was typed, and Windows paths ignore
+        # case, so `cd c:\users\me\app` gives c--users-me-app. Sources are stored resolved, in
+        # the case on disk, and the range query compares case: resolve to that case too.
+        dirs = [d.resolve() for d in dirs]
     if transcript_path:
         dirs.insert(0, Path(transcript_path).expanduser().resolve().parent)
     return _unique(dirs)

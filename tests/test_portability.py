@@ -185,3 +185,18 @@ def test_derive_will_not_hand_transcript_text_to_a_batch_file(tmp_path, monkeypa
     monkeypatch.setenv("PATH", str(tmp_path))
     with pytest.raises(ProviderConfigError, match="batch file"):
         ClaudeCodeProvider({})
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="only Windows paths ignore case")
+def test_a_project_directory_named_in_another_case_is_found(tmp_path, monkeypatch):
+    """Claude Code names the directory from the cwd as typed; a session started after
+    ``cd c:\\...`` writes to a lower-case directory. The digest reads sources by exact string, so
+    it must look for the directory in the case it has on disk."""
+    from memware.digest import resolve_project, transcript_dirs
+
+    work = tmp_path / "Work"
+    work.mkdir()
+    on_disk = tmp_path / "projects" / project_dir_name(str(work.resolve())).lower()
+    on_disk.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert str(on_disk.resolve()) in [str(d) for d in transcript_dirs(resolve_project(work))]
