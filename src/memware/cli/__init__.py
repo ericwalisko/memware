@@ -15,6 +15,7 @@ from memware.cli import backup as backup_cmd
 from memware.cli import beliefs as beliefs_cmd
 from memware.cli import config as config_cmd
 from memware.cli import context as context_cmd
+from memware.cli import derive as derive_cmd
 from memware.cli import digest as digest_cmd
 from memware.cli import exclude as exclude_cmd
 from memware.cli import init as init_cmd
@@ -32,8 +33,6 @@ from memware.cli import sync as sync_cmd
 from memware.cli._common import (
     _HelpFormatter,
 )
-from memware.derive import add_arguments as _derive_arguments
-from memware.derive import cmd_derive
 
 """``capture.exclude`` hiding at least this share of the transcripts on disk is called out by
 ``memware exclude``, ``memware stats`` and ``memware backup``."""
@@ -153,21 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     beliefs_cmd.register(add)
 
-    s = add(
-        "derive",
-        "fill the ledger from the transcripts: durable facts as beliefs (docs/scheduling.md)",
-        epilog=(
-            "Examples:\n"
-            "  memware derive --plan                  no network: every excerpt a run would send, and where\n"
-            "  memware derive                         dry run: sends excerpts to the model, writes nothing\n"
-            "  memware derive --apply                 file the candidates, advance the watermark\n"
-            "  memware config derive.auto true        let the Claude Code plugin run it daily\n"
-            "  memware derive --provider openai       any OpenAI-compatible endpoint (OPENAI_* env)\n"
-            "Exit: 0 done · 2 not configured · 4 provider unavailable (nothing written, retry later)"
-        ),
-    )
-    _derive_arguments(s)
-    s.set_defaults(fn=cmd_derive)
+    derive_cmd.register(add)
 
     read_cmd.register(add)
 
