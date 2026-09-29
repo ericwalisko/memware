@@ -25,6 +25,7 @@ from memware.cli import context as context_cmd
 from memware.cli import digest as digest_cmd
 from memware.cli import init as init_cmd
 from memware.cli import notice as notice_cmd
+from memware.cli import read as read_cmd
 from memware.cli import recall as recall_cmd
 from memware.cli import sync as sync_cmd
 from memware.cli._common import (
@@ -52,9 +53,6 @@ from memware.digest import (
     injection_gate,
     project_dir_name,
     resolve_project,
-)
-from memware.index import (
-    read_turns,
 )
 from memware.ingest import (
     WITHHELD,
@@ -117,7 +115,6 @@ _STALE_COLS = [
     ("why", "why"),
     ("source", "source"),
 ]
-_TURN_COLS = [("id", "id"), ("seq", "seq"), ("role", "role"), ("ts", "when"), ("text", "text")]
 
 
 """``capture.exclude`` hiding at least this share of the transcripts on disk is called out by
@@ -596,12 +593,6 @@ def cmd_beliefs(a: argparse.Namespace) -> int:
             return 0
         rows = history(s, a.subject, a.relation) if a.relation else current(s, a.subject)
         _emit(a, rows, _BELIEF_COLS)
-    return 0
-
-
-def cmd_read(a: argparse.Namespace) -> int:
-    with Store(a.db) as s:
-        _emit(a, read_turns(s, a.session, around=a.around, window=a.window), _TURN_COLS)
     return 0
 
 
@@ -2320,15 +2311,7 @@ def build_parser() -> argparse.ArgumentParser:
     _derive_arguments(s)
     s.set_defaults(fn=cmd_derive)
 
-    s = add(
-        "read",
-        "read a session's turns",
-        epilog="Example:\n  memware read <session-id> --around <turn-id> --window 5",
-    )
-    s.add_argument("session")
-    s.add_argument("--around", type=int)
-    s.add_argument("--window", type=int, default=5)
-    s.set_defaults(fn=cmd_read)
+    read_cmd.register(add)
 
     s = add("review", "list/approve/reject/sync contested supersessions")
     s.add_argument("action", choices=["list", "approve", "reject", "sync"])
