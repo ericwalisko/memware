@@ -19,7 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from memware import __version__, relevance
-from memware.cli import backfill, context, init, notice, recall, sync
+from memware.cli import backfill as backfill_cmd
+from memware.cli import context as context_cmd
+from memware.cli import digest as digest_cmd
+from memware.cli import init as init_cmd
+from memware.cli import notice as notice_cmd
+from memware.cli import recall as recall_cmd
+from memware.cli import sync as sync_cmd
 from memware.cli._common import (
     _ASK,
     _count,
@@ -27,8 +33,6 @@ from memware.cli._common import (
     _gate,
     _HelpFormatter,
     _hiding_verdict,
-    _hook_payload,
-    _hook_store,
     _n,
     _NoText,
     _of,
@@ -44,8 +48,6 @@ from memware.derive import add_arguments as _derive_arguments
 from memware.derive import cmd_derive, open_readonly
 from memware.derive import status as derive_status
 from memware.digest import (
-    DEFAULT_MAX_CHARS,
-    digest,
     injection_gate,
     project_dir_name,
     resolve_project,
@@ -429,43 +431,6 @@ def cmd_exclude(a: argparse.Namespace) -> int:
     blocks.append([("verdict", v) for v in verdicts])
     _print_blocks(blocks)
     return code
-
-
-def cmd_digest(a: argparse.Namespace) -> int:
-    """Session-start helper: what memware holds for this project (see memware.digest)."""
-    payload = _hook_payload() if a.from_hook else {}
-    cwd = a.cwd or payload.get("cwd") or os.getcwd()
-    if a.db != ":memory:" and not Path(a.db).expanduser().exists():
-        return 0  # no store yet: nothing to say, and a hook must not create one
-    session, transcript = payload.get("session_id"), payload.get("transcript_path")
-    store = _hook_store(a.db) if a.from_hook else Store(a.db)
-    if store is None:
-        return 0
-    with store as s:
-        block = digest(
-            s,
-            Path(str(cwd)).expanduser(),
-            k=a.k,
-            max_chars=a.max_chars,
-            session=str(session) if session else None,
-            transcript_path=str(transcript) if transcript else None,
-        )
-    if not block:
-        return 0
-    if a.from_hook:
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "SessionStart",
-                        "additionalContext": block,
-                    }
-                }
-            )
-        )
-    else:
-        print(block)
-    return 0
 
 
 def cmd_assert(a: argparse.Namespace) -> int:
@@ -2296,11 +2261,11 @@ def build_parser() -> argparse.ArgumentParser:
             )
         return sp
 
-    init.register(add)
+    init_cmd.register(add)
 
-    sync.register(add)
+    sync_cmd.register(add)
 
-    backfill.register(add)
+    backfill_cmd.register(add)
 
     s = add(
         "exclude",
@@ -2338,40 +2303,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.set_defaults(fn=cmd_exclude)
 
-    recall.register(add)
+    recall_cmd.register(add)
 
-    context.register(add)
+    context_cmd.register(add)
 
-    notice.register(add)
+    notice_cmd.register(add)
 
-    s = add(
-        "digest",
-        "print this project's recent sessions and beliefs (the SessionStart hook injects it)",
-        epilog=(
-            "Examples:\n"
-            "  memware digest                   what memware holds for this directory's project\n"
-            "  memware digest --cwd ~/src/api -k 3\n"
-            "  memware digest --from-hook       SessionStart hook JSON; reads the payload on stdin\n"
-            "Prints nothing when memware has no session for the project."
-        ),
-    )
-    s.add_argument(
-        "--from-hook",
-        action="store_true",
-        help="read the SessionStart payload on stdin and print hook JSON",
-    )
-    s.add_argument(
-        "--cwd", metavar="DIR", help="project directory; omitted, the hook's cwd, else this one"
-    )
-    s.add_argument("-k", type=int, default=5, help="most recent sessions to list")
-    s.add_argument(
-        "--max-chars",
-        type=int,
-        default=DEFAULT_MAX_CHARS,
-        metavar="N",
-        help="cap on the block; the opening line always prints",
-    )
-    s.set_defaults(fn=cmd_digest)
+    digest_cmd.register(add)
 
     s = add(
         "assert",
