@@ -3333,7 +3333,3 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(a, "ascii", False):
         os.environ["MEMWARE_ASCII"] = "1"  # honoured by memware.term for glyph fallback
     return int(a.fn(a))
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
