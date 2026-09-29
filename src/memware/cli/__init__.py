@@ -27,6 +27,7 @@ from memware.cli import init as init_cmd
 from memware.cli import notice as notice_cmd
 from memware.cli import read as read_cmd
 from memware.cli import recall as recall_cmd
+from memware.cli import review as review_cmd
 from memware.cli import sync as sync_cmd
 from memware.cli._common import (
     _ASK,
@@ -68,18 +69,15 @@ from memware.ledger import (
     Redaction,
     RedactionRefused,
     Retraction,
-    approve,
     confirmed_sql,
     current,
     history,
     make_key,
     orphaned_count,
-    reject,
     retract,
     stale_turn_count,
 )
 from memware.residue import FileCheck
-from memware.review import HttpReviewBackend, JsonlReviewBackend, open_reviews, sync_reviews
 from memware.scan import ScanReport, TranscriptHit, scan
 from memware.store import Scrubbed, Store
 from memware.volatile import (
@@ -593,27 +591,6 @@ def cmd_beliefs(a: argparse.Namespace) -> int:
             return 0
         rows = history(s, a.subject, a.relation) if a.relation else current(s, a.subject)
         _emit(a, rows, _BELIEF_COLS)
-    return 0
-
-
-def cmd_review(a: argparse.Namespace) -> int:
-    with Store(a.db) as s:
-        if a.action == "list":
-            _out([r.__dict__ for r in open_reviews(s)], a.json)
-        elif a.action in ("approve", "reject"):
-            try:
-                result = (approve if a.action == "approve" else reject)(s, a.id)
-            except LookupError as e:  # no open review, or a candidate that cannot be approved
-                print(str(e).strip("'\""), file=sys.stderr)
-                return 2
-            _out(result.__dict__, a.json)
-        elif a.action == "sync":
-            backend: HttpReviewBackend | JsonlReviewBackend = (
-                HttpReviewBackend(a.url, a.token)
-                if a.url
-                else JsonlReviewBackend(a.outbox, a.inbox)
-            )
-            _out(sync_reviews(s, backend), a.json)
     return 0
 
 
@@ -2313,14 +2290,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     read_cmd.register(add)
 
-    s = add("review", "list/approve/reject/sync contested supersessions")
-    s.add_argument("action", choices=["list", "approve", "reject", "sync"])
-    s.add_argument("id", nargs="?", type=int)
-    s.add_argument("--outbox", default="~/.memware/review-outbox.jsonl")
-    s.add_argument("--inbox", default="~/.memware/review-inbox.jsonl")
-    s.add_argument("--url")
-    s.add_argument("--token")
-    s.set_defaults(fn=cmd_review)
+    review_cmd.register(add)
 
     s = add(
         "prune",
