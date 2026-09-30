@@ -294,7 +294,7 @@ def test_setup_derive_answer_is_persisted_and_offered_back(tmp_path, capsys, mon
 
 
 def test_derive_destination_names_where_excerpts_go(tmp_path, monkeypatch):
-    from memware.cli import _derive_destination
+    from memware.cli.setup import _derive_destination
     from memware.config import load_config
 
     for k in ("MEMWARE_DERIVE_PROVIDER", "MEMWARE_DERIVE_MODEL", "OPENAI_BASE_URL", "OPENAI_MODEL"):
@@ -312,7 +312,7 @@ def test_derive_destination_names_where_excerpts_go(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("have_packaging", [True, False])
 def test_consent_versions_compare_as_versions(monkeypatch, have_packaging):
-    from memware.cli import _older
+    from memware.cli.notice import _older
 
     if not have_packaging:
         monkeypatch.setitem(sys.modules, "packaging.version", None)  # the import now fails

@@ -17,7 +17,8 @@ from pathlib import Path
 
 import pytest
 
-import memware.cli as cli
+import memware.cli.prune as prune_cmd
+import memware.cli.sync as sync_cmd
 from memware.cli import main
 from memware.derive import source_pointer
 from memware.ingest import prune, sync_tree
@@ -331,8 +332,8 @@ def test_a_hook_sync_under_a_held_lock_gives_up_quietly_and_the_next_sync_catche
 ):
     """Final check of #40: `memware sync --from-hook` (PreCompact, 30 s hook timeout) waited up to
     a minute for the lock. It now waits a few seconds and exits 0 with nothing printed."""
-    assert cli.HOOK_SYNC_WAIT_MS <= 30_000 / 3
-    monkeypatch.setattr(cli, "HOOK_SYNC_WAIT_MS", 200)
+    assert sync_cmd.HOOK_SYNC_WAIT_MS <= 30_000 / 3
+    monkeypatch.setattr(sync_cmd, "HOOK_SYNC_WAIT_MS", 200)
     root = tmp_path / "projects"
     transcript = root / "t.jsonl"
     _write(transcript, "t", ["a turn written before compaction ran"])
@@ -394,6 +395,6 @@ def test_a_printed_key_never_holds_the_text_that_normalizing_would_change(text):
     }
     kw: dict = {f.name: [] for f in dataclasses.fields(Retraction)}
     kw["retract"] = [row]
-    key = cli._withheld_plan(Retraction(**kw), text).retract[0]["key"]
+    key = prune_cmd._withheld_plan(Retraction(**kw), text).retract[0]["key"]
     assert normalize(text) not in key
     assert key == "[removed]|r"

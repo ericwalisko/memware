@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `memware.cli` is now a package with one module per command (`memware.cli.recall`,
+  `memware.cli.prune`, ...). Behaviour, `--help` text and the `memware = memware.cli:main` entry
+  point are unchanged; `tests/test_cli_help.py` pins every command's `--help` byte for byte.
+
 ### Security
 - **Hardening from a security review; [docs/security.md](docs/security.md) has the threat model.**
   - The store, its write-ahead log, snapshots, a restored store, transcript mirror copies,

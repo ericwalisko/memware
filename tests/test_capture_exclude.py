@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 
 from memware import backup as bk
-from memware.cli import _segment_forms, main
+from memware.cli import main
+from memware.cli.exclude import _segment_forms
 from memware.config import config_path, memware_home
 from memware.ingest import (
     capture_exclude_patterns,
@@ -361,12 +362,12 @@ def test_stats_and_backup_call_out_an_exclusion_hiding_most_transcripts(
 
 
 def test_stats_walks_no_transcripts_without_a_pattern(machine, capsys, monkeypatch):
-    import memware.cli as cli
+    import memware.cli.stats as stats_cmd
 
     def boom(src: str) -> list[str]:
         raise AssertionError("walked the transcript tree with no pattern set")
 
-    monkeypatch.setattr(cli, "_transcripts_on_disk", boom)
+    monkeypatch.setattr(stats_cmd, "_transcripts_on_disk", boom)
     assert main(["--db", machine["db"], "--json", "stats"]) == 0
     capture = json.loads(capsys.readouterr().out)["capture"]
     assert capture == {"exclude": [], "transcripts": None, "transcripts_excluded": None}
@@ -561,7 +562,7 @@ def test_a_reader_mid_read_leaves_the_index_line_not_checked_and_the_exclude_fai
 
 
 def test_the_index_line_never_says_nothing_after_a_scrub_that_did_not_finish():
-    from memware.cli import _index_left_line
+    from memware.cli.prune import _index_left_line
     from memware.ingest import Pruned
     from memware.ledger import Retraction
 
