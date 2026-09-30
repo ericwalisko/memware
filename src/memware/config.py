@@ -71,6 +71,8 @@ DEFAULTS: dict[str, Any] = {
         # A derived measurement, moving version or status is injected while younger than this
         # many days. 0 never injects one: a version belief one day old was already wrong.
         "volatile_days": 0,
+        # Most beliefs the prompt hook injects per prompt (`memware context` without -k).
+        "k": 6,
     },
     # Optional relevance filter on what the prompt hook and Hermes prefetch inject
     # (memware.relevance). Off by default. shadow or filter sends each prompt and its candidate
@@ -140,3 +142,26 @@ def set_dotted(cfg: dict[str, Any], key: str, value: Any) -> None:
     for part in parts[:-1]:
         cur = cur.setdefault(part, {})
     cur[parts[-1]] = value
+
+
+INJECT_K_KEY = "inject.k"
+INJECT_K_DEFAULT = 6
+INJECT_K_MAX = 20
+
+
+def parse_k(raw: object) -> int | None:
+    """A whole number of beliefs from 1 to :data:`INJECT_K_MAX`, or None for anything else."""
+    if isinstance(raw, bool):
+        return None
+    try:
+        k = int(str(raw).strip())
+    except ValueError:
+        return None
+    return k if 1 <= k <= INJECT_K_MAX else None
+
+
+def inject_k(cfg: dict[str, Any] | None = None) -> int:
+    """``inject.k``: the most beliefs the prompt hook injects per prompt. ``memware config``
+    refuses a value outside 1 to 20; one written by hand reads as the default."""
+    raw = get_dotted(cfg if cfg is not None else load_config(), INJECT_K_KEY)
+    return parse_k(raw) or INJECT_K_DEFAULT

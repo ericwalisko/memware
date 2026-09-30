@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from memware import __version__, relevance
+from memware.config import INJECT_K_KEY, INJECT_K_MAX, inject_k, parse_k
 from memware.derive import add_arguments as _derive_arguments
 from memware.derive import cmd_derive, open_readonly
 from memware.derive import status as derive_status
@@ -735,12 +736,13 @@ def cmd_context(a: argparse.Namespace) -> int:
             )
         }
     admitted = [r for r in (rows[h.id] for h in hits if h.id in rows) if gate.verdict(r) is None]
+    k = a.k if a.k is not None else inject_k()
     rel = relevance.settings()
     if rel.on:  # opted in: the network call happens here, after the store is closed
         picked = relevance.choose(
             prompt,
             [(r["id"], relevance.fact(r["subject"], r["relation"], r["value"])) for r in admitted],
-            a.k,
+            k,
             rel,
             harness="claude-code" if a.from_hook else "cli",
             session=str(payload.get("session_id") or "") or None,
@@ -750,7 +752,7 @@ def cmd_context(a: argparse.Namespace) -> int:
         admitted = [admitted[i] for i in picked]
     lines = [
         belief_line(r["subject"], r["relation"], r["value"], r["valid_from"]) for r in admitted
-    ][: a.k]
+    ][:k]
     if not lines:
         return 0
     block = CONTEXT_TITLE + "\n" + "\n".join(lines)
@@ -2658,6 +2660,16 @@ def cmd_config(a: argparse.Namespace) -> int:
                 )
                 return 2
             val = int(days) if days.is_integer() else days
+        elif a.key == INJECT_K_KEY:
+            k = parse_k(a.value)
+            if k is None:
+                print(
+                    f"{INJECT_K_KEY} takes a whole number of beliefs from 1 to {INJECT_K_MAX}; "
+                    f"got {a.value!r}, nothing written",
+                    file=sys.stderr,
+                )
+                return 2
+            val = k
         elif a.key.startswith("relevance."):
             parsed = relevance.parse_setting(a.key, a.value)
             name = a.key.removeprefix("relevance.")
@@ -2945,7 +2957,9 @@ def build_parser() -> argparse.ArgumentParser:
         "print the beliefs a prompt names, less the stale ones (hook-friendly)",
     )
     s.add_argument("prompt", nargs="?")
-    s.add_argument("-k", type=int, default=6)
+    s.add_argument(
+        "-k", type=int, default=None, help="most beliefs to print (default: inject.k, 6)"
+    )
     s.add_argument("--from-hook", action="store_true")
     s.set_defaults(fn=cmd_context)
 
