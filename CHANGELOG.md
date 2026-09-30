@@ -15,6 +15,32 @@ All notable changes to this project are documented here. The format follows
   (`max open cards | 50`, `feature flag | state | enabled by default`). `memware beliefs --explain`
   names the rule that fired.
 
+## [0.11.0] - 2026-09-30
+
+### Upgrade notes
+- **Your store is tightened to 0600, and the memware home to 0700, on the next command that opens
+  it.** This is automatic and needs nothing from you. Check it with `ls -la ~/.memware`. A
+  directory you named with `MEMWARE_DB` or `backup.dest` is left alone. Windows has no file
+  modes; see the README's Windows section.
+- **`memware stats` has a new reason under "beliefs left out of injection": `instruction`.** It
+  counts beliefs that read as an order to the agent rather than a fact. Each stays in the ledger
+  and in recall; it is only kept out of injection. `memware beliefs --stale` lists them. A store
+  that held such a belief before this release shows a non-zero count the first time.
+- **The Claude Code plugin changes with this release** (the `SessionEnd` fix below). Run
+  `claude plugin marketplace update memware` and `claude plugin update memware@memware`;
+  RELEASING.md has the full deploy steps.
+
+### Added
+- **`python -m memware` runs the CLI,** the same entry point as the `memware` script. It used to
+  fail with `No module named memware.__main__`. `python -m memware.cli` still works.
+- **memware runs on native Windows.** CI now runs the whole suite on Windows beside Ubuntu and
+  macOS, on Python 3.11-3.13, and the README has a Windows section (install, where things live,
+  known limits). On Windows the capture lock uses
+  `msvcrt.locking`, the `derive` run lock probes a live process without terminating it, pipes are
+  read and written as UTF-8, transcript directories match regardless of case, and
+  `derive --provider claude-code` refuses an npm `claude.cmd`, because a batch file would pass
+  transcript text through `cmd.exe`; it needs the native `claude.exe` or `--provider openai`.
+
 ### Changed
 - `memware.cli` is now a package with one module per command (`memware.cli.recall`,
   `memware.cli.prune`, ...). Behaviour, `--help` text and the `memware = memware.cli:main` entry
@@ -38,14 +64,16 @@ All notable changes to this project are documented here. The format follows
     percent-encoded form, or with an invisible character inside it. Its six-character minimum
     counts visible characters.
 
-## [0.10.0] - 2026-09-26
-
 ### Fixed
 - **The plugin's `SessionEnd` sync now receives the hook payload.** It was backgrounded with
   `nohup … &`, and a POSIX shell points a backgrounded command's stdin at `/dev/null`, so the sync
   read `{}` and printed "nothing to sync"; the session was indexed only by the next `SessionStart`
   catch-up. The entry now saves the hook's stdin on fd 3 and hands it back to the sync
   (`exec 3<&0; nohup memware sync … <&3 3<&- … &`), which works in `sh` and in Git Bash alike.
+
+## [0.10.0] - 2026-09-26
+
+### Fixed
 - **A belief matched only on a word common in your own conversations is no longer injected
   (#47).** The prompt hook injected any belief whose subject shared one word with the prompt.
   `any feedback to file about widget service?` also injected `config file location` and `export
