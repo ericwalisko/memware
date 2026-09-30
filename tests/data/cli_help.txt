@@ -1,0 +1,538 @@
+===== memware  --help =====
+usage: memware [-h] [--db FILE] [--json] [--plain] [--ascii] [--version]
+               COMMAND ...
+
+Memory for AI agents that only remembers the latest truth — a local SQLite belief ledger and transcript index. No daemon, no vector database, and no model in the loop unless you opt in to the relevance filter.
+
+positional arguments:
+  COMMAND
+    init       create the database
+    sync       index new turns from transcripts
+    backfill   one-time index of existing transcripts (run once on a new
+               machine)
+    exclude    list, add or remove capture.exclude path globs: transcripts no
+               sync indexes and no backup mirrors (a dry run unless --apply)
+    recall     search turns and beliefs; pass several phrasings to fuse them
+    context    print the beliefs a prompt names, less the stale ones (hook-
+               friendly)
+    notice     print what `memware setup` has not asked about yet (the plugin
+               shows it at session start)
+    digest     print this project's recent sessions and beliefs (the
+               SessionStart hook injects it)
+    assert     record a belief; supersedes the previous value
+    beliefs    current beliefs, or the history of one key
+    derive     fill the ledger from the transcripts: durable facts as beliefs
+               (docs/scheduling.md)
+    read       read a session's turns
+    review     list/approve/reject/sync contested supersessions
+    prune      un-index whole sources (--glob/--containing) or individual
+               turns (--turns-containing/--turns-starting-with), retract
+               beliefs from the sessions left with no turn, and scrub what was
+               removed from the store file
+    scan       count where a value is still stored: transcripts on disk,
+               whether each is indexed, the store file and its search index,
+               and with --backups the backup destination (read-only)
+    stats      counts, derive state, and recall utilization; says plainly when
+               memory is inert
+    backup     snapshot the store to a folder (Dropbox/iCloud/Drive/disk) with
+               tiered retention
+    restore    replace the store with a snapshot (the current store is saved
+               aside first)
+    setup      guided one-time setup: index existing sessions, configure
+               backups, choose whether derive runs automatically
+    config     show or set configuration (e.g. backup.dest, backup.keep_days)
+    nuke       permanently delete the store, config, and ALL backups (typed
+               confirmation required)
+    completions
+               print a shell completion script (bash/zsh/fish)
+
+options:
+  -h, --help   show this help message and exit
+  --db FILE    SQLite store (env MEMWARE_DB) (default: /fixture/memware.db)
+  --json       machine-readable JSON output (default: False)
+  --plain      tab-separated records, one per line (scriptable; pipe to
+               fzf/awk/cut) (default: False)
+  --ascii      ASCII only; no non-ASCII glyphs (screen readers, non-UTF-8
+               terminals) (default: False)
+  --version    show program's version number and exit
+
+Examples:
+  memware backfill                          index the sessions already on disk (run once)
+  memware recall "which port" "api port"    search; pass several phrasings, they are fused
+  memware recall "db url" --plain | fzf     scriptable, tab-separated, one hit per line
+  memware beliefs api                       current beliefs about a subject
+  memware assert api "listens on" 8443      record a fact (supersedes the old value)
+  memware setup                             guided backups, derive opt-in, first-run config
+  memware completions zsh > ~/.zfunc/_memware      install shell completion
+
+Environment:
+  MEMWARE_DB          store path (default: <home>/memware.db)
+  MEMWARE_DERIVE_PROVIDER / MEMWARE_DERIVE_MODEL   `derive`: claude-code (default) | openai, and its model
+  OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY   `derive --provider openai` (or <home>/.env)
+  MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
+  MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
+  MEMWARE_NO_CAPTURE=1  never index or mirror this session (needs a memware hook to run in it)
+  NO_COLOR            honoured by construction — memware emits no colour at all
+
+Files:
+  <home>/config.json          configuration (see `memware config`)
+  <home>/ignore-markers.txt   content signatures never to index or mirror
+  <home>/no-capture.txt       transcripts of MEMWARE_NO_CAPTURE sessions, never indexed or mirrored
+
+Accessibility:
+  No information is ever conveyed by colour. --plain gives tab-separated records for scripts
+  and screen readers; --ascii avoids non-ASCII glyphs. See docs/accessibility.md.
+
+See also: man memware  ·  https://github.com/ericwalisko/memware
+===== memware init --help =====
+usage: memware init [-h]
+
+create the database
+
+options:
+  -h, --help  show this help message and exit
+===== memware sync --help =====
+usage: memware sync [-h] [--harness HARNESS] [--from-hook]
+                    [--skip-if-contains TEXT] [--exclude GLOB]
+                    [paths ...]
+
+index new turns from transcripts
+
+positional arguments:
+  paths
+
+options:
+  -h, --help            show this help message and exit
+  --harness HARNESS
+  --from-hook
+  --skip-if-contains TEXT
+                        skip (and un-index) files whose head contains TEXT,
+                        e.g. an eval marker (default: None)
+  --exclude GLOB        path glob to skip when syncing a directory
+                        (repeatable) (default: [])
+
+Examples:
+  memware sync                      catch up the configured transcript source
+  memware sync ~/.claude/projects   index a specific tree (idempotent)
+===== memware backfill --help =====
+usage: memware backfill [-h] [--harness HARNESS] [--exclude GLOB] [root]
+
+one-time index of existing transcripts (run once on a new machine)
+
+positional arguments:
+  root               transcript root (default: ~/.claude/projects) (default:
+                     ~/.claude/projects)
+
+options:
+  -h, --help         show this help message and exit
+  --harness HARNESS
+  --exclude GLOB
+
+Example:
+  memware backfill        index ~/.claude/projects once on a new machine
+===== memware exclude --help =====
+usage: memware exclude [-h] [--add GLOB | --remove GLOB] [--apply] [--force]
+
+list, add or remove capture.exclude path globs: transcripts no sync indexes and no backup mirrors (a dry run unless --apply)
+
+options:
+  -h, --help     show this help message and exit
+  --add GLOB     add a pattern (default: None)
+  --remove GLOB  remove a pattern (default: None)
+  --apply        write the config, un-index the indexed sources the patterns
+                 match, and scrub the store file (default: False)
+  --force        with --apply, add a pattern written as a path even though it
+                 matches nothing (default: False)
+
+Examples:
+  memware exclude                                  each pattern and what it matches
+  memware exclude --add '*/-Users-me-gen-runs/*'   preview: matches, sources to un-index
+  memware exclude --add '*/-Users-me-gen-runs/*' --apply
+  memware exclude --remove '*/-Users-me-gen-runs/*' --apply
+  memware exclude --add '*privateproj*' --apply    a project, its subdirectories and
+                                                   worktrees
+A pattern is matched against the whole resolved transcript path, and * crosses /.
+Claude Code names a project's directory after its path with every character but a
+letter or digit a dash: /Users/me/gen-runs is -Users-me-gen-runs, and a worktree of
+it -Users-me-gen-runs--claude-worktrees-feat. A new pattern holding / that matches
+nothing is refused unless --force. --apply scrubs the store file as prune --apply
+does. See docs/keeping-memory-clean.md.
+===== memware recall --help =====
+usage: memware recall [-h] [-k K] [--what {all,turns,beliefs}] [--full]
+                      [--no-touch] [--snippet-tokens SNIPPET_TOKENS]
+                      QUERY [QUERY ...]
+
+search turns and beliefs; pass several phrasings to fuse them
+
+positional arguments:
+  QUERY                 one or more phrasings: synonyms, related terms, the
+                        literal value you expect
+
+options:
+  -h, --help            show this help message and exit
+  -k K
+  --what {all,turns,beliefs}
+  --full
+  --no-touch
+  --snippet-tokens SNIPPET_TOKENS
+                        FTS5 snippet window (tokens) (default: 96)
+
+Examples:
+  memware recall "which port does the api use" "api port" 8443
+  memware recall "auth flow" --what beliefs
+  memware recall "auth flow" --plain | fzf         pick a hit interactively
+  memware recall "auth flow" --plain | cut -f1      just the ids
+===== memware context --help =====
+usage: memware context [-h] [-k K] [--from-hook] [prompt]
+
+print the beliefs a prompt names, less the stale ones (hook-friendly)
+
+positional arguments:
+  prompt
+
+options:
+  -h, --help   show this help message and exit
+  -k K
+  --from-hook
+===== memware notice --help =====
+usage: memware notice [-h] [--from-hook]
+
+print what `memware setup` has not asked about yet (the plugin shows it at session start)
+
+options:
+  -h, --help   show this help message and exit
+  --from-hook  print hook JSON with a systemMessage, and nothing after a
+               compaction (default: False)
+
+Examples:
+  memware notice               one line per pending question; nothing when none
+  memware notice --from-hook   the same as Claude Code hook JSON (systemMessage)
+===== memware digest --help =====
+usage: memware digest [-h] [--from-hook] [--cwd DIR] [-k K] [--max-chars N]
+
+print this project's recent sessions and beliefs (the SessionStart hook injects it)
+
+options:
+  -h, --help     show this help message and exit
+  --from-hook    read the SessionStart payload on stdin and print hook JSON
+                 (default: False)
+  --cwd DIR      project directory; omitted, the hook's cwd, else this one
+                 (default: None)
+  -k K           most recent sessions to list (default: 5)
+  --max-chars N  cap on the block; the opening line always prints (default:
+                 1200)
+
+Examples:
+  memware digest                   what memware holds for this directory's project
+  memware digest --cwd ~/src/api -k 3
+  memware digest --from-hook       SessionStart hook JSON; reads the payload on stdin
+Prints nothing when memware has no session for the project.
+===== memware assert --help =====
+usage: memware assert [-h] [--valid-from VALID_FROM] [--source SOURCE]
+                      [--reliability RELIABILITY]
+                      [--policy {auto,gate_conflicts,await_confirmation}]
+                      subject [relation] [value]
+
+record a belief; supersedes the previous value
+
+positional arguments:
+  subject               subject, or `-` to batch-read TSV lines from stdin
+  relation              relation (omit only when subject is `-`) (default:
+                        None)
+  value                 value (omit only when subject is `-`) (default: None)
+
+options:
+  -h, --help            show this help message and exit
+  --valid-from VALID_FROM
+  --source SOURCE
+  --reliability RELIABILITY
+  --policy {auto,gate_conflicts,await_confirmation}
+
+Examples:
+  memware assert api "listens on port" 8443 --source "session 3f2a"
+  printf 'api\tlistens on port\t8443\n' | memware assert -   (batch TSV from stdin)
+===== memware beliefs --help =====
+usage: memware beliefs [-h] [--orphaned] [--stale] [--explain [ID]]
+                       [--subject S] [--relation R] [--value V] [--cwd DIR]
+                       [--apply]
+                       [subject] [relation]
+
+current beliefs, or the history of one key
+
+positional arguments:
+  subject         a subject, or `retract` (with --orphaned, --stale or ids)
+                  (default: None)
+  relation
+
+options:
+  -h, --help      show this help message and exit
+  --orphaned      with `retract`: committed beliefs citing a session that is
+                  no longer indexed (default: False)
+  --stale         current beliefs the prompt hook and digest leave out: a
+                  derived measurement, moving version or status, or a version
+                  the project manifest overrules; with `retract`, retract them
+                  (default: False)
+  --explain [ID]  why one belief is or is not injected: its class or durable,
+                  the test that decided it, the exemptions and the manifest
+                  check; read-only (default: None)
+  --subject S     with --explain, --relation and --value: judge a triple not
+                  in the ledger, with no store (default: None)
+  --relation R    with --explain: the relation (default: None)
+  --value V       with --explain: the value (default: None)
+  --cwd DIR       with --stale or --explain: the project whose manifest
+                  version is checked (default: this one) (default: None)
+  --apply         with `retract`: write the retraction; without it nothing is
+                  written (default: False)
+
+Examples:
+  memware beliefs                        all current beliefs
+  memware beliefs api                    current beliefs about a subject
+  memware beliefs api "listens on port"  full history of one key
+  memware beliefs --stale                what injection leaves out, and why
+  memware beliefs --explain 12           why belief 12 is or is not injected
+  memware beliefs --explain --subject api --relation 'error rate' --value 2%
+                                         the same for a triple, with no store
+  memware beliefs retract --orphaned     dry run: beliefs whose session is gone
+  memware beliefs retract --orphaned --apply   retract them (rows are kept)
+  memware beliefs retract --stale --apply      retract what --stale lists
+  memware beliefs retract 12 15 --apply        retract beliefs by id
+===== memware derive --help =====
+usage: memware derive [-h] [--apply | --plan]
+                      [--provider {claude-code,openai}] [--model MODEL]
+                      [--chunk N] [--since TURN_ID] [--state FILE]
+                      [--max-sessions N] [--if-stale HOURS] [--auto] [--quiet]
+                      [--verbose]
+
+fill the ledger from the transcripts: durable facts as beliefs (docs/scheduling.md)
+
+options:
+  -h, --help            show this help message and exit
+  --apply               write candidates and advance the watermark. Without it
+                        a run is a dry run: it still sends every excerpt to
+                        the provider and skips only the write (see --plan)
+                        (default: False)
+  --plan                the no-network view: print every excerpt a run would
+                        send, the model calls and the destination, then stop —
+                        no provider call, no writes, works before `claude` or
+                        OPENAI_* is set up (default: False)
+  --provider {claude-code,openai}
+                        claude-code (default; the Claude Code CLI on your
+                        subscription) or openai (any OpenAI-compatible
+                        endpoint via OPENAI_* env) (default: None)
+  --model MODEL         model for the provider (claude-code default: haiku)
+                        (default: None)
+  --chunk N             excerpts per model call (claude-code default 24,
+                        openai 8) (default: None)
+  --since TURN_ID       override the watermark; --since 0 re-derives from the
+                        beginning (default: None)
+  --state FILE          watermark file (default: <db>.derive.json) (default:
+                        None)
+  --max-sessions N
+  --if-stale HOURS      skip when the last run is younger than HOURS (safe
+                        from a session hook) (default: None)
+  --auto                with --if-stale: also skip unless `memware config
+                        derive.auto true` (default: False)
+  --quiet               print nothing on success or skip (with --plan: only
+                        the summary) (default: False)
+  --verbose             print every rejected excerpt (default: False)
+
+Examples:
+  memware derive --plan                  no network: every excerpt a run would send, and where
+  memware derive                         dry run: sends excerpts to the model, writes nothing
+  memware derive --apply                 file the candidates, advance the watermark
+  memware config derive.auto true        let the Claude Code plugin run it daily
+  memware derive --provider openai       any OpenAI-compatible endpoint (OPENAI_* env)
+Exit: 0 done · 2 not configured · 4 provider unavailable (nothing written, retry later)
+===== memware read --help =====
+usage: memware read [-h] [--around AROUND] [--window WINDOW] session
+
+read a session's turns
+
+positional arguments:
+  session
+
+options:
+  -h, --help       show this help message and exit
+  --around AROUND
+  --window WINDOW
+
+Example:
+  memware read <session-id> --around <turn-id> --window 5
+===== memware review --help =====
+usage: memware review [-h] [--outbox OUTBOX] [--inbox INBOX] [--url URL]
+                      [--token TOKEN]
+                      {list,approve,reject,sync} [id]
+
+list/approve/reject/sync contested supersessions
+
+positional arguments:
+  {list,approve,reject,sync}
+  id
+
+options:
+  -h, --help            show this help message and exit
+  --outbox OUTBOX
+  --inbox INBOX
+  --url URL
+  --token TOKEN
+===== memware prune --help =====
+usage: memware prune [-h] [--glob GLOB] [--containing [TEXT]]
+                     [--turns-containing [TEXT]]
+                     [--turns-starting-with [TEXT]] [--value-file FILE]
+                     [--apply] [--allow-broad-redaction] [--scrub]
+
+un-index whole sources (--glob/--containing) or individual turns (--turns-containing/--turns-starting-with), retract beliefs from the sessions left with no turn, and scrub what was removed from the store file
+
+options:
+  -h, --help            show this help message and exit
+  --glob GLOB           un-index sources whose path matches this glob
+                        (default: None)
+  --containing [TEXT]   un-index whole sources whose transcript file contains
+                        TEXT (read whole) (default: None)
+  --turns-containing [TEXT]
+                        delete individual turns holding TEXT anywhere (keeps
+                        the rest of each session) (default: None)
+  --turns-starting-with [TEXT]
+                        delete individual turns that begin with TEXT, such as
+                        a recurring harness preamble (default: None)
+  --value-file FILE     read the TEXT of the one text selector written without
+                        it from FILE (default: None)
+  --apply               delete the turns, retract the beliefs and scrub the
+                        file; without it nothing is written (default: False)
+  --allow-broad-redaction
+                        apply even when the text would redact more than 20
+                        beliefs, or any belief for a text shorter than 6
+                        characters (default: False)
+  --scrub               takes no selector: rewrite the store file (merge the
+                        search indexes, VACUUM, empty the write-ahead log) and
+                        remove nothing (default: False)
+
+Examples:
+  memware prune --containing "[memware-eval]"          dry run: what would go
+  memware prune --containing "[memware-eval]" --apply  un-index and retract
+  memware prune --turns-containing --apply        a pasted secret: prompts for it, unshown
+  memware prune --turns-containing --value-file F --apply   or reads it from a file
+  memware prune --scrub                           rewrite the store file, remove nothing
+Every TEXT is matched literally and case-sensitively, and never printed or recorded.
+A TEXT left out comes from --value-file, a prompt that does not echo, or stdin; `-`
+reads stdin. Run a removal from a plain terminal, not inside a Claude Code session:
+the command line lands in that session's transcript. Without --apply nothing is
+written. A belief holding the TEXT has it replaced with [removed] and keeps its row.
+Exit: 0 done · 1 the store file still
+holds removed text (the scrub did not finish) · 2 bad usage
+===== memware scan --help =====
+usage: memware scan [-h] [--value-file FILE] [--backups] [--dest DIR]
+                    [--transcript-src DIR]
+                    [VALUE]
+
+count where a value is still stored: transcripts on disk, whether each is indexed, the store file and its search index, and with --backups the backup destination (read-only)
+
+positional arguments:
+  VALUE                 the text to look for; left out, --value-file, a prompt
+                        that does not echo, or stdin gives it, and `-` reads
+                        stdin (default: None)
+
+options:
+  -h, --help            show this help message and exit
+  --value-file FILE     read VALUE from FILE (default: None)
+  --backups             also read the backup destination: mirrored transcripts
+                        and snapshot files (default: False)
+  --dest DIR            backup destination (implies --backups; default:
+                        backup.dest) (default: None)
+  --transcript-src DIR  transcript tree to walk (default:
+                        backup.transcript_src) (default: None)
+
+Examples:
+  memware scan --backups                prompts for the value, unshown; then every
+                                        transcript, the store file, its index, backups
+  memware scan --value-file F --json    the value from a file
+  pbpaste | memware scan - --json       the value from stdin
+Prints paths and counts, never the value or text around it. Transcripts match
+literally and case-sensitively. Run it from a plain terminal: a value on the command
+line is visible in ps and shell history, and inside a Claude Code session it lands in
+that session's transcript. Exit: 0 not found · 1 found · 2 not found, but a path could
+not be read. See docs/keeping-memory-clean.md.
+===== memware stats --help =====
+usage: memware stats [-h]
+
+counts, derive state, and recall utilization; says plainly when memory is inert
+
+options:
+  -h, --help  show this help message and exit
+===== memware backup --help =====
+usage: memware backup [-h] [--dest DIR] [--keep D1,D3,D7…] [--transcripts]
+                      [--no-transcripts] [--transcript-src DIR]
+                      [--if-stale HOURS] [--quiet]
+
+snapshot the store to a folder (Dropbox/iCloud/Drive/disk) with tiered retention
+
+options:
+  -h, --help            show this help message and exit
+  --dest DIR            destination (default: backup.dest from config)
+                        (default: None)
+  --keep D1,D3,D7…      age buckets to keep (default 1,3,7,14) (default: None)
+  --transcripts         also mirror transcripts into <dest>/transcripts
+                        (default: None)
+  --no-transcripts
+  --transcript-src DIR
+  --if-stale HOURS      only back up if the newest snapshot is older than
+                        HOURS (safe to call from every session-end hook; no-op
+                        when no dest is set) (default: None)
+  --quiet               print nothing on success (default: False)
+
+Examples:
+  memware backup             snapshot + transcript mirror to backup.dest
+  memware restore --latest   after a wipe (never re-backfill)
+===== memware restore --help =====
+usage: memware restore [-h] [--from FILE] [--dest DIR]
+
+replace the store with a snapshot (the current store is saved aside first)
+
+options:
+  -h, --help   show this help message and exit
+  --from FILE  snapshot file (default: latest in backup.dest) (default: None)
+  --dest DIR   backup destination to pick the latest from (default: None)
+===== memware setup --help =====
+usage: memware setup [-h] [--yes]
+
+guided one-time setup: index existing sessions, configure backups, choose whether derive runs automatically
+
+options:
+  -h, --help  show this help message and exit
+  --yes       accept defaults; non-interactive (never switches derive on)
+              (default: False)
+===== memware config --help =====
+usage: memware config [-h] [key] [value]
+
+show or set configuration (e.g. backup.dest, backup.keep_days)
+
+positional arguments:
+  key
+  value
+
+options:
+  -h, --help  show this help message and exit
+===== memware nuke --help =====
+usage: memware nuke [-h] [--confirm PHRASE]
+
+permanently delete the store, config, and ALL backups (typed confirmation required)
+
+options:
+  -h, --help        show this help message and exit
+  --confirm PHRASE  must equal "DELETE ALL MEMWARE DATA" (else you are
+                    prompted) (default: None)
+===== memware completions --help =====
+usage: memware completions [-h] {bash,zsh,fish}
+
+print a shell completion script (bash/zsh/fish)
+
+positional arguments:
+  {bash,zsh,fish}
+
+options:
+  -h, --help       show this help message and exit
+
+Examples:
+  memware completions zsh  > ~/.zfunc/_memware
+  memware completions bash > ~/.local/share/bash-completion/completions/memware
+  memware completions fish > ~/.config/fish/completions/memware.fish

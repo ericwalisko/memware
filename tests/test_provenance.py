@@ -16,7 +16,8 @@ from pathlib import Path
 import pytest
 
 from memware import derive as md
-from memware.cli import _provenance_lines, main
+from memware.cli import main
+from memware.cli.stats import _provenance_lines
 from memware.ingest import sync_file, sync_tree
 from memware.ingest.claude_code import transcript_entrypoint
 from memware.ledger import assert_belief

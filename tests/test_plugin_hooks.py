@@ -240,3 +240,53 @@ def test_a_backgrounded_sync_outlives_the_process_that_ran_the_hook(tmp_path):
     while _turns(db) < 2 and time.monotonic() < deadline:
         time.sleep(0.25)
     assert _turns(db) == 2
+
+
+def test_a_backgrounded_session_end_sync_receives_the_payload(tmp_path):
+    """The SessionEnd entry backgrounds its sync, and a POSIX shell points a backgrounded
+    command's stdin at /dev/null, so a plain ``memware sync --from-hook &`` reads ``{}`` and
+    finds nothing to sync. The command string, run as Claude Code runs it, must hand the sync
+    the payload: the one session is indexed at once, not at the next SessionStart catch-up."""
+    bindir = _scripts()
+    groups = json.loads(HOOKS.read_text())["hooks"]["SessionEnd"]
+    [entry] = [h for g in groups for h in g["hooks"] if "memware sync " in h["command"]]
+    assert "nohup" in entry["command"]  # it still outlives the process that ran the hook
+    projects = tmp_path / "projects"  # the configured source is empty: no catch-up can mask it
+    projects.mkdir()
+    transcript = tmp_path / "elsewhere" / "s.jsonl"
+    transcript.parent.mkdir()
+    write_claude_jsonl(
+        transcript,
+        "s",
+        [
+            ("user", "2026-09-11T00:00:00Z", "where does the build cache live"),
+            ("assistant", "2026-09-11T00:00:05Z", "on the NAS, under /cache"),
+        ],
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"backup": {"transcript_src": str(projects)}}))
+    db = tmp_path / "store.db"
+    payload = json.dumps(
+        {
+            "session_id": "s",
+            "transcript_path": str(transcript),
+            "cwd": str(tmp_path),
+            "hook_event_name": "SessionEnd",
+            "reason": "other",
+        }
+    )
+
+    out = _run(
+        entry["command"],
+        f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        home,
+        payload,
+        MEMWARE_DB=str(db),
+    )
+
+    assert out.returncode == 0, out.stderr
+    deadline = time.monotonic() + 60
+    while _turns(db) < 2 and time.monotonic() < deadline:
+        time.sleep(0.25)
+    assert _turns(db) == 2
