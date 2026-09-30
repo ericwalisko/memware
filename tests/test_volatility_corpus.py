@@ -124,7 +124,7 @@ def test_the_corpus_holds_what_issue_42_and_card_t_571a37a3_named():
         (("memware PR #31", "must-fix issue", "retract skips confirmed rows"), "status"),
         (("the release", "blocker", "notarisation"), "status"),
         (("memware sync at 50k turns", "latency", "3.7 s"), "miss"),
-        (("personal-os board", "open cards count", "55"), "miss"),
+        (("personal-os board", "open cards count", "55"), "measurement"),
     ]:
         assert got.get(triple) == expect, triple
     for relation in ("known issue", "open issue", "must-fix issue", "should-fix issue", "blocker"):
