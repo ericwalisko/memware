@@ -644,3 +644,26 @@ def test_the_notice_never_creates_a_store(tmp_path, app, capsys, monkeypatch):
     missing = tmp_path / "never.db"
     assert _notice(monkeypatch, capsys, str(missing), app) == ""
     assert not missing.exists()
+
+
+def test_inject_k_sets_how_many_beliefs_the_hook_injects(capsys, tmp_path):
+    """`memware context` without -k reads inject.k; -k still wins; a bad value is refused."""
+    db = str(tmp_path / "k.db")
+    with Store(db) as s:
+        for i in range(10):
+            assert_belief(s, "gateway", f"setting {i}", f"value {i}", source="person")
+    prompt = "what does the gateway use"
+
+    def count(*extra: str) -> int:
+        code, out, _ = _run(capsys, "--db", db, "context", prompt, *extra)
+        assert code == 0
+        return sum(1 for line in out.splitlines() if "gateway" in line)
+
+    assert count() == 6  # the default
+    assert _run(capsys, "config", "inject.k", "3")[0] == 0
+    assert count() == 3
+    assert count("-k", "8") == 8
+    for bad in ("0", "21", "six", "true"):
+        code, _, err = _run(capsys, "config", "inject.k", bad)
+        assert code == 2 and "inject.k takes a whole number" in err
+    assert count() == 3

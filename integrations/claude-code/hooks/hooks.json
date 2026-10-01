@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "memware context --from-hook -k 6",
+            "command": "memware context --from-hook",
             "timeout": 10
           }
         ]

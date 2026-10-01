@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`inject.k` sets how many beliefs the prompt hook injects per prompt** (default 6, 1 to 20).
+  The Claude Code plugin's hook passed `-k 6`, so the cap could only change by editing an
+  installed plugin. The hook now omits `-k`, and `memware context` reads `inject.k` when it isn't
+  given. `memware config inject.k` refuses anything outside 1 to 20. The Hermes provider keeps
+  its own `prefetch_k`.
+- **A `garden` skill in the Claude Code plugin (`/memware:garden`) measures and tunes what the
+  prompt hook injects, then tends the belief ledger.** The 0.10.0 calibration was a one-off, and
+  it only labeled facts memware's own subject rule picked. Nothing checked the facts the relevance
+  filter adds from lower in the pool, or the candidates it passes over. On one user's 204 prompts
+  where the filter added a fact, three blind passes labeled 1,781 pairs. The added facts were 35%
+  relevant, about the same as the picks the filter kept (37%). The picks it dropped were 1%
+  relevant. With the filter, the block went from 147 relevant facts in 1,224 to 334 in 925.
+  Facts scored 0.2–0.3 were almost all noise, which is why that ledger's threshold moved to 0.3.
+  A second cycle measured misses for the first time: of 221 candidates the filter passed over, 8
+  were relevant.
+  - **Measuring:** `skills/garden/garden.py` (standard library only) reports the filter's health
+    from its logs: fallbacks, latency, cost, block size and cap-bound prompts. It samples blind
+    labeling batches, including candidates the filter passed over, so misses are measured too.
+    It turns two labeling passes, plus a third on their disagreements, into verdicts.
+  - **Tuning:** the log keeps the filter's score for every candidate in the pool, so past
+    prompts can be replayed under any threshold, `k` and pool up to the logged size. The report
+    searches that grid for the least noise that keeps at least 99% of the relevant facts the
+    current settings inject. It chooses on older prompts and moves only if the newest cycle's
+    held-out prompts agree, and then only as far as the smallest step that improves. Several
+    settings can move in one cycle. On synthetic scores it reaches the optimum in five cycles.
+    Once nothing else moves, it proposes a pool 10 wider for one cycle when the deepest logged
+    ranks still hold relevant facts. The timeout rises above a 2% timeout rate. The filter goes
+    back to `shadow` when it stops beating memware's own picks.
+  - **Where it writes:** verdicts (pair ids only) and one line of numbers per cycle go to
+    `<home>/labels/garden/`, so `memware nuke` removes them and the next cycle labels only new
+    pairs. It never prints a prompt or a fact. The batches that hold them are owner-only and
+    deleted after scoring.
+  - **Gardening the ledger:** the skill proposes a fix for each belief shown at least 5 times
+    and at least 80% noise, such as a sharper subject, a retraction, or keeping it. It reviews
+    stale, orphaned and contested beliefs, and every fourth cycle it looks for duplicates,
+    contradictions and subjects that will misfire. It changes nothing without the user's yes.
+
 ### Fixed
 - The staleness gate now leaves out three point-in-time readings it called durable: a count of
   cards, tickets, issues or PRs (`open card count | 305`, `blocked cards | 3`); a "current" PR,
