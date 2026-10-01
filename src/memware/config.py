@@ -81,6 +81,8 @@ DEFAULTS: dict[str, Any] = {
         "threshold": 0.5,  # inject a candidate whose P(helps with the prompt) is at least this
         "pool": 20,  # candidates asked about, from memware's own ranking
         "timeout_s": 1.5,  # hard deadline, one attempt; past it the hook injects as if off
+        "log_text_days": 30,  # the log keeps prompt and fact text this long, then only scores
+        "log_days": 180,  # and deletes a line after this many days
     },
 }
 
