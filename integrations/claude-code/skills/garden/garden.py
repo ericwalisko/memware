@@ -274,7 +274,13 @@ def sample(
     rng = random.Random(seed)
     cur = relevance_settings()
     labeled = {v["pair_id"] for v in _read_jsonl(garden_dir() / "verdicts.jsonl")}
-    P = [rs for rs in prompts(log_rows(days)).values() if rs[0]["p"] is not None]
+    # A line past relevance.log_text_days keeps its scores but not its text: it can be replayed,
+    # not labeled.
+    P = [
+        rs
+        for rs in prompts(log_rows(days)).values()
+        if rs[0]["p"] is not None and rs[0].get("prompt") and all(r.get("fact") for r in rs)
+    ]
     rng.shuffle(P)
     chosen_prompts, total = [], 0
     for rs in P:

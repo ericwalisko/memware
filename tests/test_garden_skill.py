@@ -269,3 +269,19 @@ def test_clean_removes_only_a_directory_sample_made(garden, capsys, tmp_path):
     (other / "x").write_text("x")
     run(garden, capsys, "clean", "--work", str(other))
     assert (other / "x").exists()
+
+
+def test_lines_whose_text_was_trimmed_are_replayed_but_not_sampled(garden, capsys):
+    rows = write_log(n_prompts=20)
+    log = home() / "relevance-log.jsonl"
+    lines = [json.loads(x) for x in log.read_text().splitlines()]
+    trimmed = {r["prompt_id"] for r in lines[:100]}  # the first five prompts
+    for r in lines[:100]:
+        r["prompt"] = r["fact"] = None
+    log.write_text("".join(json.dumps(r) + "\n" for r in lines))
+    work = home() / "labels" / "work-1"
+    run(garden, capsys, "sample", "--work", str(work), "--max-pairs", "100000")
+    key = garden._read_jsonl(work / "key.jsonl")
+    assert key and not {k["pair_id"].split(":")[0] for k in key} & trimmed
+    assert rows  # the replay still reads every line's scores
+    assert len(garden.prompts(garden.log_rows(None))) == 20
