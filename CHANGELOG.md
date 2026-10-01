@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-01
+
+### Upgrade notes
+- **Your store is tightened to 0600, and the memware home to 0700, on the next command that opens
+  it.** This is automatic and needs nothing from you. Check it with `ls -la ~/.memware`. A
+  directory you named with `MEMWARE_DB` or `backup.dest` is left alone. Windows has no file
+  modes; see the README's Windows section.
+- **`memware stats` has a new reason under "beliefs left out of injection": `instruction`.** It
+  counts beliefs that read as an order to the agent rather than a fact. Each stays in the ledger
+  and in recall; it is only kept out of injection. `memware beliefs --stale` lists them. A store
+  that held such a belief before this release shows a non-zero count the first time.
+- **The Claude Code plugin changes with this release** (the `SessionEnd` fix below). Run
+  `claude plugin marketplace update memware` and `claude plugin update memware@memware`;
+  RELEASING.md has the full deploy steps.
+- **The Claude Code plugin's prompt hook no longer passes `-k 6`.** It reads the new `inject.k`
+  setting instead, which defaults to the same 6, so nothing changes unless you set it. The plugin
+  also ships a `garden` skill (`/memware:garden`).
+- **With the relevance filter on, the log trims itself.** The first logged prompt after upgrading
+  strips the prompt and fact text from `relevance-log.jsonl` lines older than 30 days and deletes
+  lines older than 180 (`relevance.log_text_days`, `relevance.log_days`). Copy the file first if
+  you want the old text.
+
 ### Added
 - **`inject.k` sets how many beliefs the prompt hook injects per prompt** (default 6, 1 to 20).
   The Claude Code plugin's hook passed `-k 6`, so the cap could only change by editing an
@@ -43,46 +65,6 @@ All notable changes to this project are documented here. The format follows
     and at least 80% noise, such as a sharper subject, a retraction, or keeping it. It reviews
     stale, orphaned and contested beliefs, and every fourth cycle it looks for duplicates,
     contradictions and subjects that will misfire. It changes nothing without the user's yes.
-
-### Changed
-- **The relevance log keeps prompt text for 30 days, not forever.** With the relevance filter in
-  `shadow` or `filter` mode, `relevance-log.jsonl` gained one line per candidate per prompt, each
-  with the prompt's text, and nothing ever removed one. One user's log reached 15 MB in six days.
-  Now, at most once a day, the next logged prompt strips `prompt` and `fact` from lines older
-  than `relevance.log_text_days` (30) and deletes lines older than `relevance.log_days` (180),
-  and a line that will not parse. A stripped line keeps its scores and ids, so labeled pairs can
-  still be replayed. Both settings take 1 to 3650 days. `memware nuke` removes the trim's stamp
-  file too.
-
-### Fixed
-- **The relevance log and usage log are created 0600.** 0.11.0 tightened the store, the config and
-  the backups, but both logs were opened with a plain append and created 0644, so other local
-  accounts could read prompt text whenever the home directory was not already 0700. Each write
-  now creates the file 0600, and a log written before this release is tightened on its next write.
-- The staleness gate now leaves out three point-in-time readings it called durable: a count of
-  cards, tickets, issues or PRs (`open card count | 305`, `blocked cards | 3`); a "current" PR,
-  issue, ticket or card that names the one in flight (`current pr | PR #18`) or a branch in use;
-  and the state of a checkout, worktree or clone that reads as a working tree (`state | dirty and
-  8 behind, 39 files modified`). Targets, limits, configured states and policies stay durable
-  (`max open cards | 50`, `feature flag | state | enabled by default`). `memware beliefs --explain`
-  names the rule that fired.
-
-## [0.11.0] - 2026-09-30
-
-### Upgrade notes
-- **Your store is tightened to 0600, and the memware home to 0700, on the next command that opens
-  it.** This is automatic and needs nothing from you. Check it with `ls -la ~/.memware`. A
-  directory you named with `MEMWARE_DB` or `backup.dest` is left alone. Windows has no file
-  modes; see the README's Windows section.
-- **`memware stats` has a new reason under "beliefs left out of injection": `instruction`.** It
-  counts beliefs that read as an order to the agent rather than a fact. Each stays in the ledger
-  and in recall; it is only kept out of injection. `memware beliefs --stale` lists them. A store
-  that held such a belief before this release shows a non-zero count the first time.
-- **The Claude Code plugin changes with this release** (the `SessionEnd` fix below). Run
-  `claude plugin marketplace update memware` and `claude plugin update memware@memware`;
-  RELEASING.md has the full deploy steps.
-
-### Added
 - **`python -m memware` runs the CLI,** the same entry point as the `memware` script. It used to
   fail with `No module named memware.__main__`. `python -m memware.cli` still works.
 - **memware runs on native Windows.** CI now runs the whole suite on Windows beside Ubuntu and
@@ -94,6 +76,14 @@ All notable changes to this project are documented here. The format follows
   transcript text through `cmd.exe`; it needs the native `claude.exe` or `--provider openai`.
 
 ### Changed
+- **The relevance log keeps prompt text for 30 days, not forever.** With the relevance filter in
+  `shadow` or `filter` mode, `relevance-log.jsonl` gained one line per candidate per prompt, each
+  with the prompt's text, and nothing ever removed one. One user's log reached 15 MB in six days.
+  Now, at most once a day, the next logged prompt strips `prompt` and `fact` from lines older
+  than `relevance.log_text_days` (30) and deletes lines older than `relevance.log_days` (180),
+  and a line that will not parse. A stripped line keeps its scores and ids, so labeled pairs can
+  still be replayed. Both settings take 1 to 3650 days. `memware nuke` removes the trim's stamp
+  file too.
 - `memware.cli` is now a package with one module per command (`memware.cli.recall`,
   `memware.cli.prune`, ...). Behaviour, `--help` text and the `memware = memware.cli:main` entry
   point are unchanged; `tests/test_cli_help.py` pins every command's `--help` byte for byte.
@@ -117,6 +107,17 @@ All notable changes to this project are documented here. The format follows
     counts visible characters.
 
 ### Fixed
+- **The relevance log and usage log are created 0600, like the store.** Both were opened with a
+  plain append and created 0644, so other local accounts could read prompt text whenever the
+  home directory was not 0700. Each write
+  now creates the file 0600, and a log written before this release is tightened on its next write.
+- The staleness gate now leaves out three point-in-time readings it called durable: a count of
+  cards, tickets, issues or PRs (`open card count | 305`, `blocked cards | 3`); a "current" PR,
+  issue, ticket or card that names the one in flight (`current pr | PR #18`) or a branch in use;
+  and the state of a checkout, worktree or clone that reads as a working tree (`state | dirty and
+  8 behind, 39 files modified`). Targets, limits, configured states and policies stay durable
+  (`max open cards | 50`, `feature flag | state | enabled by default`). `memware beliefs --explain`
+  names the rule that fired.
 - **The plugin's `SessionEnd` sync now receives the hook payload.** It was backgrounded with
   `nohup … &`, and a POSIX shell points a backgrounded command's stdin at `/dev/null`, so the sync
   read `{}` and printed "nothing to sync"; the session was indexed only by the next `SessionStart`
