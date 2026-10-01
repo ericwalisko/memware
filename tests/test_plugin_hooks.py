@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from memware.store import Store
 from tests.conftest import write_claude_jsonl
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -225,16 +226,25 @@ def test_a_backgrounded_sync_outlives_the_process_that_ran_the_hook(tmp_path):
         "MEMWARE_DB": str(db),
     }
 
-    start = time.monotonic()
-    out = subprocess.run(
-        [node, str(runner), *_shell(), entry["command"], PAYLOAD],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=60,
-    )
-    assert out.stdout == "0", out.stderr
-    assert time.monotonic() - start < entry["timeout"]
+    # Hold the store's write lock, so the sync the hook backgrounds cannot commit a turn (it waits
+    # on the lock for up to a minute) until the test lets go. Whatever the sync does, it cannot
+    # have finished while the hook returns: the hook has returned without waiting for it.
+    Store(db).close()  # creates the schema; the lock is then taken on a store that exists
+    with contextlib.closing(sqlite3.connect(db, isolation_level=None, timeout=60)) as gate:
+        gate.execute("BEGIN IMMEDIATE")
+        try:
+            out = subprocess.run(
+                [node, str(runner), *_shell(), entry["command"], PAYLOAD],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=60,  # a hook that waits on the sync would hang here until it gave up
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("the hook did not return while the sync was held up: it waits for the sync")
+        assert out.stdout == "0", out.stderr  # Node has exited by now
+        assert gate.execute("SELECT count(*) FROM turn").fetchone()[0] == 0
+        gate.execute("ROLLBACK")  # let the sync through, with the Node parent long gone
 
     deadline = time.monotonic() + 60
     while _turns(db) < 2 and time.monotonic() < deadline:
