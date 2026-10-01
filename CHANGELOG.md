@@ -44,7 +44,21 @@ All notable changes to this project are documented here. The format follows
     stale, orphaned and contested beliefs, and every fourth cycle it looks for duplicates,
     contradictions and subjects that will misfire. It changes nothing without the user's yes.
 
+### Changed
+- **The relevance log keeps prompt text for 30 days, not forever.** With the relevance filter in
+  `shadow` or `filter` mode, `relevance-log.jsonl` gained one line per candidate per prompt, each
+  with the prompt's text, and nothing ever removed one. One user's log reached 15 MB in six days.
+  Now, at most once a day, the next logged prompt strips `prompt` and `fact` from lines older
+  than `relevance.log_text_days` (30) and deletes lines older than `relevance.log_days` (180),
+  and a line that will not parse. A stripped line keeps its scores and ids, so labeled pairs can
+  still be replayed. Both settings take 1 to 3650 days. `memware nuke` removes the trim's stamp
+  file too.
+
 ### Fixed
+- **The relevance log and usage log are created 0600.** 0.11.0 tightened the store, the config and
+  the backups, but both logs were opened with a plain append and created 0644, so other local
+  accounts could read prompt text whenever the home directory was not already 0700. Each write
+  now creates the file 0600, and a log written before this release is tightened on its next write.
 - The staleness gate now leaves out three point-in-time readings it called durable: a count of
   cards, tickets, issues or PRs (`open card count | 305`, `blocked cards | 3`); a "current" PR,
   issue, ticket or card that names the one in flight (`current pr | PR #18`) or a branch in use;

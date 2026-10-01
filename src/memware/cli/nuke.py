@@ -32,6 +32,8 @@ def cmd_nuke(a: argparse.Namespace) -> int:
         "review-inbox.jsonl",
         relevance.LOG_NAME,  # holds the text of prompts, when the relevance filter was on
         relevance.USAGE_NAME,
+        relevance.TRIM_STAMP,
+        relevance.LOG_NAME + ".tmp",  # a trim that was killed mid-write
     ):
         targets.append(home / name)
     targets.append(config_path())

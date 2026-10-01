@@ -290,6 +290,9 @@ Any other value reads as `off`, so a typo never switches it on. The other settin
 - `timeout_s` (1.5, at most 5)
 - `model` (`jev-1.13.0`, pinned rather than `jev-latest` because a threshold is tuned against one
   version)
+- `log_text_days` (30): how long the log below keeps the text of a prompt and its facts. After
+  that a line keeps only its scores and ids.
+- `log_days` (180): when a log line is deleted.
 
 The Hermes provider reads the same switch.
 
@@ -322,8 +325,11 @@ carries:
 
 Label a few dozen pairs as relevant or not, keep the labels in `~/.memware/labels/`, and pick the
 threshold that keeps what you need. [docs/relevance-calibration.md](docs/relevance-calibration.md)
-has one ledger's labeled result, which recommends 0.2. **The log and the labels hold the text of
-your prompts,** so delete them when you are done. `memware nuke` removes both files and the
+has one ledger's labeled result, which recommends 0.2. **The log holds the text of your prompts
+for 30 days** (`log_text_days`). Once a day, the next logged prompt strips the text from older
+lines, keeping their scores, and deletes lines older than 180 days (`log_days`). Both log files
+are created 0600, and an older one is tightened on the next write. The labels in `labels/` hold
+prompt text too, so delete them when you are done. `memware nuke` removes the logs and the
 `labels/` directory; `memware scan` and `prune` do not read them.
 
 The model answers with probabilities and never with text. The injected block therefore holds only

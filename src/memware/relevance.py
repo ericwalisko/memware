@@ -56,13 +56,13 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from memware import __version__
 from memware.config import get_dotted, load_config, memware_home
-from memware.fsperm import private_dir
+from memware.fsperm import create_private, private_dir, tighten
 from memware.store import now_iso
 
 MODES = ("off", "shadow", "filter")
@@ -73,6 +73,8 @@ MAX_PROMPT_CHARS = 2000  # irrelevant state costs Jev accuracy, and it is what l
 MAX_FACT_CHARS = 300
 MAX_POOL = 50
 MAX_TIMEOUT_S = 5.0
+MAX_LOG_DAYS = 3650
+TRIM_STAMP = ".relevance-log-trimmed"  # its mtime is when the log was last trimmed; no content
 LOG_NAME = "relevance-log.jsonl"
 USAGE_NAME = "relevance-usage.jsonl"
 USD_PER_INPUT_TOKEN = 0.042 / 1_000_000  # jev-1.13 list price (2026-09); output tokens are free
@@ -116,6 +118,8 @@ class Settings:
     threshold: float = 0.5
     pool: int = 20
     timeout_s: float = 1.5
+    log_text_days: int = 30  # after this, a log line keeps its scores and loses its text
+    log_days: int = 180  # after this, the line is deleted
 
     @property
     def on(self) -> bool:
@@ -156,12 +160,19 @@ def _timeout(v: object) -> float | None:
     return f if f is not None and 0.0 < f <= MAX_TIMEOUT_S else None
 
 
+def _days(v: object) -> int | None:
+    f = _number(v)
+    return int(f) if f is not None and f.is_integer() and 1 <= f <= MAX_LOG_DAYS else None
+
+
 PARSERS: dict[str, Callable[[object], Any]] = {
     "mode": _mode,
     "model": _model,
     "threshold": _threshold,
     "pool": _pool,
     "timeout_s": _timeout,
+    "log_text_days": _days,
+    "log_days": _days,
 }
 EXPECTS = {
     "mode": "off, shadow or filter",
@@ -169,6 +180,8 @@ EXPECTS = {
     "threshold": "a probability from 0 to 1",
     "pool": f"a whole number of candidates from 1 to {MAX_POOL}",
     "timeout_s": f"seconds, more than 0 and at most {MAX_TIMEOUT_S:g}",
+    "log_text_days": f"a whole number of days from 1 to {MAX_LOG_DAYS}",
+    "log_days": f"a whole number of days from 1 to {MAX_LOG_DAYS}",
 }
 
 
@@ -202,7 +215,9 @@ def api_key() -> str | None:
 
 def log_path() -> Path:
     """``<memware home>/relevance-log.jsonl``: one line per candidate per call, when on. It
-    holds the prompt as sent, for labelling; delete it when you are done calibrating."""
+    holds the prompt as sent, for labelling, for ``relevance.log_text_days`` (30); after that a
+    line keeps its scores and loses its text, and after ``relevance.log_days`` (180) it goes
+    (:func:`trim_log`)."""
     return memware_home() / LOG_NAME
 
 
@@ -390,8 +405,66 @@ def _usage(usage: dict[str, Any], rel: Settings, ms: int, harness: str) -> None:
 def _append(path: Path, lines: list[str]) -> None:
     with contextlib.suppress(OSError):
         private_dir(path.parent)
+        if not create_private(path):  # 0600 when new; a log from before 0.12 is tightened
+            tighten(path)
         with path.open("a", encoding="utf-8") as fh:
             fh.write("\n".join(lines) + "\n")
+
+
+def _ts(raw: object) -> datetime | None:
+    try:
+        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
+
+
+def trim_log(rel: Settings, now: datetime | None = None, *, force: bool = False) -> dict[str, int]:
+    """Keep the relevance log to its retention: a line older than ``rel.log_text_days`` loses
+    its ``prompt`` and ``fact`` (its scores stay, so a labeled pair can still be replayed), and
+    one older than ``rel.log_days`` is deleted, as is a line that will not parse. Runs at most
+    once a day unless ``force``; the stamp file beside the log records when. The file is
+    rewritten to a 0600 temporary and swapped in, so a reader never sees half of it; a line
+    another hook appends during that instant can be lost, which a calibration log can afford."""
+    now = now or datetime.now(UTC)
+    path = log_path()
+    stamp = path.with_name(TRIM_STAMP)
+    if not path.exists():
+        return {"scrubbed": 0, "dropped": 0}
+    if not force:
+        with contextlib.suppress(OSError):
+            if now.timestamp() - stamp.stat().st_mtime < 86400:
+                return {"scrubbed": 0, "dropped": 0}
+    text_cut = now - timedelta(days=rel.log_text_days)
+    drop_cut = now - timedelta(days=rel.log_days)
+    kept: list[str] = []
+    scrubbed = dropped = 0
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                dropped += 1
+                continue
+            ts = _ts(row.get("ts")) if isinstance(row, dict) else None
+            if ts is None or ts < drop_cut:
+                dropped += 1
+                continue
+            if ts < text_cut and (row.get("prompt") is not None or row.get("fact") is not None):
+                row["prompt"] = row["fact"] = None
+                scrubbed += 1
+                line = json.dumps(row, ensure_ascii=False) + "\n"
+            kept.append(line if line.endswith("\n") else line + "\n")
+    if scrubbed or dropped:
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.unlink(missing_ok=True)
+        create_private(tmp)
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.writelines(kept)
+        os.replace(tmp, path)
+    create_private(stamp)
+    os.utime(stamp, (now.timestamp(), now.timestamp()))
+    return {"scrubbed": scrubbed, "dropped": dropped}
 
 
 def _log(
@@ -438,3 +511,5 @@ def _log(
         for rank, (belief_id, text) in enumerate(pool)
     ]
     _append(log_path(), lines)
+    with contextlib.suppress(Exception):  # retention never fails the hook
+        trim_log(rel)

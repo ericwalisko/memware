@@ -17,6 +17,7 @@ import socket
 import sys
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -579,6 +580,9 @@ def test_an_answered_request_writes_one_usage_line(capsys, monkeypatch, db, jev)
         ("relevance.timeout_s", "30"),
         ("relevance.model", " "),
         ("relevance.endpoint", "https://example.test"),
+        ("relevance.log_text_days", "0"),
+        ("relevance.log_days", "forever"),
+        ("relevance.log_days", "3651"),
     ],
 )
 def test_config_refuses_a_bad_relevance_value(capsys, key, value):
@@ -651,3 +655,86 @@ def test_hermes_never_sends_a_notice(tmp_path, jev, mode):
     jev.p = dict.fromkeys(RELEVANT, 0.9)
     assert _hermes(tmp_path).prefetch(HERMES_NOTICES[0]) == ""
     assert jev.requests == [] and log_lines() == []
+
+
+# -- retention ----------------------------------------------------------------------------------
+
+
+def _log_row(ts: datetime, n: int) -> dict[str, Any]:
+    return {
+        "ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "pair_id": f"p{n}:{n}",
+        "prompt_id": f"p{n}",
+        "belief_id": n,
+        "rank": 0,
+        "p": 0.4,
+        "prompt": f"prompt {n}",
+        "fact": f"fact {n}",
+    }
+
+
+def test_trim_strips_old_text_and_drops_older_lines(monkeypatch):
+    now = datetime(2026, 10, 1, 12, tzinfo=UTC)
+    path = relevance.log_path()
+    ages = [1, 29, 31, 179, 181]  # days
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(_log_row(now - timedelta(days=d), i)) + "\n" for i, d in enumerate(ages))
+        + '{"torn line\n'
+    )
+    got = relevance.trim_log(relevance.Settings(), now)
+    assert got == {"scrubbed": 2, "dropped": 2}  # 31 and 179 lose text; 181 and the torn line go
+    rows = [json.loads(x) for x in path.read_text().splitlines()]
+    assert [r["belief_id"] for r in rows] == [0, 1, 2, 3]
+    assert [r["prompt"] is not None for r in rows] == [True, True, False, False]
+    assert [r["fact"] is not None for r in rows] == [True, True, False, False]
+    assert all(r["p"] == 0.4 and r["pair_id"] for r in rows)  # the scores stay for the replay
+    if sys.platform != "win32":
+        assert oct(path.stat().st_mode)[-3:] == "600"
+    # At most once a day, unless forced.
+    path.write_text(path.read_text() + json.dumps(_log_row(now - timedelta(days=40), 9)) + "\n")
+    assert relevance.trim_log(relevance.Settings(), now + timedelta(hours=23)) == {
+        "scrubbed": 0,
+        "dropped": 0,
+    }
+    # A day later the new 40-day line and the one that was 29 days old both cross 30 days.
+    assert relevance.trim_log(relevance.Settings(), now + timedelta(hours=25))["scrubbed"] == 2
+
+
+def test_trim_follows_the_configured_windows():
+    now = datetime(2026, 10, 1, 12, tzinfo=UTC)
+    path = relevance.log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_log_row(now - timedelta(days=10), 0)) + "\n")
+    rel = relevance.Settings(log_text_days=7, log_days=8)
+    assert relevance.trim_log(rel, now, force=True) == {"scrubbed": 0, "dropped": 1}
+    assert path.read_text() == ""
+
+
+def test_the_hook_trims_the_log_it_writes(capsys, monkeypatch, db, jev):
+    configure(mode="shadow", threshold=0.5)
+    jev.p = dict.fromkeys(RELEVANT, 0.9)
+    old = datetime.now(UTC) - timedelta(days=45)
+    path = relevance.log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_log_row(old, 0)) + "\n")
+    if sys.platform != "win32":
+        path.chmod(0o644)  # a log written before 0.12
+    hook(capsys, monkeypatch, db)
+    rows = log_lines()
+    assert rows[0]["prompt"] is None and rows[0]["fact"] is None  # the old line kept its scores
+    assert rows[1]["prompt"] == PROMPT  # today's lines keep their text
+    if sys.platform != "win32":
+        assert oct(path.stat().st_mode)[-3:] == "600"
+        assert oct(relevance.usage_path().stat().st_mode)[-3:] == "600"
+
+
+def test_a_failing_trim_never_fails_the_hook(capsys, monkeypatch, db, jev):
+    configure(mode="shadow", threshold=0.5)
+    jev.p = dict.fromkeys(RELEVANT, 0.9)
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(relevance, "trim_log", boom)
+    assert hook(capsys, monkeypatch, db) == LEDGER["golden_hook"]
