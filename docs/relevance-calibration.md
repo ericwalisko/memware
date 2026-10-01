@@ -104,3 +104,9 @@ Shadow mode (`memware config relevance.mode shadow`) logs each prompt and candid
 `pair_id` to `<home>/relevance-log.jsonl`. Label a few dozen pairs as relevant or noise, and keep
 the labels in `<home>/labels/`. The log and the labels hold the text of your prompts: delete them
 when you are done. `memware nuke` removes both, with everything else.
+
+The Claude Code plugin's `garden` skill (`/memware:garden`) runs this as a repeatable cycle. It
+samples recent pairs, including candidates the filter passed over, has them labeled blind,
+scores the filter against memware's own picks, and proposes one setting change by written rules.
+It keeps only pair ids and verdicts under `<home>/labels/garden/`, and deletes the batches that
+hold prompt text.

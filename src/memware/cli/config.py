@@ -7,6 +7,7 @@ import sys
 
 from memware import relevance
 from memware.cli._common import AddCommand, _out
+from memware.config import INJECT_K_KEY, INJECT_K_MAX, parse_k
 from memware.volatile import WINDOW_KEY, parse_days
 
 
@@ -52,6 +53,16 @@ def cmd_config(a: argparse.Namespace) -> int:
                 )
                 return 2
             val = int(days) if days.is_integer() else days
+        elif a.key == INJECT_K_KEY:
+            k = parse_k(a.value)
+            if k is None:
+                print(
+                    f"{INJECT_K_KEY} takes a whole number of beliefs from 1 to {INJECT_K_MAX}; "
+                    f"got {a.value!r}, nothing written",
+                    file=sys.stderr,
+                )
+                return 2
+            val = k
         elif a.key.startswith("relevance."):
             parsed = relevance.parse_setting(a.key, a.value)
             name = a.key.removeprefix("relevance.")

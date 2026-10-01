@@ -97,6 +97,11 @@ share is not read, and one shared word is enough.
 one user's labeled prompts, and the relevance-filter threshold those labels recommend. Recall on
 demand and the session-start digest do not use this rule.
 
+The prompt hook injects at most `inject.k` beliefs per prompt: 6 unless you set it (`memware
+config inject.k N`, from 1 to 20). `memware context -k N` overrides it for one call. The Hermes
+provider keeps its own `prefetch_k` in `~/.hermes/memware.json`. The Claude Code plugin's `garden`
+skill can tune `inject.k` together with the relevance filter's threshold and pool.
+
 ### What injection leaves out
 
 Both blocks are unsolicited, so they carry only what is likely still true. A belief closes when a

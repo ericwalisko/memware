@@ -9,6 +9,7 @@ from pathlib import Path
 
 from memware import relevance
 from memware.cli._common import AddCommand, _hook_payload, _hook_store
+from memware.config import inject_k
 from memware.digest import CONTEXT_TITLE, belief_line, injection_gate, resolve_project
 from memware.index import search_beliefs
 from memware.ledger import confirmed_sql
@@ -44,12 +45,13 @@ def cmd_context(a: argparse.Namespace) -> int:
             )
         }
     admitted = [r for r in (rows[h.id] for h in hits if h.id in rows) if gate.verdict(r) is None]
+    k = a.k if a.k is not None else inject_k()
     rel = relevance.settings()
     if rel.on:  # opted in: the network call happens here, after the store is closed
         picked = relevance.choose(
             prompt,
             [(r["id"], relevance.fact(r["subject"], r["relation"], r["value"])) for r in admitted],
-            a.k,
+            k,
             rel,
             harness="claude-code" if a.from_hook else "cli",
             session=str(payload.get("session_id") or "") or None,
@@ -59,7 +61,7 @@ def cmd_context(a: argparse.Namespace) -> int:
         admitted = [admitted[i] for i in picked]
     lines = [
         belief_line(r["subject"], r["relation"], r["value"], r["valid_from"]) for r in admitted
-    ][: a.k]
+    ][:k]
     if not lines:
         return 0
     block = CONTEXT_TITLE + "\n" + "\n".join(lines)
@@ -85,6 +87,6 @@ def register(add: AddCommand) -> None:
         "print the beliefs a prompt names, less the stale ones (hook-friendly)",
     )
     s.add_argument("prompt", nargs="?")
-    s.add_argument("-k", type=int, default=6)
+    s.add_argument("-k", type=int, default=None)  # None: inject.k (6 unless configured)
     s.add_argument("--from-hook", action="store_true")
     s.set_defaults(fn=cmd_context)
