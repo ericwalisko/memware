@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- The staleness gate now leaves out three point-in-time readings it called durable: a count of
+  cards, tickets, issues or PRs (`open card count | 305`, `blocked cards | 3`); a "current" PR,
+  issue, ticket or card that names the one in flight (`current pr | PR #18`) or a branch in use;
+  and the state of a checkout, worktree or clone that reads as a working tree (`state | dirty and
+  8 behind, 39 files modified`). Targets, limits, configured states and policies stay durable
+  (`max open cards | 50`, `feature flag | state | enabled by default`). `memware beliefs --explain`
+  names the rule that fired.
+
 ## [0.11.0] - 2026-09-30
 
 ### Upgrade notes
