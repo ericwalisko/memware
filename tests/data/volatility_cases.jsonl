@@ -172,10 +172,37 @@
 {"subject": "memware host", "relation": "disk usage", "value": "1.2 GB", "expect": "measurement", "miss": true, "from": "probe", "why": "usage is not an accumulating count"}
 {"subject": "api", "relation": "error rate", "value": "2%", "expect": "measurement", "miss": true, "from": "probe", "why": "a rate is not an accumulating count"}
 {"subject": "ingest queue", "relation": "run count", "value": "12", "expect": "measurement", "miss": true, "from": "probe", "why": "runs are not on the accumulating list"}
-{"subject": "kanban boards", "relation": "open card count", "value": "305", "expect": "measurement", "miss": true, "from": "hub-session", "why": "cards are not on the accumulating list"}
+{"subject": "kanban boards", "relation": "open card count", "value": "305", "expect": "measurement", "from": "hub-session", "why": "a count of cards is a reading of the queue; a target would carry a qualifier (max, limit, WIP), which vetoes it"}
 {"subject": "kanban review 2026-09-16", "relation": "boards audited", "value": "18 boards, 454 open cards total, 76 audited", "expect": "measurement", "miss": true, "from": "hub-session", "why": "not a bare quantity"}
 {"subject": "load balancer health check", "relation": "status", "value": "failing", "expect": "status", "miss": true, "from": "probe", "why": "'check' in the subject is a qualifier"}
 {"subject": "memware sync at 50k turns", "relation": "latency", "value": "3.7 s", "expect": "measurement", "from": "hub-session", "why": "a latency beside a load figure reads like a budget; too close to config for a word rule", "miss": true}
-{"subject": "personal-os board", "relation": "open cards count", "value": "55", "expect": "measurement", "from": "hub-session", "why": "cards are not on the accumulating list, and an open-card count reads like a WIP limit", "miss": true}
+{"subject": "personal-os board", "relation": "open cards count", "value": "55", "expect": "measurement", "from": "hub-session", "why": "a count of cards is a reading of the queue; a target would carry a qualifier (max, limit, WIP), which vetoes it"}
 {"subject": "scheduled_user_sync", "relation": "row count", "value": "4,200 rows", "expect": "measurement", "from": "review-pr51", "why": "the identifier joins 'scheduled' to a counted noun ('user'), which reads like a setting's name", "miss": true}
 {"subject": "scheduled_test_run", "relation": "status", "value": "failing", "expect": "status", "from": "review-pr51", "why": "the identifier joins 'scheduled' to a counted noun ('test'), which reads like a setting's name", "miss": true}
+{"subject": "acme tracker", "relation": "open ticket count", "value": "412", "expect": "measurement", "from": "t_12ab7591", "why": "a count of tickets is a reading of the queue"}
+{"subject": "orders board", "relation": "blocked cards count", "value": "17", "expect": "measurement", "from": "t_12ab7591", "why": "plural work-item noun under a count word"}
+{"subject": "docs-site repo", "relation": "open PR count", "value": "9", "expect": "measurement", "from": "t_12ab7591", "why": "a count of pull requests"}
+{"subject": "infra tracker", "relation": "number of open issues", "value": "63", "expect": "measurement", "from": "t_12ab7591", "why": "'number of' over issues"}
+{"subject": "payments board", "relation": "in-progress cards", "value": "6", "expect": "measurement", "from": "t_12ab7591", "why": "a bare integer under a plural work-item relation is the queue's length"}
+{"subject": "acme-api checkout", "relation": "current pr", "value": "PR #482", "expect": "status", "from": "t_12ab7591", "why": "'current' plus a PR reference is a moving pointer"}
+{"subject": "orders service", "relation": "current issue", "value": "#1204", "expect": "status", "from": "t_12ab7591", "why": "'current' plus an issue reference is a moving pointer"}
+{"subject": "docs-site", "relation": "active ticket", "value": "DOCS-217", "expect": "status", "from": "t_12ab7591", "why": "a tracker key under an 'active' pointer"}
+{"subject": "infra repo", "relation": "current pr", "value": "https://github.com/acme/infra/pull/310", "expect": "status", "from": "t_12ab7591", "why": "a pull-request URL under a 'current' pointer"}
+{"subject": "orders service", "relation": "current branch", "value": "feat/refund-retry", "expect": "status", "from": "t_12ab7591", "why": "the branch in use right now"}
+{"subject": "acme-api worktree", "relation": "state", "value": "dirty and 3 behind, 5 files modified on 2026-09-12", "expect": "status", "from": "t_12ab7591", "why": "a working-tree state is a status"}
+{"subject": "docs-site clone", "relation": "state", "value": "detached HEAD, 7 behind, rebase in progress", "expect": "status", "from": "t_12ab7591", "why": "a working-tree state is a status"}
+{"subject": "payments checkout", "relation": "status", "value": "uncommitted changes in 2 files, 1 ahead of origin", "expect": "status", "from": "t_12ab7591", "why": "a working-tree state is a status"}
+{"subject": "acme tracker", "relation": "max open tickets", "value": "50", "expect": "durable", "from": "t_12ab7591", "why": "a target count is a limit, not a reading"}
+{"subject": "orders board", "relation": "WIP limit for blocked cards", "value": "3", "expect": "durable", "from": "t_12ab7591", "why": "a limit"}
+{"subject": "docs-site repo", "relation": "default page size of the PR list", "value": "25", "expect": "durable", "from": "t_12ab7591", "why": "a setting"}
+{"subject": "triage ladder", "relation": "lane count", "value": "3 lanes: triage, backlog, ready", "expect": "durable", "from": "t_12ab7591", "why": "a definitional count, and lanes are not work items"}
+{"subject": "feature flag", "relation": "state", "value": "enabled by default", "expect": "durable", "from": "t_12ab7591", "why": "a configured state, not a reading of a working tree"}
+{"subject": "refund service flag", "relation": "state", "value": "disabled unless REFUND_V2 is set", "expect": "durable", "from": "t_12ab7591", "why": "a configured state"}
+{"subject": "current pr template", "relation": "path", "value": ".github/pull_request_template.md", "expect": "durable", "from": "t_12ab7591", "why": "a policy pointer: the relation is 'path'"}
+{"subject": "current branch naming rule", "relation": "convention", "value": "user/topic", "expect": "durable", "from": "t_12ab7591", "why": "a convention: the relation is not 'current branch'"}
+{"subject": "review lane", "relation": "current pr", "value": "the template lives in .github and asks for an acceptance checklist", "expect": "durable", "from": "t_12ab7591", "why": "'current pr' whose value names no PR is prose"}
+{"subject": "docs-site", "relation": "current branch", "value": "main", "expect": "durable", "from": "t_12ab7591", "why": "a long-lived branch name is a convention"}
+{"subject": "release branch", "relation": "state", "value": "ahead of main by design, hotfixes only", "expect": "durable", "from": "t_12ab7591", "why": "a by-design limitation"}
+{"subject": "acme tracker", "relation": "issue", "value": "a card is one unit of work with an Accept line", "expect": "durable", "from": "t_12ab7591", "why": "not a count: the relation names no quantity"}
+{"subject": "orders service", "relation": "cards", "value": "a card is a unit of work with a done condition", "expect": "durable", "from": "t_12ab7591", "why": "a definition under a plural work-item relation, not a bare integer"}
+{"subject": "docs-site", "relation": "open issue count limit", "value": "100", "expect": "durable", "from": "t_12ab7591", "why": "a limit"}

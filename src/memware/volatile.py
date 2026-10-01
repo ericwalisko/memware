@@ -28,8 +28,9 @@ counts only when the identifier names a setting (``export-schedule``, ``min_cove
   tests, files, lines, commits, duplicates, accounts, users, downloads); a magnitude word or a
   comma-grouped number of 1,000 or more beside such a noun; an "N of M" figure over one, in the
   relation or as the subject's noun ("appointment rows"), or over a completion word
-  ("backfilled", "passed"). A requirement word in the relation ("must pass", "at least") makes
-  the quantity a rule.
+  ("backfilled", "passed"); or a count of cards, tickets, issues or PRs ("open card count | 305",
+  "blocked cards | 3"). A requirement word in the relation ("must pass", "at least") makes the
+  quantity a rule.
 * **moving version**: a version string under a version noun that the subject or relation calls
   current, latest, built, installed, deployed, released, or on main.
 * **status**: a relation that is exactly status, state or progress, whose value is a status word
@@ -40,7 +41,10 @@ counts only when the identifier names a setting (``export-schedule``, ``min_cove
   names one finding (known issue, open issue, must-fix issue, should-fix issue, blocker), unless
   the value points at where it is tracked, states a by-design limitation, a workaround or a
   won't-fix, or says where it was fixed. A plural ("known issues", "blockers") is a list or a
-  class, which holds rules and history as often as defects, and is never a finding.
+  class, which holds rules and history as often as defects, and is never a finding; a "current"
+  PR, issue, ticket or card whose value names it (``#18``, ``DOCS-217``), or a branch in use; or
+  a state or status of a checkout, worktree, clone or repo whose value reads as a working tree
+  ("dirty and 8 behind", "3 files modified").
 
 :func:`decide` returns the class with the test each class ran, :meth:`Gate.explain` adds the
 exemptions and the manifest; ``classify``, derive's gate, ``memware beliefs --stale`` and
@@ -139,6 +143,11 @@ ACCUMULATING = ACCUMULATING_PLURAL | wordset(
 )
 """Nouns a store, a suite or a repository accumulates: a count of them is a snapshot."""
 COUNT_WORDS = wordset("count counts total totals tally")
+WORK_ITEM_PLURAL = wordset("cards tickets issues prs")
+WORK_ITEMS = WORK_ITEM_PLURAL | wordset("card ticket issue pr")
+"""Units of work on a board or tracker: a count of them is a reading of the queue, like a count of
+rows. Plural alone is enough for a bare integer ("blocked cards | 3"); a singular needs a count
+word ("open card count | 305"), because "card | 3" could be anything."""
 COMPLETION_WORDS = wordset(
     "passed failed done completed complete processed migrated backfilled removed deleted imported indexed remaining succeeded synced"
 )
@@ -163,6 +172,22 @@ INSTANCE_NOUNS = wordset(
     "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
 )
 _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
+_POINTER_LEADS = wordset("current currently active working")
+_POINTER_NOUNS = frozenset({"pr", "pull request", "mr", "merge request", "issue", "ticket", "card"})
+_POINTED_AT = re.compile(
+    r"#\d+\b|\bt_[0-9a-f]{6,}\b|\b[A-Z][A-Z0-9]+-\d+\b|/(?:pull|issues|merge_requests)/\d+\b"
+)
+"""What a value names when it points at one PR, issue or card: ``#18``, ``t_12ab7591``, ``DOCS-217``,
+a pull-request URL."""
+_LONG_LIVED_BRANCHES = wordset("main master trunk develop development")
+_CHECKOUT_NOUNS = wordset("checkout checkouts worktree worktrees clone clones repo tree branch")
+_TREE_STATE = re.compile(
+    r"\b(?:dirty|behind|ahead|diverged|detached|modified|untracked|uncommitted|unstaged"
+    r"|merge conflicts?|rebase|rebasing)\b",
+    re.I,
+)
+"""What a working tree reads as: dirty, N behind, files modified. "clean" alone is left out, it is
+also a design word."""
 _FINDING_LEADS = ("known", "open", "must fix", "should fix")
 FINDINGS = frozenset({*(f"{lead} issue" for lead in _FINDING_LEADS), "blocker"})
 """Relations that name one finding or defect: true until someone fixes it. Known, open, must-fix
@@ -312,6 +337,11 @@ def measurement_test(subject: str, relation: str, value: str) -> Test:
     if counted_by and words & ACCUMULATING:
         noun = sorted(words & ACCUMULATING)[0]
         return Test(MEASUREMENT, True, f"'{counted_by[0]}' over '{noun}'")
+    subject_tail = set(_tokens(subject)[-1:])
+    if counted_by and (items := (set(rel) | subject_tail) & WORK_ITEMS):
+        return Test(MEASUREMENT, True, f"'{counted_by[0]}' over '{sorted(items)[0]}'")
+    if rel and rel[-1] in WORK_ITEM_PLURAL and re.fullmatch(r"\d+", value.strip()):
+        return Test(MEASUREMENT, True, f"a bare integer under '{rel[-1]}', a queue's length")
     if (magnitude := _MAGNITUDE.search(value)) and words & ACCUMULATING_PLURAL:
         noun = sorted(words & ACCUMULATING_PLURAL)[0]
         return Test(MEASUREMENT, True, f"'{magnitude.group(0)}' beside '{noun}'")
@@ -385,6 +415,36 @@ def _instance(subject: str) -> str | None:
     return words[-1] if words and words[-1] in INSTANCE_NOUNS else None
 
 
+def _pointer_test(joined: str, value: str) -> str:
+    """Why a relation "current PR" (or issue, ticket, card, branch) is a moving pointer, or ''.
+    The value must name the one it points at; a long-lived branch name is a convention."""
+    words = joined.split()
+    if len(words) < 2 or words[0] not in _POINTER_LEADS:
+        return ""
+    noun = " ".join(words[1:])
+    if noun in _POINTER_NOUNS and (named := _POINTED_AT.search(value)):
+        return f"'{joined}' points at the one in flight, '{named.group(0)}'"
+    name = value.strip()
+    if (
+        noun == "branch"
+        and re.fullmatch(r"[\w.-]+(?:/[\w.-]+)*", name)
+        and name.lower() not in _LONG_LIVED_BRANCHES
+    ):
+        return f"'{joined}' points at the branch in use, '{name}'"
+    return ""
+
+
+def _tree_state(subject: str, value: str) -> str:
+    """The working-tree word a checkout's state value reads as, or ''. A by-design limitation
+    ("ahead of main by design") is a rule, not a reading."""
+    if not set(_tokens(subject)) & _CHECKOUT_NOUNS and "working tree" not in subject.lower():
+        return ""
+    if _LIMITATION.search(value):
+        return ""
+    m = _TREE_STATE.search(value)
+    return m.group(0).lower() if m else ""
+
+
 def status_test(subject: str, relation: str, value: str) -> Test:
     """Three shapes, each vetoed by a qualifier ("default state", "status check"):
 
@@ -394,12 +454,17 @@ def status_test(subject: str, relation: str, value: str) -> Test:
       value or an instance id (``#31``, ``t_31080683``) in the subject or relation: a subject
       noun is not enough ("backup job exit status: non-zero on failure" is a rule). A compound
       "… state" is a design term ("error state", "review state") and is never a status;
+    * a relation "current PR" (or issue, ticket, card, or a branch in use) whose value names the
+      one it points at: ``#18``, ``t_12ab7591``, ``DOCS-217``, a pull-request URL;
+    * a relation exactly state or status, on a checkout, worktree, clone, repo or branch, whose
+      value reads as a working tree ("dirty and 8 behind", "3 files modified");
     * a relation naming one finding (:data:`FINDINGS`: known issue, open issue, must-fix or
       should-fix issue, blocker), unless the value points at where it is tracked (a URL, a path,
       "tracked at …"), states a by-design limitation, a workaround or a won't-fix, or says where
       it was fixed ("fixed in 0.5.0"): those stay true after a fix. A plural
       (:data:`PLURAL_FINDINGS`) is a list or a class and never a finding."""
     rel = _tokens(relation)
+    pointer = _pointer_test(" ".join(rel), value)
     while rel and rel[0] in _STATUS_LEAD:
         rel = rel[1:]
     joined = " ".join(rel)
@@ -410,7 +475,7 @@ def status_test(subject: str, relation: str, value: str) -> Test:
     finding = joined in FINDINGS
     exact = len(rel) == 1 and rel[0] in STATUS_RELATIONS
     compound = len(rel) > 1 and rel[-1] == "status"
-    if not (finding or exact or compound):
+    if not (finding or exact or compound or pointer):
         return Test(
             STATUS,
             False,
@@ -419,6 +484,8 @@ def status_test(subject: str, relation: str, value: str) -> Test:
     v = veto(subject, relation)
     if v is not None:
         return Test(STATUS, False, f"'{joined}', but {v} vetoes it", v)
+    if pointer:
+        return Test(STATUS, True, pointer)
     if finding:
         names = f"the relation names a finding, '{joined}'"
         outlives = next((why for pattern, why in _OUTLIVES if pattern.search(value)), "")
@@ -431,6 +498,9 @@ def status_test(subject: str, relation: str, value: str) -> Test:
         instance = _instance(subject)
         if instance:
             return Test(STATUS, True, f"'{joined}' of an instance, '{instance}'")
+        tree = _tree_state(subject, value)
+        if tree:
+            return Test(STATUS, True, f"'{joined}' of a checkout, read as '{tree}'")
         return Test(
             STATUS,
             False,
