@@ -37,6 +37,11 @@ def test_a_qualifier_names_a_setting(relation):
     assert v.names_setting(relation)
 
 
+@pytest.mark.parametrize("relation", ["port", "test count", "status", "license"])
+def test_a_relation_with_no_qualifier_names_no_setting(relation):
+    assert not v.names_setting(relation)
+
+
 @pytest.mark.parametrize(
     "subject, relation, want",
     [
@@ -458,3 +463,113 @@ def test_the_manifest_reader(tmp_path):
     assert _manifest(poetry) == type(m)(("poet",), ())
     project = resolve_project(cargo)
     assert project.declared == (D("crabby", "4.5.6", "Cargo.toml"),) and "crabby" in project.names
+
+
+# Properties the mutation run of 2026-10-03 found unpinned (docs/mutation-testing.md).
+@pytest.mark.parametrize(
+    "subject, relation, value, want",
+    [
+        # a "number of" relation counts like "count" does
+        ("memware suite", "number of tests", "91", v.MEASUREMENT),
+        # the subject's noun is its last word, a one-word subject included
+        ("tickets", "count", "12", v.MEASUREMENT),
+        ("rows", "copied", "1200 of 4000", v.MEASUREMENT),
+        ("legacy appointment rows", "copied", "1200 of 4000", v.MEASUREMENT),
+        # "on main" calls a version a moving one
+        ("memware", "version on main", "0.4.0", v.MOVING_VERSION),
+        # a version string with no version noun is not a version reading: history
+        ("feature x", "released in", "1.4.0", None),
+        # a one-word instance names a run as well as "nightly build" does
+        ("build", "status", "flaky", v.STATUS),
+        # a compound status of three words ends in status as one of two does
+        ("memware", "nightly build status", "failing", v.STATUS),
+        # "clean" alone is a design word, not a reading of a working tree
+        ("memware checkout", "state", "clean", None),
+    ],
+)
+def test_the_classes_hold_at_the_edges_of_their_rules(subject, relation, value, want):
+    assert v.classify(subject, relation, value) == want
+
+
+def test_a_reliability_that_is_not_a_number_is_not_a_person():
+    """The exemption fails closed: a reliability that cannot be read is derive's, not a person's."""
+    assert not v.human_stated("n/a", "memware:session/s/turn/1")
+    assert not v.human_stated("", "memware:session/s/turn/1")
+
+
+def test_the_mark_in_recall_honours_the_person_exemptions():
+    """Recall, the MCP tools and the Hermes prefetch act on the mark, so it must exempt a belief a
+    person stated (reliability) or confirmed exactly as the gate does."""
+    reading = _row("memware test suite", "test count", "91 tests")
+    assert v.volatility({**reading, **DERIVED}) == v.MEASUREMENT
+    assert v.volatility({**reading, **DERIVED, "reliability": 0.9}) is None
+    assert v.volatility({**reading, **DERIVED, "confirmed": 1}) is None
+
+
+def test_older_version_compares_as_versions_without_packaging(monkeypatch):
+    """memware has no runtime dependencies; with no ``packaging`` the fallback must agree."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "packaging.version", None)
+    assert v.older_version("0.4.0", "0.6.1") is True
+    assert v.older_version("0.10.0", "0.6.1") is False
+    assert v.older_version("0.6", "0.6.0") is False
+    assert v.older_version("0.6.0", "0.6") is False
+    assert v.older_version("0.6", "0.6.1") is True
+    assert v.older_version("V0.4.0", "0.6.1") is True
+    assert v.older_version("not a version", "0.6.1") is None
+    assert v.older_version("0.6.1", "not a version") is None
+
+
+def test_the_manifest_rule_compares_only_the_package_it_names():
+    # another subject's version is never compared, even in words a package's own version uses
+    assert v.manifest_rule("the package", "version", "0.3.0", "memware", "0.11.0") is None
+    # the package's name is matched in any case
+    assert v.manifest_rule(
+        "Memware 0.4.0", "known issue", "crash on import", "memware", "0.11.0"
+    ) == (
+        v.OLDER_VERSION,
+        "0.4.0",
+    )
+    # a contradiction needs a version noun: "shipped 0.2.0" is history
+    assert v.manifest_rule("memware cli", "shipped", "0.2.0", "memware", "0.11.0") is None
+
+
+def test_the_window_is_a_strict_bound_on_age():
+    """``inject.volatile_days`` 7 admits a reading younger than 7 days, and nothing 7 days old or
+    older, to the second."""
+    now = datetime(2026, 9, 22, 12, tzinfo=UTC)
+    gate = v.Gate(volatile_days=7, now=now)
+
+    def at(seconds_old: int) -> dict[str, object]:
+        ts = datetime.fromtimestamp(now.timestamp() - seconds_old, UTC).isoformat()
+        return {**_row("memware test suite", "test count", "91 tests", ts), **DERIVED}
+
+    week = 7 * 86400
+    assert gate.verdict(at(week - 1)) is None
+    assert gate.verdict(at(week)) == v.Verdict(v.MEASUREMENT, "a quantity measured once")
+    assert gate.verdict(at(week + 1)) is not None
+    assert gate.admits_hit(v.MEASUREMENT, at(week - 1)["valid_from"])
+    assert not gate.admits_hit(v.MEASUREMENT, at(week)["valid_from"])
+    assert not gate.admits_hit(v.MEASUREMENT, at(week + 1)["valid_from"])
+
+
+def test_the_window_reads_a_timestamp_with_no_zone_as_utc_and_keeps_an_offset():
+    now = datetime(2026, 9, 22, 12, tzinfo=UTC)
+    gate = v.Gate(volatile_days=7, now=now)
+    assert gate.admits_hit(v.MEASUREMENT, "2026-09-21T12:00:00")
+    # 16:00 at +05:00 is 11:00 UTC: 7 days and an hour old
+    assert not gate.admits_hit(v.MEASUREMENT, "2026-09-15T16:00:00+05:00")
+
+
+def test_a_reading_with_no_recorded_date_is_never_inside_the_window():
+    gate = v.Gate(volatile_days=7, now=datetime(2026, 9, 22, 12, tzinfo=UTC))
+    for when in (None, "", "not a date"):
+        row = {**_row("memware test suite", "test count", "91 tests", when), **DERIVED}
+        assert gate.verdict(row) is not None, when
+        assert not gate.admits_hit(v.MEASUREMENT, when), when
+
+
+def test_the_window_measures_from_the_clock_when_no_time_is_given():
+    recent = datetime.now(UTC).isoformat()
+    assert v.Gate(volatile_days=7).admits_hit(v.MEASUREMENT, recent)
