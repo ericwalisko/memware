@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from memware import backup
+from memware import backup, fsperm
 from memware.config import save_config
 from memware.store import Store
 
@@ -118,3 +118,47 @@ def test_a_restored_store_is_private(tmp_path: Path):
 def test_the_home_config_writes_create_is_private():
     save_config({"backup": {"dest": None}})
     assert _mode(_home()) == 0o700
+
+
+def test_create_private_makes_a_new_file_owner_only_and_reports_it(tmp_path: Path):
+    """The 0600 is set when the file is made, not after: nothing can open it in between. The
+    return value says whether this call made it, and an existing file is left as it is, which is
+    how the relevance log knows to tighten one written before memware set modes."""
+    p = tmp_path / "new.db"
+    assert fsperm.create_private(p) is True
+    assert _mode(p) == 0o600
+    existing = tmp_path / "old.log"
+    existing.write_text("kept")
+    existing.chmod(0o644)
+    assert fsperm.create_private(existing) is False
+    assert existing.read_text() == "kept" and _mode(existing) == 0o644
+
+
+def test_tighten_never_changes_a_file_another_user_owns(tmp_path: Path, monkeypatch):
+    p = tmp_path / "shared.db"
+    p.write_text("")
+    p.chmod(0o644)
+    monkeypatch.setattr(fsperm.os, "geteuid", lambda: p.stat().st_uid + 1)
+    assert fsperm.tighten(p) is False
+    assert _mode(p) == 0o644
+
+
+def test_tighten_clears_every_bit_the_mode_does_not_grant(tmp_path: Path):
+    """Even when the owner holds none of the bits the mode grants: group and other still go."""
+    p = tmp_path / "odd.db"
+    p.write_text("")
+    p.chmod(0o044)
+    assert fsperm.tighten(p) is True
+    assert _mode(p) == 0o000
+
+
+def test_every_sqlite_file_beside_the_store_is_tightened(tmp_path: Path):
+    """The write-ahead log and shared memory, and the rollback journal a store left in an older
+    journal mode holds too."""
+    db = tmp_path / "memware.db"
+    files = [Path(f"{db}{suffix}") for suffix in ("", "-wal", "-shm", "-journal")]
+    for p in files:
+        p.write_text("")
+        p.chmod(0o644)
+    fsperm.tighten_store(db)
+    assert {p.name: _mode(p) for p in files} == {p.name: 0o600 for p in files}
