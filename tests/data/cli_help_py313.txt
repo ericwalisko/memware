@@ -69,6 +69,7 @@ Examples:
 Environment:
   MEMWARE_DB          store path (default: <home>/memware.db)
   MEMWARE_DERIVE_PROVIDER / MEMWARE_DERIVE_MODEL   `derive`: claude-code (default) | openai, and its model
+  MEMWARE_DERIVE_EFFORT   `derive` on claude-code: the `claude --effort` level (default low)
   OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY   `derive --provider openai` (or <home>/.env)
   MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
   MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
@@ -300,9 +301,9 @@ Examples:
 ===== memware derive --help =====
 usage: memware derive [-h] [--apply | --plan]
                       [--provider {claude-code,openai}] [--model MODEL]
-                      [--chunk N] [--since TURN_ID] [--state FILE]
-                      [--max-sessions N] [--if-stale HOURS] [--auto] [--quiet]
-                      [--verbose]
+                      [--effort {low,medium,high,xhigh,max}] [--chunk N]
+                      [--since TURN_ID] [--state FILE] [--max-sessions N]
+                      [--if-stale HOURS] [--auto] [--quiet] [--verbose]
 
 fill the ledger from the transcripts: durable facts as beliefs (docs/scheduling.md)
 
@@ -322,6 +323,10 @@ options:
                         endpoint via OPENAI_* env) (default: None)
   --model MODEL         model for the provider (claude-code default: haiku)
                         (default: None)
+  --effort {low,medium,high,xhigh,max}
+                        claude-code only: the `claude --effort` level (default
+                        low); derive.effort or MEMWARE_DERIVE_EFFORT set it
+                        without the flag (default: None)
   --chunk N             excerpts per model call (claude-code default 24,
                         openai 8) (default: None)
   --since TURN_ID       override the watermark; --since 0 re-derives from the

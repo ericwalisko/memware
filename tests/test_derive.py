@@ -368,14 +368,18 @@ def test_openai_rejected_credential_exits_4_after_one_call(db, tmp_path, monkeyp
     assert not state.exists()
 
 
-def fake_claude(tmp_path: Path, monkeypatch, body: str) -> Path:
-    """A `claude` on PATH that records its argv/env and prints a canned envelope."""
+def fake_claude(
+    tmp_path: Path, monkeypatch, body: str, help_text: str = "  --effort <level>"
+) -> Path:
+    """A `claude` on PATH that records its argv/env and prints a canned envelope. ``--help``
+    prints ``help_text`` and is not logged: it is the provider's probe, not a spawn."""
     if sys.platform == "win32":
         pytest.skip("the fake claude is a POSIX shell script")
     log = tmp_path / "claude-calls.jsonl"
     script = tmp_path / "claude"
     script.write_text(
         "#!/bin/sh\n"
+        f"[ \"$1\" = --help ] && {{ printf '%s\\n' '{help_text}'; exit 0; }}\n"
         f"printf '%s\\n' \"$*\" >> '{log}'\n"
         f"printf 'KEY=%s\\n' \"${{ANTHROPIC_API_KEY-unset}}\" >> '{log}'\n"
         f"printf 'THINK=%s\\n' \"${{MAX_THINKING_TOKENS-unset}}\" >> '{log}'\n"
@@ -408,6 +412,70 @@ def test_claude_code_provider_runs_on_the_subscription(db, tmp_path, monkeypatch
     assert "KEY=unset" in calls, "the API key must not reach claude -p"
     assert "THINK=0" in calls, "thinking is switched off for the extraction"
     assert calls.count("KEY=") == 1, "both sessions' excerpts went in one spawn"
+
+
+def effort_of(log: Path) -> list[str]:
+    """The ``--effort`` value in each recorded spawn's argv, "" for a spawn without the flag.
+    A spawn's argv spans lines (the excerpts do), so the log is split on the KEY= line that
+    closes each record."""
+    spawns = log.read_text().split("KEY=")[:-1]
+    return [sp.split("--effort ")[1].split()[0] if "--effort " in sp else "" for sp in spawns]
+
+
+def derive_once(db, tmp_path, *extra):
+    return main(["--db", db, "derive", "--state", str(tmp_path / "s.json"), "--apply", *extra])
+
+
+ENVELOPE = json.dumps({"type": "result", "is_error": False, "result": json.dumps([KEEP_ENGINE])})
+
+
+def test_claude_code_spawn_pins_effort_low_by_default(db, tmp_path, monkeypatch):
+    """Haiku 5.5 thinks adaptively and MAX_THINKING_TOKENS=0 no longer stops it (361/348/431/181
+    output tokens for a ~100 token answer, 124/117/144/119 with --effort low), so the argv
+    itself carries the level."""
+    monkeypatch.delenv("MEMWARE_DERIVE_EFFORT", raising=False)
+    log = fake_claude(tmp_path, monkeypatch, ENVELOPE)
+    assert derive_once(db, tmp_path) == 0
+    assert effort_of(log) == ["low"]
+    assert "THINK=0" in log.read_text(), "the switch the older models obey stays"
+
+
+@pytest.mark.parametrize("how", ["flag", "env", "config"])
+def test_claude_code_effort_is_overridable_like_the_model(db, tmp_path, monkeypatch, how):
+    monkeypatch.delenv("MEMWARE_DERIVE_EFFORT", raising=False)
+    log = fake_claude(tmp_path, monkeypatch, ENVELOPE)
+    extra: list[str] = []
+    if how == "flag":
+        extra = ["--effort", "medium"]
+    elif how == "env":
+        monkeypatch.setenv("MEMWARE_DERIVE_EFFORT", "medium")
+    else:
+        assert main(["config", "derive.effort", "medium"]) == 0
+    assert derive_once(db, tmp_path, *extra) == 0
+    assert effort_of(log) == ["medium"]
+
+
+def test_effort_precedence_is_flag_then_config_then_env(db, tmp_path, monkeypatch):
+    log = fake_claude(tmp_path, monkeypatch, ENVELOPE)
+    monkeypatch.setenv("MEMWARE_DERIVE_EFFORT", "max")
+    assert main(["config", "derive.effort", "medium"]) == 0
+    assert derive_once(db, tmp_path) == 0
+    assert derive_once(db, tmp_path, "--since", "0", "--effort", "high") == 0
+    assert effort_of(log) == ["medium", "high"]
+
+
+def test_effort_is_withheld_from_a_claude_that_does_not_list_it(db, tmp_path, monkeypatch):
+    """An older `claude` fails a spawn on an unknown option, which would stop derive cold."""
+    log = fake_claude(tmp_path, monkeypatch, ENVELOPE, help_text="  --model <model>")
+    assert derive_once(db, tmp_path) == 0
+    assert effort_of(log) == [""] and "--effort" not in log.read_text()
+
+
+def test_an_unknown_effort_is_a_config_error_and_sends_nothing(db, tmp_path, monkeypatch, capsys):
+    log = fake_claude(tmp_path, monkeypatch, ENVELOPE)
+    monkeypatch.setenv("MEMWARE_DERIVE_EFFORT", "turbo")
+    assert derive_once(db, tmp_path) == md.EXIT_CONFIG
+    assert "turbo" in capsys.readouterr().err and not log.exists()
 
 
 def test_claude_code_usage_limit_exits_4(db, tmp_path, monkeypatch, capsys):

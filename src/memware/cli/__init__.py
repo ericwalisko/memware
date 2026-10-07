@@ -56,6 +56,7 @@ Examples:
 Environment:
   MEMWARE_DB          store path (default: <home>/memware.db)
   MEMWARE_DERIVE_PROVIDER / MEMWARE_DERIVE_MODEL   `derive`: claude-code (default) | openai, and its model
+  MEMWARE_DERIVE_EFFORT   `derive` on claude-code: the `claude --effort` level (default low)
   OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY   `derive --provider openai` (or <home>/.env)
   MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
   MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii

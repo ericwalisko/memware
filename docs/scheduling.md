@@ -169,6 +169,16 @@ OPENAI_API_KEY=...
 `memware config derive.provider openai` makes it the default. There is no fallback
 chain on purpose: a model that was not chosen does not get to write into the ledger.
 
+### Effort on the Claude Code provider
+
+`claude -p` is told `--effort low` on every spawn. Triple extraction is mechanical, and Claude
+Haiku 5.5 (what `--model haiku` runs from Claude Code 2.1.293) thinks adaptively and ignores
+`MAX_THINKING_TOKENS=0`; without the flag a spawn runs at the effort your Claude Code account
+defaults to. Change it with `memware derive --effort medium`, `memware config derive.effort
+medium` or `MEMWARE_DERIVE_EFFORT=medium` (the flag wins, then the config, then the
+environment, as for the model). The levels are `low`, `medium`, `high`, `xhigh` and `max`. A
+`claude` whose `--help` does not list `--effort` is spawned without it.
+
 ## What to expect
 
 - Most excerpts are rejected. That is the design: the model must copy the value verbatim
