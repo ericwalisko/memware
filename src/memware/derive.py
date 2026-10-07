@@ -164,11 +164,16 @@ def regions_from_texts(texts: list[str], cap: int = MAX_REGIONS_PER_SESSION) -> 
 # ---------------------------------------------------------------------------
 # providers
 # ---------------------------------------------------------------------------
+# `claude --effort` levels. Triple extraction is mechanical, so the default is the lowest.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORT = "low"
+
 ENV_KEYS = (
     "OPENAI_BASE_URL",
     "OPENAI_MODEL",
     "OPENAI_API_KEY",
     "MEMWARE_DERIVE_MODEL",
+    "MEMWARE_DERIVE_EFFORT",
     "MEMWARE_DERIVE_PROVIDER",
 )
 
@@ -378,7 +383,7 @@ class ClaudeCodeProvider:
     Nothing to configure. Each spawn carries a fixed startup cost, so excerpts go up in
     batches of 24 — a typical pass is a handful of spawns, not one per excerpt. Haiku by
     default: triple extraction is mechanical, and the groundedness gate makes a weaker model
-    write less rather than wrong.
+    write less rather than wrong. Effort ``low`` by default, for the same reason.
     """
 
     name = "claude-code"
@@ -386,7 +391,9 @@ class ClaudeCodeProvider:
 
     def __init__(self, env: dict[str, str], model: str | None = None, binary: str = "claude"):
         self.model = self.resolve_model(env, model)
+        self.effort = self.resolve_effort(env)
         self.binary = binary
+        self._effort_flag: bool | None = None
         self.usage = Usage()
         if shutil.which(binary) is None:
             raise ProviderConfigError(
@@ -401,16 +408,50 @@ class ClaudeCodeProvider:
         return model or env.get("MEMWARE_DERIVE_MODEL") or "haiku"
 
     @staticmethod
+    def resolve_effort(env: dict[str, str]) -> str:
+        """The ``--effort`` level: ``MEMWARE_DERIVE_EFFORT`` (which ``--effort`` and
+        ``derive.effort`` are folded into), else ``low``."""
+        chosen = (env.get("MEMWARE_DERIVE_EFFORT") or DEFAULT_EFFORT).strip().lower()
+        if chosen not in EFFORT_LEVELS:
+            raise ProviderConfigError(
+                f"unknown effort {chosen!r} for provider claude-code ({' | '.join(EFFORT_LEVELS)})"
+            )
+        return chosen
+
+    @staticmethod
     def destination(model: str, binary: str = "claude") -> str:
         return f"{model} via {binary} -p (subscription)"
 
     def describe(self) -> str:
         return self.destination(self.model, self.binary)
 
+    def _accepts_effort(self) -> bool:
+        """Whether the installed ``claude`` lists ``--effort``. An older one fails a spawn on an
+        unknown option, so the flag goes only to a binary that names it; if the probe itself
+        fails, the spawn runs without the flag, as it did before the flag existed."""
+        if self._effort_flag is None:
+            try:
+                out = subprocess.run(
+                    [self.binary, "--help"],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8" if sys.platform == "win32" else None,
+                    errors="replace" if sys.platform == "win32" else None,
+                    timeout=30,
+                    stdin=subprocess.DEVNULL,
+                    cwd=str(_neutral_cwd()),
+                )
+                self._effort_flag = "--effort" in (out.stdout or "")
+            except (OSError, subprocess.SubprocessError):
+                self._effort_flag = False
+        return self._effort_flag
+
     def complete(self, system: str, user: str, timeout: int = 300) -> str:
         env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # subscription
-        # Mechanical extraction: thinking buys nothing here. Measured on Haiku, same output,
-        # 450 -> 0 thinking tokens and 5.4 s -> 1.2 s per spawn.
+        # Mechanical extraction: thinking buys nothing here. MAX_THINKING_TOKENS=0 is the
+        # whole switch on Haiku 4.5 (measured: 450 -> 0 thinking tokens, 5.4 s -> 1.2 s per
+        # spawn). It is not on Haiku 5.5, which thinks adaptively and ignores it: there the
+        # --effort level below is what bounds the thinking, so both are set.
         env["MAX_THINKING_TOKENS"] = "0"
         # A tool-less, project-free call. Measured without these: Haiku reached for a tool on
         # a third of the batches (stop_reason tool_use, rc 1) and answered another third in
@@ -433,6 +474,8 @@ class ClaudeCodeProvider:
             "--no-session-persistence",
             "--exclude-dynamic-system-prompt-sections",
         ]
+        if self._accepts_effort():
+            argv += ["--effort", self.effort]
         p = subprocess.run(
             argv,
             capture_output=True,
@@ -1106,6 +1149,13 @@ def chosen_provider(a: argparse.Namespace, env: dict[str, str]) -> tuple[str, st
     return name, str(model) if model else None
 
 
+def with_effort(a: argparse.Namespace, env: dict[str, str]) -> dict[str, str]:
+    """``env`` with the effort level the run asked for: the flag, then the config, then the
+    environment already in it — the order the model is resolved in."""
+    effort = a.effort or get_dotted(load_config(), "derive.effort")
+    return {**env, "MEMWARE_DERIVE_EFFORT": str(effort)} if effort else env
+
+
 def plan(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any]) -> int:
     """``--plan``: every excerpt a run would send and where it would go — then stop.
 
@@ -1166,7 +1216,7 @@ def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any],
     sources = sources_setting()  # before the provider: a bad setting sends nothing
     env = read_env()
     provider_name, model = chosen_provider(a, env)
-    provider = make_provider(provider_name, env, model=model)
+    provider = make_provider(provider_name, with_effort(a, env), model=model)
     if a.chunk:
         provider.chunk = a.chunk
     watermark = a.since if a.since is not None else int(state["watermark"])
@@ -1309,6 +1359,12 @@ def add_arguments(sp: argparse.ArgumentParser) -> None:
         "(any OpenAI-compatible endpoint via OPENAI_* env)",
     )
     sp.add_argument("--model", help="model for the provider (claude-code default: haiku)")
+    sp.add_argument(
+        "--effort",
+        choices=EFFORT_LEVELS,
+        help="claude-code only: the `claude --effort` level (default low); "
+        "derive.effort or MEMWARE_DERIVE_EFFORT set it without the flag",
+    )
     sp.add_argument(
         "--chunk",
         type=_positive_int,

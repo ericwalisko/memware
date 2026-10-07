@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **`memware derive` on the Claude Code provider now passes `--effort low`.** Claude Haiku 5.5,
+  what `--model haiku` runs from Claude Code 2.1.293, thinks adaptively and no longer stops at
+  `MAX_THINKING_TOKENS=0`; without the flag a spawn ran at your Claude Code account's default
+  effort. On one 24-excerpt batch (three runs each) it wrote about 37% fewer output tokens
+  (13.5k against 21.4k) in about a third less time, and the groundedness gate admitted as many
+  facts. Set another level with `memware derive --effort <level>`, `memware config
+  derive.effort <level>` or `MEMWARE_DERIVE_EFFORT`. A `claude` that does not list `--effort`
+  is spawned without it. `MAX_THINKING_TOKENS=0` stays for older models.
+
 ## [0.11.0] - 2026-10-01
 
 ### Upgrade notes
