@@ -228,6 +228,37 @@ def test_explain_names_the_finding_rule_when_it_declines_a_belief(tmp_path, home
     assert code == 0 and json.loads(out) == []
 
 
+def test_explain_names_the_pointer_rule_for_a_current_pull_or_merge_request(
+    tmp_path, home, capsys
+):
+    """"request" in "pull request" and "merge request" is half of a noun, so ``--explain`` names
+    the same pointer rule it names for "current pr"; "request" as a real qualifier still vetoes."""
+    cases = [
+        ("memware", "current pr", "#18", "status", None),
+        ("memware", "current pull request", "#18", "status", None),
+        ("memware", "current merge request", "!7", "status", None),
+        ("memware", "max open requests", "50", "durable", None),
+        ("api gateway", "request timeout", "30s", "durable", "request"),
+    ]
+    path = str(tmp_path / "pointers.db")
+    with Store(path) as s:
+        for subject, relation, value, _, _ in cases:
+            assert_belief(
+                s, subject, relation, value, valid_from="2026-09-01T00:00:00Z", source=DERIVED
+            )
+    for i, (_, relation, value, cls, qualifier) in enumerate(cases, start=1):
+        r = _explain(capsys, path, str(i))
+        assert r["class"] == cls, relation
+        if cls == "status":
+            assert r["injected"] is False
+            assert r["why"] == f"status: '{relation}' points at the one in flight, '{value}'"
+        else:
+            assert r["injected"] is True
+            if qualifier:
+                vetoes = [t["veto"]["token"] for t in r["tests"] if t["veto"]]
+                assert vetoes and set(vetoes) == {qualifier}
+
+
 def test_the_window_can_let_a_young_volatile_belief_in(db, home, capsys):
     (home / "config.json").write_text(
         json.dumps(

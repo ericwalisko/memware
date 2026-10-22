@@ -16,6 +16,14 @@ All notable changes to this project are documented here. The format follows
   derive.effort <level>` or `MEMWARE_DERIVE_EFFORT`. A `claude` that does not list `--effort`
   is spawned without it. `MAX_THINKING_TOKENS=0` stays for older models.
 
+### Fixed
+- **`current pull request | #18` and `current merge request | !7` are now stale, as `current pr`
+  already was.** The qualifier `request` vetoed them as settings before the pointer rule ran, so
+  the spelled-out forms the 0.11.0 notes promise never took effect, and a merge request named
+  `!7` was never recognised at all. `request` no longer counts as a qualifier inside "pull
+  request" and "merge request" (it still does in `request timeout` or `max open requests`), and a
+  value of `!N` counts as naming the one in flight. `memware beliefs --explain` names the rule.
+
 ## [0.11.0] - 2026-10-01
 
 ### Upgrade notes

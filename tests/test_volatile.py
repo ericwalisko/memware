@@ -72,6 +72,39 @@ def test_the_veto_reads_an_identifier_in_the_subject_as_a_name(subject, relation
     assert (None if got is None else tuple(got)) == want
 
 
+@pytest.mark.parametrize(
+    "relation, value",
+    [
+        ("current pr", "#18"),
+        ("current pull request", "#18"),
+        ("current merge request", "!7"),
+        ("current mr", "!7"),
+        ("current mr", "#7"),
+        ("active merge request", "https://gitlab.com/acme/api/-/merge_requests/7"),
+    ],
+)
+def test_a_current_pull_or_merge_request_is_a_moving_pointer(relation, value):
+    """"request" is a qualifier, but not inside "pull request" or "merge request": the veto
+    dropped those phrases' second word, so the pointer rule never ran. GitLab names a merge
+    request ``!N``."""
+    assert v.classify("memware", relation, value) == v.STATUS
+
+
+@pytest.mark.parametrize(
+    "subject, relation, value",
+    [
+        ("api gateway", "max open requests", "50"),
+        ("api gateway", "request timeout", "30s"),
+        ("k8s pod", "memory request", "512Mi"),
+        ("release-schedule", "current pull request", "#18"),  # another qualifier still vetoes
+        ("memware", "current pull request limit", "#18"),
+        ("memware", "current pull request", "the template asks for a checklist"),  # names no PR
+    ],
+)
+def test_request_as_a_real_qualifier_stays_durable(subject, relation, value):
+    assert v.classify(subject, relation, value) is None
+
+
 def test_a_whole_word_qualifier_vetoes_even_an_exact_measure():
     """The veto runs before every rule, the exact measures included: a subject that is itself a
     requirement or a target is not a reading. An identifier naming a thing does not veto."""

@@ -206,3 +206,9 @@
 {"subject": "acme tracker", "relation": "issue", "value": "a card is one unit of work with an Accept line", "expect": "durable", "from": "t_12ab7591", "why": "not a count: the relation names no quantity"}
 {"subject": "orders service", "relation": "cards", "value": "a card is a unit of work with a done condition", "expect": "durable", "from": "t_12ab7591", "why": "a definition under a plural work-item relation, not a bare integer"}
 {"subject": "docs-site", "relation": "open issue count limit", "value": "100", "expect": "durable", "from": "t_12ab7591", "why": "a limit"}
+{"subject": "memware", "relation": "current pull request", "value": "#18", "expect": "status", "from": "t_a3142fc2", "why": "the spelled-out form of current pr: \"request\" in \"pull request\" is a noun, not the qualifier"}
+{"subject": "memware", "relation": "current merge request", "value": "!7", "expect": "status", "from": "t_a3142fc2", "why": "a GitLab merge request is named !N"}
+{"subject": "memware", "relation": "current mr", "value": "!7", "expect": "status", "from": "t_a3142fc2", "why": "the short form with a !N value"}
+{"subject": "release-schedule", "relation": "current pull request", "value": "#18", "expect": "durable", "from": "t_a3142fc2", "why": "a qualifier elsewhere in the triple still vetoes the pointer"}
+{"subject": "api gateway", "relation": "max open requests", "value": "50", "expect": "durable", "from": "t_a3142fc2", "why": "a bound: request is a real qualifier"}
+{"subject": "api gateway", "relation": "request timeout", "value": "30s", "expect": "durable", "from": "t_a3142fc2", "why": "a setting: request is a real qualifier"}
