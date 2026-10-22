@@ -42,7 +42,8 @@ counts only when the identifier names a setting (``export-schedule``, ``min_cove
   the value points at where it is tracked, states a by-design limitation, a workaround or a
   won't-fix, or says where it was fixed. A plural ("known issues", "blockers") is a list or a
   class, which holds rules and history as often as defects, and is never a finding; a "current"
-  PR, issue, ticket or card whose value names it (``#18``, ``DOCS-217``), or a branch in use; or
+  PR, MR, issue, ticket or card whose value names it (``#18``, ``!7``, ``DOCS-217``), or a branch
+  in use; or
   a state or status of a checkout, worktree, clone or repo whose value reads as a working tree
   ("dirty and 8 behind", "3 files modified").
 
@@ -175,10 +176,11 @@ _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
 _POINTER_LEADS = wordset("current currently active working")
 _POINTER_NOUNS = frozenset({"pr", "pull request", "mr", "merge request", "issue", "ticket", "card"})
 _POINTED_AT = re.compile(
-    r"#\d+\b|\bt_[0-9a-f]{6,}\b|\b[A-Z][A-Z0-9]+-\d+\b|/(?:pull|issues|merge_requests)/\d+\b"
+    r"#\d+\b|(?<!\w)!\d+\b|\bt_[0-9a-f]{6,}\b|\b[A-Z][A-Z0-9]+-\d+\b"
+    r"|/(?:pull|issues|merge_requests)/\d+\b"
 )
-"""What a value names when it points at one PR, issue or card: ``#18``, ``t_12ab7591``, ``DOCS-217``,
-a pull-request URL."""
+"""What a value names when it points at one PR, issue or card: ``#18``, a GitLab merge request's
+``!7``, ``t_12ab7591``, ``DOCS-217``, a pull-request URL."""
 _LONG_LIVED_BRANCHES = wordset("main master trunk develop development")
 _CHECKOUT_NOUNS = wordset("checkout checkouts worktree worktrees clone clones repo tree branch")
 _TREE_STATE = re.compile(
@@ -241,6 +243,8 @@ BOUNDS = wordset(
 )
 MEASURED_NOUNS = ACCUMULATING | COUNT_WORDS | wordset("size sizes rate rates length number")
 _SUBJECT_WORD = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
+_NOUN_REQUEST = re.compile(r"\b(pull|merge)[\s_-]+request\b", re.I)
+"""The noun "pull request" or "merge request", whose "request" is not the qualifier."""
 
 
 class Veto(NamedTuple):
@@ -286,7 +290,13 @@ def veto(subject: str, relation: str) -> Veto | None:
     (words joined by ``_`` or ``-``) is a name, so a qualifier inside it counts only when the
     identifier names a setting: its last part is the qualifier (``export-schedule``,
     ``ruff-pin``), or it holds a bound (``min_coverage``), or it joins a qualifier to what would
-    be measured (``max_rows``, ``page_size``). ``scheduled_export`` names an export."""
+    be measured (``max_rows``, ``page_size``). ``scheduled_export`` names an export.
+
+    "request" is a qualifier ("request timeout", "max open requests") except inside "pull
+    request" and "merge request", where it is half of a noun. It is dropped there, and only
+    there, rather than moving the pointer rule ahead of the veto: that would also override a
+    qualifier elsewhere in the triple ("release-schedule | current pull request | #18")."""
+    subject, relation = _NOUN_REQUEST.sub(r"\1", subject), _NOUN_REQUEST.sub(r"\1", relation)
     for token in _tokens(relation):
         if token in QUALIFIERS:
             return Veto(token, "relation")
