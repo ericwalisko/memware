@@ -100,7 +100,9 @@ demand and the session-start digest do not use this rule.
 The prompt hook injects at most `inject.k` beliefs per prompt: 6 unless you set it (`memware
 config inject.k N`, from 1 to 20). `memware context -k N` overrides it for one call. The Hermes
 provider keeps its own `prefetch_k` in `~/.hermes/memware.json`. The Claude Code plugin's `garden`
-skill can tune `inject.k` together with the relevance filter's threshold and pool.
+skill can tune `inject.k` together with the relevance filter's threshold and pool. With the
+filter off it can still lower `inject.k`, from the pairs `memware injections` reads back from the
+transcripts.
 
 ### What injection leaves out
 

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`garden` measures injection with the relevance filter off.** Claude Code records what the
+  prompt hook adds to each prompt in the session transcript. The new `memware injections` reads
+  it back: each injected fact, paired with the prompt a person typed and matched to its belief
+  (superseded and retracted ones included). It writes nothing, reads interactive sessions only
+  (headless entrypoints are skipped, as `derive` skips them), and leaves out what memware keeps
+  out of its store. Counts by default; `--jsonl` prints one line per fact, with its text.
+  - **The garden skill reads both sources.** Prompts the filter never scored come from the
+    transcripts and are labeled like any other pair; a prompt in the relevance log is read from
+    the log. `health` reports a `transcripts` block, and `score` a `sources` split.
+  - **With the filter off,** a cycle measures memware's own picks, lists the beliefs that keep
+    arriving as noise, and can propose a lower `inject.k` (`replay_k`: the same objective,
+    held-out check and damping, on one axis, downward only). It never proposes a threshold or
+    pool from these pairs, which carry no score, and says so; shadow mode stays how to tune
+    those.
+  - The skill now needs a `memware` with `injections`; with an older one, `health` reports
+    `transcripts.read: false` and the cycle runs on the log alone, as before.
+
 ### Changed
 - **`memware derive` on the Claude Code provider now passes `--effort low`.** Claude Haiku 5.5,
   what `--model haiku` runs from Claude Code 2.1.293, thinks adaptively and no longer stops at
