@@ -34,8 +34,10 @@ counts only when the identifier names a setting (``export-schedule``, ``min_cove
 * **moving version**: a version string under a version noun that the subject or relation calls
   current, latest, built, installed, deployed, released, or on main.
 * **status**: a relation that is exactly status, state or progress, whose value is a status word
-  (open, merged, review, blocked, failing, connected, …) or whose subject names an instance (an
-  id such as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card);
+  (open, merged, review, code review, blocked, paused, on hold, to do, failing, connected, …) or
+  whose subject names an instance (an id such as ``#12`` or ``t_cd03d14d``, a tracker key in
+  capitals such as ``ABC-12`` that is not a standard like ``UTF-8``, or ending in run, scan,
+  build, job, PR, issue or card);
   a relation ending in status ("ci status"), whose value is a status word or where an instance
   id is named (a noun is not enough; a compound "… state" is a design term); or a relation that
   names one finding (known issue, open issue, must-fix issue, should-fix issue, blocker), unless
@@ -164,14 +166,28 @@ STATUS_VALUE_WORDS = wordset(
     """
     open opened closed merged unmerged review reviewing blocked failing failed passing passed
     archived done pending green red draft queued running cancelled canceled approved rejected
-    stale stuck waiting started complete completed progress connected disconnected
+    stale stuck waiting started complete completed progress connected disconnected paused
+    suspended backlog todo triaged wip hold
     """
 )
-_STATUS_FILLER = wordset("and but still now in not yet")
+_STATUS_FILLER = wordset("and but still now in not yet on")
+STATUS_PHRASES = {"code review": "review", "to do": "todo"}
+"""Two-word status values whose first word is no status word alone: "Code Review", "To Do"."""
 INSTANCE_NOUNS = wordset(
     "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
 )
 _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
+_STANDARD_PREFIXES = (
+    "UTF|UCS|SHA|MD|ISO|IEC|IEEE|RFC|PEP|CVE|CWE|ECMA|ES|ANSI|NIST|FIPS|HTTP|TLS|SSL|IPV|AES|RSA"
+    "|CRC|BASE|PY|GPL|LGPL|AGPL|MPL|CC|BSD|USB|PCI|DDR|LTE|COVID"
+)
+_TICKET_KEY = re.compile(
+    rf"(?<![\w-])(?!(?:{_STANDARD_PREFIXES})-)[A-Z][A-Z0-9]{{1,9}}-\d+(?![\w.-])"
+)
+"""A tracker key written in capitals (``DOCS-217``, ``ABC-12``), which names one ticket. Case is
+read as written: ``utf-8`` and ``x-86`` are not keys, and neither is a capitalised standard
+(``UTF-8``, ``SHA-256``, ``ISO-8601``, ``PEP-8``), a version (``PY-3.11``) or a one-letter
+prefix (``X-86``)."""
 _POINTER_LEADS = wordset("current currently active working")
 _POINTER_NOUNS = frozenset({"pr", "pull request", "mr", "merge request", "issue", "ticket", "card"})
 _POINTED_AT = re.compile(
@@ -399,7 +415,10 @@ def is_moving_version(subject: str, relation: str, value: str) -> bool:
 
 
 def _status_value(value: str) -> bool:
-    words = _tokens(value)
+    joined = " ".join(_tokens(value))
+    for phrase, word in STATUS_PHRASES.items():
+        joined = re.sub(rf"\b{phrase}\b", word, joined)
+    words = joined.split()
     return (
         bool(words)
         and set(words) <= STATUS_VALUE_WORDS | _STATUS_FILLER
@@ -407,8 +426,12 @@ def _status_value(value: str) -> bool:
     )
 
 
+def _instance_id(text: str) -> re.Match[str] | None:
+    return _INSTANCE_ID.search(text) or _TICKET_KEY.search(text)
+
+
 def _instance(subject: str) -> str | None:
-    m = _INSTANCE_ID.search(subject)
+    m = _instance_id(subject)
     if m:
         return m.group(0)
     words = _tokens(subject)
@@ -506,13 +529,14 @@ def status_test(subject: str, relation: str, value: str) -> Test:
             False,
             f"'{joined}', but the value is not a status word and no instance is named",
         )
-    m = _INSTANCE_ID.search(f"{subject} {relation}")
+    m = _instance_id(f"{subject} {relation}")
     if m:
         return Test(STATUS, True, f"'{joined}' of an instance, '{m.group(0)}'")
     return Test(
         STATUS,
         False,
-        f"'{joined}', but the value is not a status word and no instance id (#N, t_…) is named",
+        f"'{joined}', but the value is not a status word and no instance id (#N, t_…, ABC-12)"
+        " is named",
     )
 
 
