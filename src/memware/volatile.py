@@ -23,14 +23,17 @@ word of the relation or a whole word of the subject. An identifier in the subjec
 counts only when the identifier names a setting (``export-schedule``, ``min_coverage``,
 ``max_rows``): see :func:`veto`. Past that:
 
-* **measurement**: a bare quantity under a relation that is exactly progress, coverage or null
-  rate; or one that is: a count, total or "number of" over an accumulating noun (rows, records,
-  tests, files, lines, commits, duplicates, accounts, users, downloads); a magnitude word or a
-  comma-grouped number of 1,000 or more beside such a noun; an "N of M" figure over one, in the
-  relation or as the subject's noun ("appointment rows"), or over a completion word
-  ("backfilled", "passed"); or a count of cards, tickets, issues or PRs ("open card count | 305",
-  "blocked cards | 3"). A requirement word in the relation ("must pass", "at least") makes the
-  quantity a rule.
+* **measurement**: a bare quantity (a count may be written as a word, "six") under a relation
+  that is exactly progress, coverage or null rate; a percentage under a rate that observes
+  (error, failure, success, fill, hit, miss, match, pass, churn, bounce, conversion, crash, drop
+  or acceptance rate), never one someone sets ("tax rate", "dropout rate"); or one that is: a
+  count, total or "number of" over an accumulating noun (rows, records, tests, files, lines,
+  commits, duplicates, accounts, users, downloads); a magnitude word or a comma-grouped number
+  of 1,000 or more beside such a noun; an "N of M" figure over one, in the relation or as the
+  subject's noun ("appointment rows"), or over a completion word ("backfilled", "passed"); or a
+  count of cards, tickets, issues or PRs ("open card count | 305", "blocked cards | 3", "decision
+  cards in queue | blocked count | six", where the relation holds only a count word and status
+  words). A requirement word in the relation ("must pass", "at least") makes the quantity a rule.
 * **moving version**: a version string under a version noun that the subject or relation calls
   current, latest, built, installed, deployed, released, or on main.
 * **status**: a relation that is exactly status, state or progress, whose value is a status word
@@ -154,6 +157,22 @@ COMPLETION_WORDS = wordset(
     "passed failed done completed complete processed migrated backfilled removed deleted imported indexed remaining succeeded synced"
 )
 EXACT_MEASURES = frozenset({"progress", "coverage", "null rate", "test coverage", "code coverage"})
+READING_RATES = wordset(
+    "error failure success fill hit miss match pass churn bounce conversion crash drop acceptance"
+)
+"""What a rate observes: a percentage under "error rate" or "cache hit rate" is a reading. A rate
+someone sets ("tax rate", "dropout rate", "sample rate") is not on the list."""
+_PERCENT = re.compile(r"^\s*(?:~|≈|about|around|roughly)?\s*\d+(?:\.\d+)?\s*%\s*$", re.I)
+NUMBER_WORDS = {
+    word: str(n)
+    for n, word in enumerate(
+        """
+        zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen
+        fifteen sixteen seventeen eighteen nineteen twenty
+        """.split()
+    )
+}
+"""A count written as a word ("blocked cards | Six") reads as its numeral."""
 
 _VERSION = re.compile(r"^v?\d+(?:\.\d+){1,3}(?:[-+.]?[0-9a-z]+(?:\.[0-9a-z]+)*)?$", re.I)
 VERSION_NOUNS = frozenset({"version", "versions", "release", "tag"})
@@ -334,7 +353,9 @@ class Test(NamedTuple):
 
 def measurement_test(subject: str, relation: str, value: str) -> Test:
     """A quantity that no qualifier or requirement word vetoes, under a relation that is exactly
-    progress, coverage or null rate, or a count, magnitude or N of M over what accumulates."""
+    progress, coverage or null rate, a percentage under a rate that observes, or a count,
+    magnitude or N of M over what accumulates."""
+    value = NUMBER_WORDS.get(value.strip().lower(), value)
     if not _QUANTITY.match(value.strip()):
         return Test(MEASUREMENT, False, "the value is not a bare quantity")
     v = veto(subject, relation)
@@ -348,6 +369,8 @@ def measurement_test(subject: str, relation: str, value: str) -> Test:
     joined = " ".join(rel)
     if joined in EXACT_MEASURES:
         return Test(MEASUREMENT, True, f"the relation is exactly '{joined}'")
+    if len(rel) >= 2 and rel[-1] == "rate" and rel[-2] in READING_RATES and _PERCENT.match(value):
+        return Test(MEASUREMENT, True, f"a percentage under '{joined}', a rate that observes")
     words = set(rel) | set(_tokens(value))
     counted_by = sorted(set(rel) & COUNT_WORDS) or (["number of"] if "number of" in joined else [])
     if counted_by and words & ACCUMULATING:
@@ -356,6 +379,11 @@ def measurement_test(subject: str, relation: str, value: str) -> Test:
     subject_tail = set(_tokens(subject)[-1:])
     if counted_by and (items := (set(rel) | subject_tail) & WORK_ITEMS):
         return Test(MEASUREMENT, True, f"'{counted_by[0]}' over '{sorted(items)[0]}'")
+    queued = set(_tokens(subject)) & WORK_ITEM_PLURAL
+    if counted_by and queued and set(rel) <= COUNT_WORDS | STATUS_VALUE_WORDS:
+        # "decision cards in queue | blocked count": a count of the subject's cards by status,
+        # not of something they hold ("support tickets | priority level count")
+        return Test(MEASUREMENT, True, f"'{joined}' of '{sorted(queued)[0]}' in the subject")
     if rel and rel[-1] in WORK_ITEM_PLURAL and re.fullmatch(r"\d+", value.strip()):
         return Test(MEASUREMENT, True, f"a bare integer under '{rel[-1]}', a queue's length")
     if (magnitude := _MAGNITUDE.search(value)) and words & ACCUMULATING_PLURAL:

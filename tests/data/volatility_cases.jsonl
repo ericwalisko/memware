@@ -170,7 +170,7 @@
 {"subject": "memware ci", "relation": "checks passed", "value": "3 of 5", "expect": "measurement", "miss": true, "from": "probe", "why": "'checks' is a qualifier"}
 {"subject": "api", "relation": "p95 latency", "value": "340ms", "expect": "measurement", "miss": true, "from": "probe", "why": "latency is not an accumulating count"}
 {"subject": "memware host", "relation": "disk usage", "value": "1.2 GB", "expect": "measurement", "miss": true, "from": "probe", "why": "usage is not an accumulating count"}
-{"subject": "api", "relation": "error rate", "value": "2%", "expect": "measurement", "miss": true, "from": "probe", "why": "a rate is not an accumulating count"}
+{"subject": "api", "relation": "error rate", "value": "2%", "expect": "measurement", "from": "probe", "why": "a percentage under a rate that observes (caught since ledger-2026-10)"}
 {"subject": "ingest queue", "relation": "run count", "value": "12", "expect": "measurement", "miss": true, "from": "probe", "why": "runs are not on the accumulating list"}
 {"subject": "kanban boards", "relation": "open card count", "value": "305", "expect": "measurement", "from": "hub-session", "why": "a count of cards is a reading of the queue; a target would carry a qualifier (max, limit, WIP), which vetoes it"}
 {"subject": "kanban review 2026-09-16", "relation": "boards audited", "value": "18 boards, 454 open cards total, 76 audited", "expect": "measurement", "miss": true, "from": "hub-session", "why": "not a bare quantity"}
@@ -222,3 +222,19 @@
 {"subject": "ABC-572", "relation": "summary", "value": "export drops the header row", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a ticket's summary, not its status"}
 {"subject": "ticket key format", "relation": "example", "value": "ABC-572", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a key in the value of a non-status relation"}
 {"subject": "feature flag", "relation": "status", "value": "on", "expect": "durable", "from": "ledger-2026-10", "why": "guard: 'on' is filler, never a status word alone"}
+{"subject": "acme vendor feed", "relation": "fill rate", "value": "99.8%", "expect": "measurement", "from": "ledger-2026-10", "why": "a percentage under an observing rate is a reading"}
+{"subject": "checkout api", "relation": "cache hit rate", "value": "about 87%", "expect": "measurement", "from": "ledger-2026-10", "why": "a percentage under an observing rate is a reading"}
+{"subject": "nightly import", "relation": "failure rate", "value": "3.5%", "expect": "measurement", "from": "ledger-2026-10", "why": "a percentage under an observing rate is a reading"}
+{"subject": "acme vendor feed", "relation": "fill rate target", "value": "99.8%", "expect": "durable", "from": "ledger-2026-10", "why": "guard: 'target' makes the rate a goal"}
+{"subject": "checkout api", "relation": "error rate budget", "value": "1%", "expect": "durable", "from": "ledger-2026-10", "why": "guard: 'budget' makes the rate a limit"}
+{"subject": "checkout api", "relation": "min success rate", "value": "95%", "expect": "durable", "from": "ledger-2026-10", "why": "guard: 'min' makes the rate a bound"}
+{"subject": "invoice", "relation": "tax rate", "value": "8.25%", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a rate someone sets, not one that observes"}
+{"subject": "classifier", "relation": "dropout rate", "value": "10%", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a hyperparameter, not a reading"}
+{"subject": "payments team", "relation": "conversion rate", "value": "measured weekly in the growth dashboard", "expect": "durable", "from": "ledger-2026-10", "why": "guard: not a percentage"}
+{"subject": "release board", "relation": "blocked cards", "value": "Six", "expect": "measurement", "from": "ledger-2026-10", "why": "a count written as a word under a plural work item"}
+{"subject": "decision cards in queue", "relation": "blocked count", "value": "Six", "expect": "measurement", "from": "ledger-2026-10", "why": "a count of the subject's cards by status"}
+{"subject": "open tickets", "relation": "count", "value": "12", "expect": "measurement", "from": "ledger-2026-10", "why": "a count of the subject's tickets"}
+{"subject": "support tickets by team", "relation": "priority level count", "value": "4", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a count of what the tickets hold, not of tickets"}
+{"subject": "card template", "relation": "field count", "value": "12", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a singular card names a thing, not a queue"}
+{"subject": "release checklist", "relation": "item count", "value": "Five", "expect": "durable", "from": "ledger-2026-10", "why": "guard: a number word over no counted noun"}
+{"subject": "review queue", "relation": "cards per page", "value": "Ten", "expect": "durable", "from": "ledger-2026-10", "why": "guard: 'per' makes it a setting"}
