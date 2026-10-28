@@ -10,23 +10,33 @@ from pathlib import Path
 from memware import relevance
 from memware.cli._common import AddCommand, _hook_payload, _hook_store
 from memware.config import inject_k
-from memware.digest import CONTEXT_TITLE, belief_line, injection_gate, resolve_project
-from memware.index import search_beliefs
+from memware.digest import (
+    CONTEXT_TITLE,
+    belief_line,
+    injection_gate,
+    resolve_project,
+    transcript_dirs,
+)
+from memware.index import _query_terms, fts_query, search_beliefs
 from memware.ledger import confirmed_sql
+from memware.scope import ProjectScope, foreign
 from memware.store import Store
 
 
 def cmd_context(a: argparse.Namespace) -> int:
     """Prompt-time helper: print the beliefs whose subject the prompt names, less what the
     injection gate leaves out (memware.volatile) and, when switched on, what the relevance filter
-    judges irrelevant (memware.relevance; off by default). A turn nobody typed, a background
-    task's notification or a hook fired inside a subagent, gets nothing."""
+    judges irrelevant (memware.relevance; off by default). A belief from another project's world
+    that reached the prompt on one ordinary word is left out too (memware.scope). A turn nobody
+    typed, a background task's notification or a hook fired inside a subagent, gets nothing."""
     payload = _hook_payload() if a.from_hook or not a.prompt else {}
     prompt = a.prompt or str(payload.get("prompt", ""))
     agent = bool(payload.get("agent_id"))
     if not prompt.strip() or not relevance.typed(prompt, agent=agent):
         return 0
-    gate = injection_gate(resolve_project(Path(str(payload.get("cwd") or os.getcwd()))))
+    project = resolve_project(Path(str(payload.get("cwd") or os.getcwd())))
+    gate = injection_gate(project)
+    transcript = str(payload.get("transcript_path") or "") or None
     store = _hook_store(a.db) if a.from_hook else Store(a.db)
     if store is None:
         return 0
@@ -44,7 +54,13 @@ def cmd_context(a: argparse.Namespace) -> int:
                 [h.id for h in hits],
             )
         }
-    admitted = [r for r in (rows[h.id] for h in hits if h.id in rows) if gate.verdict(r) is None]
+        scope = ProjectScope(s.conn, transcript_dirs(project, transcript))
+        terms = _query_terms(fts_query(prompt))
+        admitted = [
+            r
+            for r in (rows[h.id] for h in hits if h.id in rows)
+            if gate.verdict(r) is None and not foreign(scope, r, terms)
+        ]
     k = a.k if a.k is not None else inject_k()
     rel = relevance.settings()
     if rel.on:  # opted in: the network call happens here, after the store is closed
@@ -55,7 +71,7 @@ def cmd_context(a: argparse.Namespace) -> int:
             rel,
             harness="claude-code" if a.from_hook else "cli",
             session=str(payload.get("session_id") or "") or None,
-            transcript=str(payload.get("transcript_path") or "") or None,
+            transcript=transcript,
             agent=agent,
         )
         admitted = [admitted[i] for i in picked]
