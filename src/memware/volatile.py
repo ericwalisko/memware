@@ -58,7 +58,14 @@ exemptions and the manifest; ``classify``, derive's gate, ``memware beliefs --st
 Two rules need the project a session runs in, and apply to a belief whose subject names the
 package that declares the version (``pyproject.toml``, ``package.json``, ``Cargo.toml``):
 
-* **contradicted**: a belief about that package's own version whose value is not the declared one.
+* **contradicted**: a belief about that package's own version whose value (a version, with or
+  without a note in parentheses) is not the declared one. It is the package's own version when
+  the only words besides its name are version words (``built``, ``wheel``, ``on main``, …), or
+  when the words between the name and the version noun are those or an install location ("uv
+  tool", "hermes venv") and what follows the noun is a place or a time ("version in hermes
+  pypi", "version before update"). Another tool's version ("ruff version", "uv version"), the
+  Hermes plugin's own ("plugin version"), and a qualifier, policy or plan ("version floor",
+  "oldest supported version", "next version") are never compared.
 * **older version**: a belief that names an older version of the package beside its name
   ("memware 0.4.0 known issue") is history once the declared version is newer.
 
@@ -166,10 +173,29 @@ _PERCENT = re.compile(r"^\s*(?:~|≈|about|around|roughly)?\s*\d+(?:\.\d+)?\s*%\
 NUMBER_WORDS = {
     word: str(n)
     for n, word in enumerate(
-        """
-        zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen
-        fifteen sixteen seventeen eighteen nineteen twenty
-        """.split()
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+        ]
     )
 }
 """A count written as a word ("blocked cards | Six") reads as its numeral."""
@@ -726,8 +752,73 @@ OWN_VERSION_WORDS = (
 it names something else ("memware ruff version", "memware python version")."""
 
 
+INSTALLERS = wordset("uv pipx pip conda brew homebrew hermes editable")
+INSTALL_NOUNS = wordset("tool venv env environment install installation")
+"""Where a package is installed: "uv tool", "hermes venv". An installer alone names its own
+version ("memware | uv version" is uv's), so it counts only before one of these nouns."""
+VERSION_CONTEXT = wordset("in on at from before after via under when as during for")
+"""How the words after a version noun may begin and still describe the package's own version in
+a place or at a time: "version in hermes pypi", "version before update"."""
+VERSION_POLICY = wordset(
+    """
+    supported support compatible compatibility tested requirement requirements constraint
+    constraints range spec specifier next planned upcoming future
+    """
+)
+"""Words that make a version a policy or a plan rather than a reading: "oldest supported
+version", "next version"."""
+_LEAD_VERSION = re.compile(
+    r"^\s*(v?\d+(?:\.\d+){1,3}(?:[-+.]?[0-9a-z]+(?:\.[0-9a-z]+)*)?)\s*(?:\([^()]*\))?\s*$", re.I
+)
+
+
 def _norm_version(v: str) -> str:
     return v.strip().lower().removeprefix("v")
+
+
+def _lead_version(value: str) -> str | None:
+    """The version a value states, alone or with a note in parentheses after it ("0.8.0 (the uv
+    tool copy)"), or None."""
+    m = _LEAD_VERSION.match(value)
+    return m.group(1) if m else None
+
+
+def _own_between(words: list[str]) -> bool:
+    """Whether the words between a package's name and a version noun keep the version the
+    package's own: words from :data:`OWN_VERSION_WORDS`, an install noun, or an installer before
+    an install noun ("uv tool"). Any other word names something else ("ruff", "python", "uv",
+    "plugin": the Hermes plugin carries its own version)."""
+    i = 0
+    while i < len(words):
+        if words[i] in OWN_VERSION_WORDS or words[i] in INSTALL_NOUNS:
+            i += 1
+        elif words[i] in INSTALLERS and i + 1 < len(words) and words[i + 1] in INSTALL_NOUNS:
+            i += 2
+        else:
+            return False
+    return True
+
+
+def _names_own_version(subject: str, relation: str, name: str) -> bool:
+    """Whether a version noun in ``subject relation`` is the package's own, past the words of
+    :data:`OWN_VERSION_WORDS`: no qualifier, requirement or policy word; the words between the
+    package's name and the first version noun pass :func:`_own_between`; and what follows the
+    noun, if anything, starts with a word of place or time (:data:`VERSION_CONTEXT`), so
+    "release notes" and "tag format" are not versions."""
+    tokens = _tokens(f"{subject} {relation}")
+    if set(tokens) & VERSION_POLICY or veto(subject, relation) or _REQUIREMENT.search(relation):
+        return False
+    noun_at = next((i for i, t in enumerate(tokens) if t in VERSION_NOUNS), None)
+    named = _tokens(name)
+    if noun_at is None or not named:
+        return False
+    starts = [i for i in range(noun_at) if tokens[i : i + len(named)] == named]
+    if not starts:
+        return False
+    after = tokens[noun_at + 1 :]
+    if after and after[0] not in VERSION_CONTEXT:
+        return False
+    return _own_between(tokens[starts[-1] + len(named) : noun_at])
 
 
 def manifest_rule(
@@ -746,13 +837,14 @@ def manifest_rule(
             if older_version(m.group(1), version):
                 return OLDER_VERSION, m.group(1)
     rest = _words(text) - _words(name)
+    stated = _lead_version(value)
     if (
         rest & VERSION_NOUNS
-        and rest <= OWN_VERSION_WORDS
-        and is_version(value)
-        and _norm_version(value) != _norm_version(version)
+        and stated is not None
+        and _norm_version(stated) != _norm_version(version)
+        and (rest <= OWN_VERSION_WORDS or _names_own_version(subject, relation, name))
     ):
-        return CONTRADICTED, value.strip()
+        return CONTRADICTED, stated
     return None
 
 
