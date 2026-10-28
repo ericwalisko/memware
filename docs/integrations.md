@@ -93,6 +93,17 @@ job file retention`, because they share `file`. Over conversations that use `fil
 as written counts as rare, such as an id, a version or a path. Under 1,000 indexed passages the
 share is not read, and one shared word is enough.
 
+**Beliefs from another project.** The prompt hook also asks whether a belief belongs to the
+project the session runs in. A belief derived in a Claude Code session outside the project (its
+primary checkout and live worktrees) is left out when its subject shares exactly one word with the
+prompt, that word is ordinary in this project (in more than 2% of its indexed passages), and none
+of the subject's other words appears in any of them. A fact from one project then cannot ride
+into an unrelated one on a word like `decision`. A word this project seldom uses is a deliberate
+reference, so naming another app still brings its facts, and two shared words always do. Beliefs
+a person stated or confirmed, Hermes sessions, untraceable sources and projects with fewer than
+300 indexed passages are not judged. Hermes `prefetch` runs outside any project and does not
+apply this test.
+
 [relevance-calibration.md](relevance-calibration.md) has how the rule was chosen, what it cut on
 one user's labeled prompts, and the relevance-filter threshold those labels recommend. Recall on
 demand and the session-start digest do not use this rule.

@@ -56,7 +56,8 @@ cannot be told from one in 15%. Passages come in conversations, which makes the 
 larger, and a young store is a few conversations whose own subject would read as a common word.
 
 The rule applies wherever memware injects unsolicited: the prompt hook (`memware context`),
-Hermes `prefetch`, and the beliefs context of `memware eval`. Recall on demand (`recall`,
+Hermes `prefetch`, and the beliefs context of `memware eval`. The prompt hook adds one more test
+for beliefs from another project ([below](#beliefs-from-another-project)). Recall on demand (`recall`,
 `memware beliefs`) is unchanged, and so is the session-start digest, which matches the project's
 own name. `memware.index.subject_passes(store, prompt, subject)` answers
 for one pair. It writes nothing and runs on a read-only connection, so a labeled set can be
@@ -80,6 +81,52 @@ fact. The words it does catch are plain words the index stores unchanged, such a
 `report`, `path` and `board`: the kind of word that collided in #47.
 `test_a_word_is_looked_up_as_written_so_a_stemmed_word_reads_as_rare` in
 `tests/test_subject_rule.py` pins the as-written lookup.
+
+## Beliefs from another project
+
+The subject rule judges a word by its share across all of a user's conversations, and it reads a
+word as written. An ordinary word the stemmer changes (`decision` is indexed as `decis`) therefore
+reads as rare, as the previous section intends for project names. The cost: a belief derived in
+one project could reach a prompt in an unrelated project on that one ordinary word. In the case
+that prompted this rule, the relevance filter was on (`filter`, threshold 0.3) and scored the
+foreign belief 0.69, so the filter did not catch it either.
+
+**Where a belief came from cannot decide this alone.** A derived belief cites the session it was
+read from, and most sessions run in worktrees that are gone when the belief is injected. Replaying
+the relevance log's candidates since 2026-10-01 (23,997 prompt-belief pairs) with a session's own
+transcript directory as "this project", 88% of the pairs came from another directory. Leaving out
+each of those whose one shared word is common in the session's directory (more than 2% of its
+passages, in directories of at least 1,000) would have dropped 10,237 pairs, 1,862 of them pairs
+the filter scored 0.5 or more.
+
+**Whether the belief belongs to this project's world does.** The rule (`memware.scope`) leaves a
+belief out of the prompt hook when all of these hold:
+
+- it was derived in a Claude Code session outside the project's transcript directories (the
+  primary checkout and every live worktree), and no person stated or confirmed it;
+- its subject shares exactly one word with the prompt;
+- the project has at least 300 indexed passages;
+- that word is in more than 2% of the project's passages, so it is part of how this project talks
+  rather than a deliberate reference to something outside it;
+- the subject has another word that is not a number, and none of those words appears in any of
+  the project's passages.
+
+Counts here are stem-aware (`MATCH` over `passage_fts`), because absence must be real:
+"treatment" and "treatments" are one word for whether a project ever talked about it.
+
+Replayed over the same 23,997 pairs, with the same caveat about worktrees (the hook counts live
+worktrees as the project, which the replay could not), the rule leaves out 1,833 pairs (7.6%):
+
+| pairs | left out |
+|---|---|
+| filter score below 0.3 (15,332) | 1,706 (11.1%) |
+| filter score 0.3 or more (8,665) | 127 (1.5%) |
+
+The filter's score is not a label: it scored the case above 0.69. These pairs have not been
+labeled, so the cost in relevant facts is not measured, only bounded by how few pairs the filter
+liked. The 2% line and the 300-passage floor are constants (`memware.scope.ORDINARY_SHARE`,
+`MIN_PASSAGES`); a garden cycle that labels the left-out pairs is how to check them on your own
+store.
 
 ## The relevance filter on top
 

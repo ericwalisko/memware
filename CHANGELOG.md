@@ -16,6 +16,21 @@ All notable changes to this project are documented here. The format follows
   derive.effort <level>` or `MEMWARE_DERIVE_EFFORT`. A `claude` that does not list `--effort`
   is spawned without it. `MAX_THINKING_TOKENS=0` stays for older models.
 
+### Fixed
+- **The prompt hook no longer injects a belief from another project's world on one ordinary
+  word.** The subject rule lets one shared word through when it reads as rare across all your
+  conversations, and an ordinary word the index stores as a stem ("decision") always reads as
+  rare. So a fact derived in one project could reach a prompt in an unrelated one, whatever it
+  was about. A belief derived in a Claude Code session outside the current project is now left
+  out when its subject shares exactly one word with the prompt, that word is ordinary here (in
+  more than 2% of this project's indexed passages), and none of the subject's other words appears
+  in any of them. A word this project seldom uses still carries a belief from elsewhere ("the
+  digware app", asked from another repository), and two shared words always do. Beliefs from
+  this project or a live worktree of it, beliefs a person stated or confirmed, Hermes sessions,
+  untraceable sources and projects with fewer than 300 indexed passages keep today's behaviour.
+  Hermes `prefetch`, the digest, recall and the MCP tools are unchanged. See
+  [docs/relevance-calibration.md](docs/relevance-calibration.md#beliefs-from-another-project).
+
 ## [0.11.0] - 2026-10-01
 
 ### Upgrade notes
