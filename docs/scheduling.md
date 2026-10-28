@@ -77,6 +77,9 @@ memware config derive.auto true
 That is the whole setup. The hook calls `memware derive --apply --auto --if-stale 24
 --quiet`: `--if-stale 24` skips when the last run is younger than a day, `--auto` makes
 the hook a silent no-op until you switch it on, `--quiet` keeps it out of your terminal.
+After a failed run (a usage limit, say) the hook waits an hour before it tries again, or
+the `--if-stale` window if that is shorter; `memware stats` shows the failure under
+"derive last failure", and a `memware derive --apply` you type runs regardless.
 Turn it off the same way (`memware config derive.auto false`). If you installed the
 plugin before this option existed, reinstall it to pick up the new hook
 (`claude plugin install memware@memware`).
@@ -196,4 +199,11 @@ environment, as for the model). The levels are `low`, `medium`, `high`, `xhigh` 
 - Exit codes: `0` done or nothing new; `2` not configured (no `claude` on PATH, or the
   openai settings missing); `4` the provider is unavailable right now (rejected key,
   usage limit) — nothing was written and the watermark did not move, so the next run
-  picks up where this one stopped.
+  picks up where this one stopped. The state file records when it failed
+  (`last_failure`, `last_error`), and a run with `--if-stale` skips for an hour after it.
+- The `claude -p` the default provider spawns loads your plugins, memware's among them. It
+  runs with `MEMWARE_HOOKS_OFF=1` and `MEMWARE_NO_CAPTURE=1`, so memware's hooks in it
+  start no derive, sync or backup of their own, inject nothing into the extraction prompt
+  and send nothing to the relevance filter. Before this, a run refused on a usage limit
+  restarted itself through its own child's session-start hook, one spawn every few seconds
+  until the limit lifted.

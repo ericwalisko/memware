@@ -8,6 +8,7 @@ subscription-only environment and its usage-limit exit are real.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -365,7 +366,14 @@ def test_openai_rejected_credential_exits_4_after_one_call(db, tmp_path, monkeyp
     assert rc == md.EXIT_UNAVAILABLE
     assert len(calls) == 1, "one call, not one per chunk with a retry each"
     assert "watermark not advanced" in capsys.readouterr().err
-    assert not state.exists()
+    assert_nothing_advanced(state)
+
+
+def assert_nothing_advanced(state: Path) -> None:
+    """A refused run records the attempt (for the backoff) and nothing else."""
+    saved = json.loads(state.read_text())
+    assert saved["watermark"] == 0 and saved["runs"] == 0 and saved["last_run"] is None
+    assert saved["last_error"] == "ProviderUnavailable"
 
 
 def fake_claude(
@@ -487,7 +495,7 @@ def test_claude_code_usage_limit_exits_4(db, tmp_path, monkeypatch, capsys):
     rc = main(["--db", db, "derive", "--state", str(state), "--apply"])
     assert rc == md.EXIT_UNAVAILABLE
     assert "usage limit" in capsys.readouterr().err
-    assert not state.exists()
+    assert_nothing_advanced(state)
 
 
 def test_missing_claude_binary_is_a_config_error(db, tmp_path, monkeypatch, capsys):
@@ -888,3 +896,214 @@ def test_derive_and_the_injection_gate_agree_on_what_derive_writes():
     assert md.RELIABILITY == DERIVED_RELIABILITY
     assert md.source_pointer("s", 1).startswith(DERIVED_SOURCE)
     assert not human_stated(md.RELIABILITY, md.source_pointer("s", 1))
+
+
+# ── the self-restart loop ───────────────────────────────────────────────
+# derive's `claude -p` child loads the user's plugins, memware's among them. Its SessionStart
+# hook runs `memware derive --apply --auto --if-stale 24` in the background, and its prompt hook
+# runs `memware context --from-hook`. A run refused on a usage limit saved no state, so the
+# child's own derive found the store still stale once the parent released the lock, spawned
+# another child, and so on: one spawn every few seconds until a run got through, each prompt
+# also sent to the relevance filter's endpoint when that was on.
+LIMIT_ENVELOPE = json.dumps(
+    {"type": "result", "is_error": True, "result": "You've hit your session limit · resets 6pm"}
+)
+HOOK_DERIVE = ["derive", "--apply", "--auto", "--if-stale", "24", "--quiet"]
+
+
+def plugin_claude(tmp_path: Path, monkeypatch, body: str) -> tuple[Path, Path]:
+    """A `claude` that behaves like Claude Code with the memware plugin loaded: every spawn
+    queues the SessionStart hook's derive, with the environment the hook would see, then prints
+    ``body``. The test plays the queue back once the spawning run has returned and released its
+    lock, which is when the real hook's backgrounded derive gets the lock."""
+    if sys.platform == "win32":
+        pytest.skip("the fake claude is a POSIX shell script")
+    spawns, queue = tmp_path / "spawns.log", tmp_path / "hook-queue.log"
+    script = tmp_path / "claude"
+    script.write_text(
+        "#!/bin/sh\n"
+        "[ \"$1\" = --help ] && { printf '%s\\n' '  --effort <level>'; exit 0; }\n"
+        f"echo spawn >> '{spawns}'\n"
+        "printf 'HOOKS_OFF=%s NO_CAPTURE=%s\\n' "
+        f'"${{MEMWARE_HOOKS_OFF-}}" "${{MEMWARE_NO_CAPTURE-}}" >> \'{queue}\'\n'
+        f"cat <<'EOF'\n{body}\nEOF\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    return spawns, queue
+
+
+CHILD_ENV = (("MEMWARE_HOOKS_OFF", "HOOKS_OFF"), ("MEMWARE_NO_CAPTURE", "NO_CAPTURE"))
+
+
+def play_hook_queue(db: str, state: Path, queue: Path, monkeypatch, rounds: int = 6) -> None:
+    """Run each queued SessionStart derive in the environment its child would hand it, as the
+    backgrounded hook would after the parent exits, for at most ``rounds`` links of the chain."""
+    played = 0
+    for _ in range(rounds):
+        lines = queue.read_text().splitlines() if queue.exists() else []
+        if played >= len(lines):
+            return
+        for line in lines[played:]:
+            seen = dict(kv.split("=", 1) for kv in line.split())
+            with monkeypatch.context() as m:
+                for var, key in CHILD_ENV:
+                    if seen.get(key):
+                        m.setenv(var, seen[key])
+                    else:
+                        m.delenv(var, raising=False)
+                main(["--db", db, *HOOK_DERIVE, "--state", str(state)])
+        played = len(lines)
+
+
+def test_a_refused_run_does_not_restart_itself_through_its_own_child(db, tmp_path, monkeypatch):
+    spawns, queue = plugin_claude(tmp_path, monkeypatch, LIMIT_ENVELOPE)
+    assert main(["--db", db, "config", "derive.auto", "true"]) == 0
+    state = tmp_path / "state.json"
+    rc = main(["--db", db, *HOOK_DERIVE, "--state", str(state)])
+    assert rc == md.EXIT_UNAVAILABLE
+    play_hook_queue(db, state, queue, monkeypatch)
+    assert spawns.read_text().count("spawn") == 1, "the child's own hook started another derive"
+
+
+def test_the_claude_child_runs_with_memware_hooks_off_and_capture_off(db, tmp_path, monkeypatch):
+    _, queue = plugin_claude(tmp_path, monkeypatch, ENVELOPE)
+    assert derive_once(db, tmp_path) == 0
+    assert queue.read_text().split() == ["HOOKS_OFF=1", "NO_CAPTURE=1"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        HOOK_DERIVE,
+        ["derive", "--apply", "--if-stale", "24"],
+        ["sync", "--harness", "claude-code"],
+        ["sync", "--harness", "claude-code", "--from-hook"],
+        ["backup", "--if-stale", "20", "--quiet"],
+        ["context", "--from-hook"],
+        ["digest", "--from-hook"],
+        ["notice", "--from-hook"],
+    ],
+)
+def test_every_hook_command_is_inert_in_a_child_memware_spawned(
+    db, tmp_path, monkeypatch, capsys, argv
+):
+    """The plugin's hook commands, as hooks.json runs them, do nothing in derive's child: no
+    run, no sync, no snapshot, no injected context and no relevance-filter call."""
+    from memware import relevance
+
+    def boom(*_a, **_k):
+        raise AssertionError("a hook in memware's own child got past the switch")
+
+    monkeypatch.setattr(relevance, "_judge", boom)
+    monkeypatch.setattr(md, "make_provider", boom)
+    monkeypatch.setenv("MEMWARE_HOOKS_OFF", "1")
+    monkeypatch.setenv("MEMWARE_NO_CAPTURE", "1")
+    payload = {
+        "prompt": "the engine is pinned",
+        "transcript_path": str(tmp_path / "t.jsonl"),
+        "cwd": str(tmp_path),
+    }
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+    assert main(["--db", db, *argv]) == 0
+    assert capsys.readouterr().out == ""
+    assert not (tmp_path / "memware-home" / "no-capture.txt").exists()
+
+
+def test_hooks_off_leaves_a_command_a_person_typed_alone(db, tmp_path, monkeypatch):
+    """The switch silences the hook-shaped invocations only; a plain run still runs."""
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    monkeypatch.setenv("MEMWARE_HOOKS_OFF", "1")
+    assert main(["--db", db, "derive", "--state", str(tmp_path / "s.json"), "--apply"]) == 0
+    assert prov.usage.calls == 1
+
+
+def _ago(hours: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+
+
+def _derive(db: str, state: Path, *flags: str) -> int:
+    return main(["--db", db, "derive", "--state", str(state), *flags])
+
+
+def test_a_refused_run_records_the_attempt_and_advances_nothing(db, tmp_path, monkeypatch):
+    fake_claude(tmp_path, monkeypatch, LIMIT_ENVELOPE)
+    state = tmp_path / "state.json"
+    assert _derive(db, state, "--apply") == md.EXIT_UNAVAILABLE
+    assert_nothing_advanced(state)
+    age = md.age_hours(json.loads(state.read_text())["last_failure"])
+    assert age is not None and age < 0.1
+
+
+def test_a_dry_run_failure_writes_no_state(db, tmp_path, monkeypatch):
+    fake_claude(tmp_path, monkeypatch, LIMIT_ENVELOPE)
+    state = tmp_path / "state.json"
+    assert _derive(db, state) == md.EXIT_UNAVAILABLE
+    assert not state.exists()
+
+
+def test_a_config_error_is_not_backed_off(db, tmp_path, monkeypatch):
+    """Refused before any call, so it costs nothing to repeat and the backoff would only hide
+    the exit-2 'not configured' from the next session start."""
+    monkeypatch.setenv("PATH", str(tmp_path))  # no claude
+    state = tmp_path / "state.json"
+    assert _derive(db, state, "--apply") == md.EXIT_CONFIG
+    assert not state.exists()
+
+
+FAILED = {
+    "watermark": 0,
+    "runs": 3,
+    "last_run": "2026-01-01T00:00:00Z",
+    "last_error": "ProviderUnavailable",
+}
+
+
+def test_a_scheduled_run_backs_off_after_a_failure_and_a_manual_run_does_not(
+    db, tmp_path, monkeypatch, capsys
+):
+    assert main(["--db", db, "config", "derive.auto", "true"]) == 0
+    state = tmp_path / "state.json"
+    md.save_state(state, {**FAILED, "last_failure": _ago(0.2)})
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY], [KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    assert _derive(db, state, "--apply", "--auto", "--if-stale", "24") == 0
+    assert "skipped: the last attempt failed" in capsys.readouterr().out
+    assert prov.usage.calls == 0
+    # a person asking for a run gets one, backoff or not
+    assert _derive(db, state, "--apply", "--quiet") == 0
+    assert prov.usage.calls == 1
+    saved = json.loads(state.read_text())
+    assert "last_failure" not in saved and "last_error" not in saved, "a success clears it"
+    # past the backoff, the schedule retries
+    md.save_state(state, {**FAILED, "last_failure": _ago(md.FAILED_RUN_BACKOFF_HOURS + 0.1)})
+    flags = ("--apply", "--auto", "--if-stale", "24", "--since", "0", "--quiet")
+    assert _derive(db, state, *flags) == 0
+    assert prov.usage.calls == 2
+
+
+def test_the_backoff_never_outlasts_the_schedule_that_asked(db, tmp_path, monkeypatch):
+    """--if-stale 0.1 is a caller who wants a run every six minutes; a failure backs it off for
+    at most that long, not the default hour."""
+    state = tmp_path / "state.json"
+    md.save_state(state, {**FAILED, "last_run": None, "last_failure": _ago(0.2)})
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    assert _derive(db, state, "--apply", "--if-stale", "0.1", "--quiet") == 0
+    assert prov.usage.calls == 1
+
+
+def test_an_old_state_file_without_the_failure_fields_still_reads(db, tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"watermark": 0, "runs": 2, "last_run": "2026-01-01T00:00:00Z"}))
+    prov = stub(monkeypatch, [[KEEP_ENGINE, KEEP_PROXY]], chunk=24)
+    assert _derive(db, state, "--apply", "--if-stale", "24", "--quiet") == 0
+    assert prov.usage.calls == 1
+
+
+def test_stats_reports_the_last_failed_attempt(db):
+    md.save_state(md.state_path(db), {**FAILED, "last_failure": _ago(0.5)})
+    conn = md.open_readonly(db)
+    try:
+        d = md.status(conn, db)
+    finally:
+        conn.close()
+    assert d["last_error"] == "ProviderUnavailable" and d["last_failure_age_hours"] == 0.5
