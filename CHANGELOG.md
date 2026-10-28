@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **`memware derive` no longer restarts itself through its own `claude -p`.** The child
+  derive spawns loads your plugins, memware's among them. Its session-start hook ran
+  `memware derive --auto --if-stale 24`, and a run refused on a usage limit saved no state,
+  so once the parent released its lock the child's derive found the store still stale,
+  spawned a child of its own, and so on: one spawn every few seconds until the limit lifted.
+  With the relevance filter on, the child's prompt hook also sent every batch to the
+  filter's endpoint; one such chain sent the same batch 7,424 times in a day. Two
+  independent guards, either of which stops the chain:
+  - The child runs with `MEMWARE_HOOKS_OFF=1` (new): every hook-shaped invocation
+    (`--from-hook`, `--auto`, `--if-stale`, the bare catch-up `sync`) exits 0 and does
+    nothing, so the child starts no derive, sync or backup, injects no context into the
+    extraction prompt and calls no relevance filter. `MEMWARE_NO_CAPTURE=1` is set beside
+    it, so an older `memware` on the child's PATH still keeps it out of the store and off the
+    filter. A command a person types is unaffected.
+  - A failed `--apply` run records `last_failure` and `last_error` (the error's class only)
+    in the state file, and a run with `--if-stale` waits an hour after one (never longer
+    than its own `--if-stale` window). Watermark, `runs` and `last_run` are untouched; a
+    success clears the record. A config error (no `claude`, a bad setting) is not recorded:
+    it costs nothing to repeat. `memware stats` shows "derive last failure", and its
+    `--json` gains `last_failure`, `last_failure_age_hours` and `last_error`.
+
 ### Changed
 - **`memware derive` on the Claude Code provider now passes `--effort low`.** Claude Haiku 5.5,
   what `--model haiku` runs from Claude Code 2.1.293, thinks adaptively and no longer stops at
