@@ -281,6 +281,19 @@ def _file_holds(path: Path, marker: str, *, chunk_bytes: int = 1 << 20) -> bool:
     return any(needle in w for w in file_windows(path, len(needle) - 1, chunk_bytes=chunk_bytes))
 
 
+def kept_out_source(path: Path, markers: list[str]) -> bool:
+    """Whether sync keeps a transcript out of the store: on the no-capture list (or a subagent
+    transcript of one), matching a ``capture.exclude`` glob, or holding one of ``markers`` in its
+    head. :mod:`memware.injections` reads by the same rule, so what is never indexed is never
+    labelled either."""
+    source = str(path.resolve())
+    return (
+        is_no_capture(source)
+        or is_excluded(source)
+        or bool(markers and file_contains(path, markers))
+    )
+
+
 def sync_file(
     store: Store,
     path: str | os.PathLike[str],
@@ -305,7 +318,7 @@ def sync_file(
         markers += (
             [skip_if_contains] if isinstance(skip_if_contains, str) else list(skip_if_contains)
         )
-    if is_no_capture(source) or is_excluded(source) or (markers and file_contains(p, markers)):
+    if kept_out_source(p, markers):
         prune_source(store, source)
         return 0
     parse = parser_for(harness)

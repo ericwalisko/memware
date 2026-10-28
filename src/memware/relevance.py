@@ -281,7 +281,7 @@ def choose(
     if kept_out(prompt, transcript):
         return today
     pool = list(facts[: max(rel.pool, k)])
-    sent = _clip(prompt, MAX_PROMPT_CHARS)
+    sent = sent_prompt(prompt)
     started = time.monotonic()
     probs: list[float] | None = None
     error = None
@@ -301,6 +301,17 @@ def choose(
 
 class Unavailable(Exception):
     """The filter has no answer this time; the caller injects what it would have without it."""
+
+
+def sent_prompt(prompt: str) -> str:
+    """The prompt as the filter sends and logs it: cut to :data:`MAX_PROMPT_CHARS`."""
+    return _clip(prompt, MAX_PROMPT_CHARS)
+
+
+def prompt_id(sent: str) -> str:
+    """The log's id for a prompt as sent. :mod:`memware.injections` gives the same prompt the
+    same id, so a pair is labelled once whichever record it was read from."""
+    return hashlib.sha256(sent.encode()).hexdigest()[:16]
 
 
 def _clip(text: str, limit: int) -> str:
@@ -482,7 +493,7 @@ def _log(
     """One line per candidate. ``pair_id`` joins the prompt's hash to the belief id, so a pair
     asked twice is labelled once. ``today`` is memware's own pick, ``chosen`` the filter's at
     this threshold (null when it had no answer). Writing never fails the hook."""
-    prompt_id = hashlib.sha256(sent.encode()).hexdigest()[:16]
+    pid = prompt_id(sent)
     ts = now_iso()
     chosen = set(picked or ())
     lines = [
@@ -492,8 +503,8 @@ def _log(
                 "harness": harness,
                 "mode": rel.mode,
                 "model": rel.model,
-                "pair_id": f"{prompt_id}:{belief_id}",
-                "prompt_id": prompt_id,
+                "pair_id": f"{pid}:{belief_id}",
+                "prompt_id": pid,
                 "belief_id": belief_id,
                 "rank": rank,
                 "today": rank < today,

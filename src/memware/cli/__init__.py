@@ -24,6 +24,7 @@ from memware.cli import derive as derive_cmd
 from memware.cli import digest as digest_cmd
 from memware.cli import exclude as exclude_cmd
 from memware.cli import init as init_cmd
+from memware.cli import injections as injections_cmd
 from memware.cli import notice as notice_cmd
 from memware.cli import nuke as nuke_cmd
 from memware.cli import prune as prune_cmd
@@ -114,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     exclude_cmd.register(add)
     recall_cmd.register(add)
     context_cmd.register(add)
+    injections_cmd.register(add)
     notice_cmd.register(add)
     digest_cmd.register(add)
     assertion_cmd.register(add)

@@ -6,8 +6,9 @@ stale ones (`memware beliefs --stale`), and nothing on a background task's notif
 inside a subagent. Remove the
 `UserPromptSubmit` entry if you prefer purely on-demand recall.
 
-Skill: `/memware:garden` measures whether injected beliefs are relevant (with the optional
-relevance filter in `shadow` or `filter` mode), proposes one setting change per cycle, and tends
+Skill: `/memware:garden` measures whether injected beliefs are relevant (in every relevance mode,
+from what the transcripts record; the optional filter's `shadow` or `filter` log adds the scores
+that tune its threshold and pool), proposes one setting change per cycle, and tends
 the ledger: beliefs that keep arriving as noise, and stale, orphaned and duplicate ones. It
 changes nothing without your yes. Run it about weekly.
 

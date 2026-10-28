@@ -27,6 +27,80 @@ def store(tmp_path: Path) -> Iterator[Store]:
     s.close()
 
 
+def write_hook_transcript(
+    path: Path,
+    session: str,
+    prompts: list[tuple[str, str, list[str]]],
+    *,
+    entrypoint: str = "cli",
+    sidechain: bool = False,
+) -> None:
+    """Claude Code-shaped JSONL for sessions where the prompt hook injected facts.
+
+    prompts: (ts, typed prompt, injected lines). Each prompt is written as Claude Code writes
+    one: the typed user record, a meta user record and an unrelated attachment between it and
+    the hook's ``hook_additional_context`` attachment (whose parent chain leads back to the
+    prompt), another plugin's context on the same event, and a tool hook after. An empty list of
+    lines writes no memware block at all."""
+    from memware.digest import CONTEXT_TITLE
+
+    lines: list[dict[str, object]] = [{"type": "summary", "summary": "noise"}]
+    base = {"sessionId": session, "entrypoint": entrypoint, "isSidechain": sidechain}
+    hook = {
+        "type": "hook_additional_context",
+        "hookName": "UserPromptSubmit",
+        "hookEvent": "UserPromptSubmit",
+    }
+    parent: str | None = None
+    for i, (ts, prompt, injected) in enumerate(prompts):
+        ids = [f"{session}-{i}-{n}" for n in range(6)]
+        typed = {"role": "user", "content": prompt}
+        meta = {"role": "user", "content": [{"type": "text", "text": "meta"}]}
+        records = [
+            {"type": "user", "uuid": ids[0], "parentUuid": parent, "message": typed},
+            {"type": "user", "uuid": ids[1], "parentUuid": ids[0], "isMeta": True, "message": meta},
+            {
+                "type": "attachment",
+                "uuid": ids[2],
+                "parentUuid": ids[1],
+                "attachment": {"type": "date"},
+            },
+            {
+                "type": "attachment",
+                "uuid": ids[3],
+                "parentUuid": ids[2],
+                "attachment": hook | {"content": ["Another plugin's context\n- not a fact"]},
+            },
+        ]
+        if injected:
+            block = CONTEXT_TITLE + "\n" + "\n".join(injected)
+            records.append(
+                {
+                    "type": "attachment",
+                    "uuid": ids[4],
+                    "parentUuid": ids[3],
+                    "attachment": hook | {"content": [block]},
+                }
+            )
+        tool_hook = {
+            "type": "hook_success",
+            "hookName": "PreToolUse:Bash",
+            "hookEvent": "PreToolUse",
+        }
+        records.append(
+            {
+                "type": "attachment",
+                "uuid": ids[5],
+                "parentUuid": records[-1]["uuid"],
+                "attachment": tool_hook,
+            }
+        )
+        lines += [base | {"timestamp": ts} | r for r in records]
+        parent = ids[5]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(json.dumps(r) for r in lines) + "\n", encoding="utf-8")
+
+
 def write_claude_jsonl(
     path: Path,
     session: str,

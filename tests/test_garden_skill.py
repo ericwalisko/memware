@@ -1,6 +1,6 @@
 """The garden skill's script (integrations/claude-code/skills/garden/garden.py) on a synthetic
-relevance log: it must never print a prompt or a fact, must label each pair once across cycles,
-and must turn verdicts into the moves its objective and checks promise."""
+relevance log and synthetic transcripts: it must never print a prompt or a fact, must label each
+pair once across cycles, and must turn verdicts into the moves its objective and checks promise."""
 
 import datetime as dt
 import importlib.util
@@ -8,9 +8,16 @@ import json
 import os
 import random
 import sys
+import sysconfig
 from pathlib import Path
 
 import pytest
+
+from memware.digest import belief_line
+from memware.ledger import assert_belief
+from memware.relevance import prompt_id, sent_prompt
+from memware.store import Store
+from tests.conftest import write_hook_transcript
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "integrations" / "claude-code" / "skills" / "garden" / "garden.py"
@@ -25,16 +32,33 @@ def garden():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def transcripts_here(monkeypatch):
+    """garden.py runs `memware injections`: the one installed with this checkout, reading a
+    fixture tree, never the developer's own transcripts."""
+    exe = Path(sysconfig.get_path("scripts")) / ("memware.exe" if os.name == "nt" else "memware")
+    if not exe.exists():
+        pytest.skip("the memware console script is not installed beside this interpreter")
+    monkeypatch.setenv("MEMWARE_CLI", str(exe))
+    transcripts().mkdir(parents=True, exist_ok=True)
+    write_config(mode="off")
+
+
 def home() -> Path:
     h = Path(os.environ["MEMWARE_HOME"])
     h.mkdir(parents=True, exist_ok=True)
     return h
 
 
+def transcripts() -> Path:
+    return home().parent / "transcripts"
+
+
 def write_config(threshold=0.3, pool=20, k=None, mode="filter"):
     cfg = {"relevance": {"mode": mode, "threshold": threshold, "pool": pool, "timeout_s": 2.0}}
     if k is not None:
         cfg["inject"] = {"k": k}
+    cfg["backup"] = {"transcript_src": str(transcripts())}
     (home() / "config.json").write_text(json.dumps(cfg))
 
 
@@ -285,3 +309,91 @@ def test_lines_whose_text_was_trimmed_are_replayed_but_not_sampled(garden, capsy
     assert key and not {k["pair_id"].split(":")[0] for k in key} & trimmed
     assert rows  # the replay still reads every line's scores
     assert len(garden.prompts(garden.log_rows(None))) == 20
+
+
+# --- the transcripts: relevance.mode off ---------------------------------------------------
+
+
+def write_injections(n_prompts=240, k=6, per_rank=10):
+    """A ledger of ``per_rank`` beliefs for each rank, and one session in which the hook injected
+    ``k`` of them into each prompt, rank r drawn from rank r's beliefs. Returns pair_id -> rank."""
+    s = Store(home() / "memware.db")
+    beliefs = [
+        [
+            assert_belief(
+                s, f"thing{r}x{j}", "is", f"value {SECRET}", valid_from="2026-09-01T00:00:00Z"
+            ).belief_id
+            for j in range(per_rank)
+        ]
+        for r in range(k)
+    ]
+    lines = {}
+    for r in range(k):
+        for b in beliefs[r]:
+            row = s.conn.execute("SELECT * FROM belief WHERE id=?", (b,)).fetchone()
+            lines[b] = belief_line(row["subject"], row["relation"], row["value"], row["valid_from"])
+    s.close()
+    now = dt.datetime.now(dt.UTC)
+    prompts, rank_of = [], {}
+    for i in range(n_prompts):
+        ts = (now - dt.timedelta(minutes=n_prompts - i)).isoformat().replace("+00:00", "Z")
+        text = f"prompt {i} {SECRET}"
+        injected = [beliefs[r][(i + r) % per_rank] for r in range(k)]
+        prompts.append((ts, text, [lines[b] for b in injected]))
+        pid = prompt_id(sent_prompt(text))
+        rank_of |= {f"{pid}:{b}": r for r, b in enumerate(injected)}
+    write_hook_transcript(transcripts() / "proj" / "s1.jsonl", "s1", prompts)
+    return rank_of
+
+
+def test_off_mode_health_counts_the_transcripts(garden, capsys):
+    write_injections(n_prompts=20)
+    h = run(garden, capsys, "health")
+    t = h["transcripts"]
+    assert t["read"] is True
+    assert (t["prompts"], t["facts"], t["per_prompt"], t["full_blocks"]) == (20, 120, 6.0, 20)
+    assert t["lines_unmatched"] == 0
+    assert h["prompts"] == 0  # no relevance log in off mode
+    assert h["prompts_with_unlabeled_pairs"] == 20
+
+
+def test_off_mode_cycle_lowers_k_and_never_proposes_a_threshold(garden, capsys):
+    """Ranks 4 and 5 are always noise. The whole cycle runs from the transcripts: sample, label,
+    score. The k replay may only move down, damped, and names what it cannot tune."""
+    rank_of = write_injections()
+    work = home() / "labels" / "work-1"
+    s = run(garden, capsys, "sample", "--work", str(work), "--max-pairs", "100000")
+    assert s["prompts_from_transcripts"] == 240 and s["prompts_from_log"] == 0
+    assert s["groups"] == {"injected": 240 * 6}
+    label(work, lambda pair_id: rank_of[pair_id] < 4)
+    r = run(garden, capsys, "score", "--work", str(work), "--record")
+    assert r["sources"] == {"log": 0, "transcripts": 240 * 6}
+    assert r["memware_alone"]["precision"] == round(4 / 6, 3)
+    rp = r["replay"]
+    assert rp["axis"] == "inject.k, downward only"
+    assert rp["optimum"]["k"] == 4 and rp["optimum"]["noise"] == 0
+    assert settings(r) == {"inject.k": (6, 5)}  # halfway, held on the held-out third
+    assert not any("relevance." in p.get("set", "") for p in r["proposals"])
+    assert any("threshold and pool are not tuned" in p.get("note", "") for p in r["proposals"])
+    # The beliefs at ranks 4 and 5 keep arriving as noise.
+    assert len(r["offenders_injected"]) == 20
+    history = garden._read_jsonl(home() / "labels" / "garden" / "history.jsonl")
+    assert history[-1]["sources"]["transcripts"] == 240 * 6
+    assert SECRET not in json.dumps(history)
+
+    write_config(mode="off", k=5)
+    again = run(garden, capsys, "report")
+    assert settings(again) == {"inject.k": (5, 4)}
+
+
+def test_a_prompt_the_filter_scored_is_read_from_the_log_not_the_transcripts(garden, capsys):
+    write_injections(n_prompts=5)
+    scored = {next(iter(garden.injected_prompts(None)))}
+    assert len(garden.unfiltered(None, scored)) == 4
+
+
+def test_missing_memware_cli_is_reported_not_fatal(garden, capsys, monkeypatch):
+    monkeypatch.setenv("MEMWARE_CLI", str(home() / "no-such-memware"))
+    write_injections(n_prompts=3)
+    h = run(garden, capsys, "health")
+    assert h["transcripts"]["read"] is False and h["transcripts"]["prompts"] == 0

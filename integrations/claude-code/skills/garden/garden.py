@@ -3,9 +3,19 @@
 filter answered, and, once prompt-fact pairs are labeled, how much of what it injected was
 relevant and which setting to move.
 
-It reads the relevance filter's own logs in the memware home and writes only under
-``<home>/labels/`` (which ``memware nuke`` removes). Standard library only: the memware CLI is
-often installed in its own environment, so this never imports memware.
+It reads pairs from two sources and writes only under ``<home>/labels/`` (which ``memware nuke``
+removes):
+
+* the transcripts, through ``memware injections --jsonl``: what the hook actually injected into
+  each prompt a person typed, in every ``relevance.mode``. Those pairs carry no score, so they
+  measure memware's own picks and tune ``inject.k`` (downward only: the facts past k never
+  reached a prompt) and the beliefs that keep arriving as noise, never the threshold or pool.
+* the relevance filter's log, in ``shadow`` or ``filter`` mode: every candidate in the pool with
+  its score, which is what the threshold, k and pool are replayed on jointly.
+
+A prompt in both is read from the log. Standard library only: the memware CLI is often installed
+in its own environment, so this never imports memware; it runs ``memware`` (or ``$MEMWARE_CLI``),
+which reads the same ``MEMWARE_HOME`` and ``MEMWARE_DB`` this does.
 
     garden.py health  [--days N]                 counts, rates and timings; no text
     garden.py sample  --work DIR [--days N]      blind labeling batches (these hold prompt text)
@@ -28,6 +38,7 @@ import math
 import os
 import random
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -149,6 +160,8 @@ def prompts(rows: list[dict]) -> dict[str, list[dict]]:
 
 
 def group(r: dict) -> str:
+    if r.get("source") == "transcript":
+        return "injected"
     if r["chosen"] is None:
         return "unanswered"
     if r["today"]:
@@ -164,6 +177,83 @@ def pairs(rows: list[dict]) -> dict[str, dict]:
             if r["chosen"] is not None:
                 out[r["pair_id"]] = r
     return out
+
+
+# --- the transcripts -----------------------------------------------------------------------
+
+_INJECTED: dict = {}  # one `memware injections` run per window and command
+
+
+def memware_cli() -> list[str] | None:
+    """The memware executable: ``$MEMWARE_CLI`` (one path, never split, so a Windows path
+    survives), else ``memware`` on the PATH."""
+    exe = shutil.which(os.environ.get("MEMWARE_CLI") or "memware")
+    return [exe] if exe else None
+
+
+def injected(days: float | None) -> tuple[list[dict], dict]:
+    """Every fact the hook injected in the window, one row each (``memware injections --jsonl``),
+    and whether the transcripts could be read. Its stderr is never shown: it is memware's, and a
+    failure is reported by its exit status alone."""
+    cmd = memware_cli()
+    key = (str(home()), days, tuple(cmd or ()))
+    if key in _INJECTED:
+        return _INJECTED[key]
+    if cmd is None:
+        res: tuple[list[dict], dict] = ([], {"read": False, "why": "memware CLI not on PATH"})
+    else:
+        args = [*cmd, "injections", "--jsonl"] + ([] if days is None else ["--days", str(days)])
+        try:
+            p = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", timeout=900)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            res = ([], {"read": False, "why": type(e).__name__})
+        else:
+            if p.returncode == 0:
+                rows = [json.loads(line) for line in p.stdout.splitlines() if line.strip()]
+                res = (rows, {"read": True})
+            else:
+                why = "memware has no `injections` command; upgrade it" if p.returncode == 2 else ""
+                res = (
+                    [],
+                    {"read": False, "why": why or f"memware injections exited {p.returncode}"},
+                )
+    _INJECTED[key] = res
+    return res
+
+
+def injected_prompts(days: float | None) -> dict[str, list[dict]]:
+    """Per prompt, the facts its latest injected block held that match a belief, by rank. A
+    prompt is ``complete`` when every line of its block matched, so a smaller k can be replayed."""
+    blocks: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
+    for r in injected(days)[0]:
+        blocks[(r["prompt_id"], r["ts"])].append(r)
+    out: dict[str, list[dict]] = {}
+    for (pid, _), rs in sorted(blocks.items(), key=lambda kv: kv[0][1]):
+        by_rank: dict[int, dict] = {}
+        for r in rs:
+            by_rank.setdefault(r["rank"], r)
+        matched = [
+            by_rank[k] | {"source": "transcript", "p": None}
+            for k in sorted(by_rank)
+            if by_rank[k]["belief_id"] is not None
+        ]
+        if matched:
+            complete = len(matched) == rs[0]["block"]
+            out[pid] = [r | {"complete": complete} for r in matched]
+        else:
+            out.pop(pid, None)
+    return out
+
+
+def answered_ids(days: float | None) -> set[str]:
+    """The prompts the filter scored: their pairs are read from the log, which has the pool."""
+    return {pid for pid, rs in prompts(log_rows(days)).items() if rs[0]["p"] is not None}
+
+
+def unfiltered(days: float | None, scored: set[str]) -> dict[str, list[dict]]:
+    """The injected prompts the filter never scored (off, a fallback, a session it skipped):
+    what reached each of them was memware's own first k."""
+    return {pid: rs for pid, rs in injected_prompts(days).items() if pid not in scored}
 
 
 # --- health --------------------------------------------------------------------------------
@@ -195,11 +285,16 @@ def health(days: float | None) -> dict:
     ]
     lat = [u["latency_ms"] for u in usage]
     labeled = {v["pair_id"] for v in _read_jsonl(garden_dir() / "verdicts.jsonl")}
-    unlabeled = sum(
-        1
-        for rs in answered.values()
+    unlabeled = {
+        pid
+        for pid, rs in answered.items()
         if any(r["pair_id"] not in labeled for r in rs if r["today"] or r["chosen"])
-    )
+    }
+    rows_t, read = injected(days)
+    T = unfiltered(days, set(answered))
+    unlabeled |= {pid for pid, rs in T.items() if any(r["pair_id"] not in labeled for r in rs)}
+    facts_t = sum(len(rs) for rs in T.values())
+    k = relevance_settings()["k"]
     n = len(answered) or 1
     # The window can span a settings change, so the timeout rule reads only the current mode's calls.
     mode = relevance_settings()["mode"]
@@ -231,7 +326,17 @@ def health(days: float | None) -> dict:
                 ).items()
             )
         ),
-        "prompts_with_unlabeled_pairs": unlabeled,
+        "prompts_with_unlabeled_pairs": len(unlabeled),
+        # Prompts the filter never saw, read back from the transcripts: memware's own picks.
+        "transcripts": read
+        | {
+            "prompts": len(T),
+            "facts": facts_t,
+            "per_prompt": round(facts_t / (len(T) or 1), 2),
+            "full_blocks": sum(1 for rs in T.values() if rs[0]["block"] >= k),
+            "lines_unmatched": sum(1 for r in rows_t if r["belief_id"] is None),
+            "prompts_unlabeled": sum(1 for pid in T if pid in unlabeled),
+        },
         "last_cycle": (_read_jsonl(garden_dir() / "history.jsonl") or [{}])[-1].get("date"),
     }
 
@@ -298,6 +403,18 @@ def sample(
             continue  # try a smaller prompt; the budget is a cap, not a stop
         chosen_prompts.append((rs[0]["prompt"], shown))
         total += len(shown)
+    from_log = len(chosen_prompts)
+    # Then the prompts the filter never scored, from the transcripts: every fact that reached them.
+    T = list(unfiltered(days, answered_ids(days)).values())
+    rng.shuffle(T)
+    for rs in T:
+        shown = [r for r in rs if r["pair_id"] not in labeled]
+        if not shown:
+            continue
+        if total + len(shown) > max_pairs and chosen_prompts:
+            continue
+        chosen_prompts.append((rs[0]["prompt"], shown))
+        total += len(shown)
     _private_dir(work)
     batches = []
     # Pack whole prompts into batches of at most BATCH_PAIRS pairs, so a labeler sees each prompt once.
@@ -320,7 +437,7 @@ def sample(
             rng.shuffle(facts)
             out_lines.append({"prompt": prompt, "facts": facts})
             key += [
-                {"pair_id": r["pair_id"], "group": group(r), "p": r["p"], "rank": r["rank"]}
+                {"pair_id": r["pair_id"], "group": group(r), "p": r.get("p"), "rank": r["rank"]}
                 for r in shown
             ]
         rng.shuffle(out_lines)
@@ -334,6 +451,8 @@ def sample(
     return {
         "batches": batches,
         "prompts": len(chosen_prompts),
+        "prompts_from_log": from_log,
+        "prompts_from_transcripts": len(chosen_prompts) - from_log,
         "pairs": total,
         "groups": dict(collections.Counter(k["group"] for k in key)),
         "already_labeled_skipped": len(labeled),
@@ -575,26 +694,105 @@ def replay(days: float | None, V: dict, V_cycle: dict, cur: dict) -> dict:
     return out
 
 
+def replay_k(Tp: dict[str, list[dict]], V: dict, k0: int) -> dict:
+    """With the filter off, the hook injects memware's first k facts in rank order, so a smaller
+    k is the head of each block and can be replayed. A larger one cannot: the facts past k never
+    reached a prompt, and nothing scored them. The same objective and held-out check as the
+    joint replay, on one axis."""
+    P = [rs for rs in Tp.values() if rs[0]["complete"] and all(r["pair_id"] in V for r in rs)]
+    hold = [rs for rs in P if int(rs[0]["prompt_id"][:8], 16) % 3 == 0]
+    tune = [rs for rs in P if int(rs[0]["prompt_id"][:8], 16) % 3 != 0]
+
+    def at(ps: list[list[dict]], k: int) -> collections.Counter:
+        return collections.Counter(V[r["pair_id"]] for rs in ps for r in rs if r["rank"] < k)
+
+    def row(k: int, c: collections.Counter) -> dict:
+        return {"k": k, "relevant": c["relevant"], "noise": c["noise"], "precision": _prec(c)}
+
+    def better(a: collections.Counter, b: collections.Counter) -> bool:
+        return (a["noise"], -a["relevant"]) < (b["noise"], -b["relevant"])
+
+    full = sum(1 for rs in P if rs[0]["block"] >= k0)
+    out: dict = {
+        "axis": "inject.k, downward only",
+        "complete_prompts": len(P),
+        "tune": len(tune),
+        "holdout": len(hold),
+        "split": "by prompt hash",
+        "full_blocks": full,
+    }
+    base = at(tune, k0)
+    out["current"] = row(k0, base)
+    if len(tune) < MIN_TUNE_PROMPTS or base["relevant"] < MIN_RELEVANT:
+        out["verdict"] = (
+            f"not enough complete prompts: {len(tune)} to tune on ({MIN_TUNE_PROMPTS} needed), "
+            f"{base['relevant']} relevant injected ({MIN_RELEVANT} needed)"
+        )
+        return out
+    floor = (1 - MAX_LOSS_SHARE) * base["relevant"]
+    feasible = sorted(
+        ((c["noise"], -c["relevant"], k0 - k), k, c)
+        for k in range(1, k0 + 1)
+        for c in [at(tune, k)]
+        if c["relevant"] >= floor
+    )
+    _, k1, c1 = feasible[0]
+    out["optimum"] = row(k1, c1)
+    if k1 == k0:
+        out["verdict"] = "the current k is already the best of the values that can be replayed"
+        return out
+
+    def holds(k: int) -> bool:
+        h0, h1 = at(hold, k0), at(hold, k)
+        lost = h0["relevant"] - h1["relevant"]
+        return lost <= max(1, int(MAX_LOSS_SHARE * h0["relevant"])) and better(h1, h0)
+
+    # Damping, as in the joint replay: the best k from here to halfway, else the nearest that
+    # improves; the first that also holds on the held-out prompts moves.
+    half = _toward(k0, k1, 1)
+    inside = sorted(
+        ((c["noise"], -c["relevant"]), k, c)
+        for k in range(int(half), k0)
+        for c in [at(tune, k)]
+        if c["relevant"] >= floor and better(c, base)
+    )
+    nearest = sorted((f for f in feasible if better(f[2], base)), key=lambda f: f[0][2])
+    for _, k, c in [*inside, *nearest]:
+        if holds(k):
+            out["move"] = row(k, c)
+            out["move_holdout"] = row(k, at(hold, k))
+            out["verdict"] = "move to the optimum" if k == k1 else "move part of the way"
+            return out
+    out["verdict"] = "no smaller k that improves on the tuning prompts held on the held-out ones"
+    return out
+
+
 def report(days: float | None) -> dict:
     verdicts = _read_jsonl(garden_dir() / "verdicts.jsonl")
     V = {v["pair_id"]: v["verdict"] for v in verdicts}
     V_cycle = {v["pair_id"]: v.get("cycle", "") for v in verdicts}
     rows = log_rows(days)
     Pa = {k: r for k, r in pairs(rows).items() if k in V}
+    # Prompts the filter never scored, from the transcripts: memware's own picks reached them.
+    Tp = unfiltered(days, answered_ids(days))
+    Ta = {r["pair_id"]: r for rs in Tp.values() for r in rs if r["pair_id"] in V}
     rel = relevance_settings()
     by = collections.defaultdict(collections.Counter)
-    for k, r in Pa.items():
+    for k, r in (Pa | Ta).items():
         by[group(r)][V[k]] += 1
-    alone = by["kept"] + by["dropped"]
+    alone = by["kept"] + by["dropped"] + by["injected"]
     filt = by["kept"] + by["added"]
     out: dict = {
-        "labeled_pairs_in_window": len(Pa),
+        "labeled_pairs_in_window": len(Pa) + len(Ta),
+        "sources": {"log": len(Pa), "transcripts": len(Ta)},
         "groups": {g: dict(c) | {"precision": _prec(c)} for g, c in by.items()},
         "memware_alone": dict(alone) | {"precision": _prec(alone)},
         "with_filter": dict(filt) | {"precision": _prec(filt)},
         "misses": dict(by["passed"]),
     }
-    out["replay"] = replay(days, V, V_cycle, rel) if rel["mode"] != "off" else {}
+    out["replay"] = (
+        replay(days, V, V_cycle, rel) if rel["mode"] != "off" else replay_k(Tp, V, rel["k"])
+    )
 
     # Beliefs the hook keeps injecting as noise.
     inj = collections.defaultdict(collections.Counter)
@@ -605,6 +803,9 @@ def report(days: float | None) -> dict:
     for k, r in Pa.items():
         if r["today"]:
             rule[r["belief_id"]][V[k]] += 1
+    for k, r in Ta.items():  # these reached the prompt, and were memware's own picks
+        inj[r["belief_id"]][V[k]] += 1
+        rule[r["belief_id"]][V[k]] += 1
 
     # How often the filter itself chose each belief: an offender it already drops matters less now.
     by_filter = collections.Counter(
@@ -664,6 +865,29 @@ def propose(rep: dict, rel: dict, h: dict) -> list[dict]:
         )
     if rel["mode"] == "filter" and not props and rp.get("verdict"):
         props.append({"note": rp["verdict"]})
+    if rel["mode"] == "off":
+        if "move" in rp:
+            mv, cur = rp["move"], rp["current"]
+            props.append(
+                {
+                    "set": "inject.k",
+                    "from": cur["k"],
+                    "to": mv["k"],
+                    "why": f"on {rp['tune']} prompts: {cur['relevant']} -> {mv['relevant']} "
+                    f"relevant, {cur['noise']} -> {mv['noise']} noise; held on {rp['holdout']} "
+                    "held-out prompts",
+                }
+            )
+        elif rp.get("verdict"):
+            props.append({"note": rp["verdict"]})
+        props.append(
+            {
+                "note": "relevance.mode is off, so the threshold and pool are not tuned: the "
+                "injected pairs carry no scores. A larger inject.k cannot be measured either, "
+                "since the facts past k never reached a prompt. Shadow mode logs scores for the "
+                "whole pool; that is what tunes them."
+            }
+        )
 
     timeouts, n_cur = h["timeouts_current_mode"], h["prompts_current_mode"]
     if (
@@ -711,6 +935,8 @@ def record(rep: dict, h: dict, new_verdicts: int) -> None:
         "cost_usd": h["cost_usd"],
         "new_verdicts": new_verdicts,
         "labeled_pairs_in_window": rep["labeled_pairs_in_window"],
+        "sources": rep["sources"],
+        "transcripts": h["transcripts"],
         "memware_alone": rep["memware_alone"],
         "with_filter": rep["with_filter"],
         "misses": rep["misses"],
@@ -743,6 +969,7 @@ def main(argv=None) -> int:
     s.add_argument("--days", type=float, default=None)
     s.add_argument("--record", action="store_true")
     a = ap.parse_args(argv)
+    _INJECTED.clear()  # the transcripts are read once per run, never carried across runs
 
     if a.cmd == "health":
         res = health(a.days)

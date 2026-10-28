@@ -110,3 +110,11 @@ samples recent pairs, including candidates the filter passed over, has them labe
 scores the filter against memware's own picks, and proposes one setting change by written rules.
 It keeps only pair ids and verdicts under `<home>/labels/garden/`, and deletes the batches that
 hold prompt text.
+
+You don't need shadow mode to measure what is injected today. Claude Code records the prompt
+hook's block in each session transcript, and `memware injections` reads it back: every fact that
+reached a prompt a person typed, matched to its belief. `garden` labels those pairs in any mode,
+so with the filter off it still measures memware's own picks, finds the beliefs that keep
+arriving as noise, and can lower `inject.k`. Those pairs carry no score, so the threshold and the
+pool still need shadow mode's log, and so does a larger `k`: the facts past it never reached a
+prompt. The Hermes provider's injections are not in a Claude Code transcript and are not read.
