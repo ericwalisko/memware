@@ -314,6 +314,21 @@ def test_a_person_is_anyone_derive_is_not():
         ("memware", "ruff version", "0.16.5", None),  # a version of something else
         ("memware", "python version", "3.11", None),
         ("ruff", "version", "0.16.5", None),  # not about the project
+        # an install location between the name and the noun keeps it the package's own
+        ("memware", "uv tool version", "0.4.0", (v.CONTRADICTED, "0.4.0")),
+        ("memware", "uv version", "0.4.0", None),  # an installer alone is its own version
+        ("memware", "plugin version", "0.1.0", None),  # the Hermes plugin's own version
+        # a place or a time after the noun keeps it the package's own
+        ("memware", "version in hermes pypi", "0.5.0", (v.CONTRADICTED, "0.5.0")),
+        ("memware", "version before update", "0.4.0", (v.CONTRADICTED, "0.4.0")),
+        ("memware", "release notes", "0.5.0", None),  # not a place or a time
+        ("memware", "version floor in hermes", "0.5.0", None),  # a qualifier
+        ("memware", "oldest supported version", "0.5.0", None),  # a policy
+        ("memware", "next version", "0.7.0", None),  # a plan
+        # a note in parentheses after the version
+        ("memware", "installed version", "0.5.0 (uv tool)", (v.CONTRADICTED, "0.5.0")),
+        ("memware", "installed version", "0.6.1 (uv tool)", None),
+        ("memware", "installed version", "0.5.0 and 0.6.1", None),
     ],
 )
 def test_manifest_rule(subject, relation, value, want):
