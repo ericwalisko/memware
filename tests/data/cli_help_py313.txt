@@ -16,6 +16,8 @@ positional arguments:
     recall       search turns and beliefs; pass several phrasings to fuse them
     context      print the beliefs a prompt names, less the stale ones (hook-
                  friendly)
+    injections   what the prompt hook injected, read back from the transcripts
+                 (for garden)
     notice       print what `memware setup` has not asked about yet (the
                  plugin shows it at session start)
     digest       print this project's recent sessions and beliefs (the
@@ -196,6 +198,21 @@ options:
   -h, --help   show this help message and exit
   -k K
   --from-hook
+===== memware injections --help =====
+usage: memware injections [-h] [--days N] [--transcript-src DIR] [--jsonl]
+
+what the prompt hook injected, read back from the transcripts (for garden)
+
+options:
+  -h, --help            show this help message and exit
+  --days N              only injections this recent (default: None)
+  --transcript-src DIR  transcript tree to read (default:
+                        backup.transcript_src) (default: None)
+  --jsonl               one JSON line per injected fact, with its text
+                        (default: False)
+
+Counts only unless --jsonl, whose lines hold prompt and fact text. Interactive
+sessions only; what memware keeps out of its store is left out here too.
 ===== memware notice --help =====
 usage: memware notice [-h] [--from-hook]
 
