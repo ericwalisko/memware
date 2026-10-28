@@ -116,6 +116,11 @@ def _print_stats(r: dict[str, Any]) -> None:
             ("derive state file", d["state_file"]),
             ("derive runs", f"{d['runs']:,}"),
             ("derive last run", _when(d["last_run"], d["last_run_age_hours"], "never run")),
+            (
+                "derive last failure",
+                _when(d["last_failure"], d["last_failure_age_hours"], "none since the last run")
+                + (f", {d['last_error']}" if d["last_failure"] and d["last_error"] else ""),
+            ),
             ("derive watermark", f"{d['watermark']:,}"),
             ("latest turn id", f"{d['max_turn_id']:,}"),
             ("turns not yet derived", f"{d['turns_pending']:,}"),

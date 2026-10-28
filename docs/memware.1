@@ -434,6 +434,22 @@ that runs in the session adds its transcript to
 .IR <home>/no-capture.txt ,
 which every sync and backup honours; a session that runs no memware hook cannot be recognised.
 .TP
+.B MEMWARE_HOOKS_OFF
+Set to
+.B 1
+by
+.B memware derive
+in the environment of the
+.B claude \-p
+it spawns. Every hook-shaped invocation
+.RB ( \-\-from\-hook ,
+.BR \-\-auto ,
+.BR \-\-if\-stale ,
+a bare
+.BR sync )
+then exits 0 and does nothing, so memware's hooks in that child start no derive, sync or backup
+and inject nothing. A command a person types is unaffected.
+.TP
 .B MEMWARE_IGNORE_MARKERS
 Content signatures, separated by newlines or
 .BR : ;

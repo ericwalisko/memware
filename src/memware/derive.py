@@ -37,7 +37,12 @@ turn, so switching the setting later changes what the next run reads, not what e
 The watermark (the highest turn id considered) lives beside the database in
 ``<db>.derive.json``, so a scratch database keeps its own state and can never advance the
 live one. Runs are incremental and idempotent, which is what makes ``--if-stale`` safe to call
-from a session hook: run it whenever the machine is on, it does the right amount of work.
+from a session hook: run it whenever the machine is on, it does the right amount of work. A
+failed ``--apply`` run leaves the watermark and ``last_run`` alone but records
+``last_failure``, and a throttled run (``--if-stale``) waits :data:`FAILED_RUN_BACKOFF_HOURS`
+after one rather than retrying at every session start. The ``claude -p`` the default provider
+spawns runs with ``MEMWARE_HOOKS_OFF`` and ``MEMWARE_NO_CAPTURE``, so memware's own hooks in
+that child start nothing (:data:`memware.ingest.HOOKS_OFF_ENV`).
 
 Without ``--apply`` a run is a dry run, and a dry run is not offline: it sends every excerpt to
 the provider and skips only the ledger write and the watermark. ``--plan`` is the view that
@@ -53,6 +58,7 @@ usage limit) — nothing written, watermark untouched, try again later.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -69,6 +75,7 @@ from typing import Any
 from memware import __version__
 from memware.config import get_dotted, load_config, memware_home
 from memware.fsperm import private_dir
+from memware.ingest import HOOKS_OFF_ENV, NO_CAPTURE_ENV
 from memware.instruction import instruction_shaped
 from memware.ledger import Policy, assert_belief
 from memware.store import Store, age_hours
@@ -453,6 +460,14 @@ class ClaudeCodeProvider:
         # spawn). It is not on Haiku 5.5, which thinks adaptively and ignores it: there the
         # --effort level below is what bounds the thinking, so both are set.
         env["MAX_THINKING_TOKENS"] = "0"
+        # The child loads the user's plugins, memware's among them. Without these its hooks
+        # would start a derive of their own (a run refused on a usage limit then restarted
+        # itself through every child, one spawn every few seconds), sync, back up, inject
+        # context into this prompt and send it to the relevance filter. HOOKS_OFF makes every
+        # hook command a no-op; NO_CAPTURE keeps an older memware on the child's PATH out of
+        # the store and off the filter.
+        env[HOOKS_OFF_ENV] = "1"
+        env[NO_CAPTURE_ENV] = "1"
         # A tool-less, project-free call. Measured without these: Haiku reached for a tool on
         # a third of the batches (stop_reason tool_use, rc 1) and answered another third in
         # prose about "the project", because the CLI had loaded the cwd's CLAUDE.md and memory
@@ -882,6 +897,42 @@ def last_run_age_hours(state: dict[str, Any]) -> float | None:
     return age_hours(state.get("last_run"))
 
 
+FAILED_RUN_BACKOFF_HOURS = 1.0
+"""How long a throttled run (``--if-stale``, which the plugin's session-start hook passes) waits
+after a failed one. A failure saves no ``last_run``, so without it every session start would
+retry at once; a usage limit refuses every retry until it resets, and each retry is a
+``claude -p`` spawn. Never longer than the ``--if-stale`` window the caller asked for."""
+
+
+def last_failure_age_hours(state: dict[str, Any]) -> float | None:
+    return age_hours(state.get("last_failure"))
+
+
+def _record_success(sp: Path, state: dict[str, Any], head: int) -> None:
+    """Advance the watermark to ``head``, count the run and clear any recorded failure."""
+    state.update(
+        watermark=head,
+        runs=state["runs"] + 1,
+        last_run=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    )
+    state.pop("last_failure", None)
+    state.pop("last_error", None)
+    save_state(sp, state)
+
+
+def _record_failure(sp: Path, error: BaseException) -> None:
+    """Note a failed ``--apply`` run in the state file: when, and the error's class only (a
+    provider's message can quote the model's output). Watermark, ``runs`` and ``last_run`` are
+    left as they were. A state file that cannot be written loses only the backoff."""
+    state = load_state(sp)
+    state.update(
+        last_failure=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        last_error=type(error).__name__,
+    )
+    with contextlib.suppress(OSError):
+        save_state(sp, state)
+
+
 ROLES = ("user", "assistant")
 
 SOURCES = ("interactive", "all")
@@ -985,6 +1036,7 @@ def status(conn: sqlite3.Connection, db_path: str | os.PathLike[str]) -> dict[st
     sources = str(get_dotted(cfg, "derive.sources") or SOURCES[0])  # a run refuses a bad value
     pending = turns_since(conn, watermark, "all" if sources == "all" else "interactive")
     age = last_run_age_hours(state)
+    failed = last_failure_age_hours(state)
     return {
         "auto": bool(get_dotted(cfg, "derive.auto")),
         "sources": sources,
@@ -992,6 +1044,9 @@ def status(conn: sqlite3.Connection, db_path: str | os.PathLike[str]) -> dict[st
         "runs": int(state["runs"]),
         "last_run": state["last_run"],
         "last_run_age_hours": None if age is None else round(age, 1),
+        "last_failure": state.get("last_failure"),
+        "last_failure_age_hours": None if failed is None else round(failed, 1),
+        "last_error": state.get("last_error"),
         "watermark": watermark,
         "max_turn_id": max_turn_id(conn),
         "turns_pending": int(pending),
@@ -1123,6 +1178,14 @@ def run(a: argparse.Namespace) -> int:
         if age is not None and age < a.if_stale:
             say(f"skipped: last run {age:.1f}h ago (< {a.if_stale}h)")
             return EXIT_OK
+        failed = last_failure_age_hours(state)
+        backoff = min(FAILED_RUN_BACKOFF_HOURS, a.if_stale)
+        if failed is not None and failed < backoff:
+            say(
+                f"skipped: the last attempt failed {failed * 60:.0f} min ago "
+                f"({state.get('last_error') or 'error'}); retrying after {backoff:g}h"
+            )
+            return EXIT_OK
 
     if a.plan:
         return plan(a, db, sp, state)
@@ -1133,6 +1196,12 @@ def run(a: argparse.Namespace) -> int:
         return EXIT_OK
     try:
         return _run_locked(a, db, sp, state, say)
+    except (ProviderConfigError, FileNotFoundError):
+        raise  # refused before any call: nothing to back off from, and it repeats for free
+    except Exception as e:
+        if a.apply:
+            _record_failure(sp, e)
+        raise
     finally:
         lock.release()
 
@@ -1238,12 +1307,7 @@ def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any],
         )
         if not sessions:
             if a.apply:
-                state.update(
-                    watermark=head,
-                    runs=state["runs"] + 1,
-                    last_run=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                )
-                save_state(sp, state)
+                _record_success(sp, state, head)
             return EXIT_OK
         say(f"provider    : {provider.describe()}")
         say(
@@ -1276,12 +1340,7 @@ def _run_locked(a: argparse.Namespace, db: str, sp: Path, state: dict[str, Any],
             say(f"      valid_from {c['valid_from'] or '(now)'}  source {c['source']}")
 
     if a.apply:
-        state.update(
-            watermark=head,
-            runs=state["runs"] + 1,
-            last_run=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        )
-        save_state(sp, state)
+        _record_success(sp, state, head)
 
     u = provider.usage
     say(

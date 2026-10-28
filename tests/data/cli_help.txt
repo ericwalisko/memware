@@ -73,7 +73,8 @@ Environment:
   MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
   MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
   MEMWARE_NO_CAPTURE=1  never index or mirror this session (needs a memware hook to run in it)
-  NO_COLOR            honoured by construction — memware emits no colour at all
+  MEMWARE_HOOKS_OFF=1   the plugin's hook commands do nothing (set by derive in its claude -p)
+  NO_COLOR           honoured by construction — memware emits no colour at all
 
 Files:
   <home>/config.json          configuration (see `memware config`)

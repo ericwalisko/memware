@@ -114,6 +114,21 @@ def capture_disabled() -> bool:
     return os.environ.get(NO_CAPTURE_ENV, "").strip().lower() in ("1", "true", "yes")
 
 
+HOOKS_OFF_ENV = "MEMWARE_HOOKS_OFF"
+"""Set to 1 by memware in the environment of an agent it spawns itself: ``derive``'s
+``claude -p``. That child loads the user's plugins, memware's among them, and its hooks would
+otherwise start a derive of their own (a run refused on a usage limit then restarts itself
+through every child it spawns), sync and back up, and inject context into the extraction
+prompt. Every hook-shaped invocation (``--from-hook``, ``--auto``, ``--if-stale``, the bare
+catch-up ``sync``) exits 0 without doing anything under it; a command a person types still
+runs. :data:`NO_CAPTURE_ENV` is set beside it, so an older ``memware`` on the child's PATH at
+least keeps the child out of the store and off the relevance filter."""
+
+
+def hooks_off() -> bool:
+    return os.environ.get(HOOKS_OFF_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
 def no_capture_file() -> Path:
     """``<memware home>/no-capture.txt``: one resolved transcript path per line."""
     from memware.config import memware_home
@@ -698,6 +713,7 @@ from memware.ingest import claude_code as _cc  # noqa: E402
 from memware.ingest import generic as _generic  # noqa: E402
 
 __all__ = [
+    "HOOKS_OFF_ENV",
     "NO_CAPTURE_ENV",
     "Parser",
     "Pruned",
@@ -707,6 +723,7 @@ __all__ = [
     "capture_exclude_patterns",
     "default_skip_markers",
     "file_contains",
+    "hooks_off",
     "ignore_markers_file",
     "is_excluded",
     "is_no_capture",

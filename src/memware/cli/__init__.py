@@ -36,6 +36,7 @@ from memware.cli import setup as setup_cmd
 from memware.cli import stats as stats_cmd
 from memware.cli import sync as sync_cmd
 from memware.cli._common import _HelpFormatter
+from memware.ingest import hooks_off
 
 _DESCRIPTION = (
     "Memory for AI agents that only remembers the latest truth — a local SQLite belief "
@@ -61,7 +62,8 @@ Environment:
   MEMWARE_HOME        config/store dir (default: ~/.memware, else $XDG_DATA_HOME/memware)
   MEMWARE_ASCII=1     ASCII-only output (also on when the locale is not UTF-8); same as --ascii
   MEMWARE_NO_CAPTURE=1  never index or mirror this session (needs a memware hook to run in it)
-  NO_COLOR            honoured by construction — memware emits no colour at all
+  MEMWARE_HOOKS_OFF=1   the plugin's hook commands do nothing (set by derive in its claude -p)
+  NO_COLOR           honoured by construction — memware emits no colour at all
 
 Files:
   <home>/config.json          configuration (see `memware config`)
@@ -144,10 +146,26 @@ def _utf8_stdio() -> None:
             stream.reconfigure(encoding="utf-8")
 
 
+def _hook_shaped(a: argparse.Namespace) -> bool:
+    """An invocation of the kind the plugin's hooks (or a scheduler) make, never the kind a
+    person types: a payload on stdin (``--from-hook``), a throttle (``--if-stale``), the
+    config-gated ``derive --auto``, or the bare catch-up ``sync``."""
+    if getattr(a, "from_hook", False) or getattr(a, "auto", False):
+        return True
+    if getattr(a, "if_stale", None) is not None:
+        return True
+    return a.cmd == "sync" and not a.paths
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.platform == "win32":
         _utf8_stdio()
     a = build_parser().parse_args(argv)
+    if hooks_off() and _hook_shaped(a):
+        # memware spawned this agent itself (derive's claude -p): its hooks must not start a
+        # derive, sync, back up or inject. Checked before a payload is read, so nothing is
+        # recorded either. See memware.ingest.HOOKS_OFF_ENV.
+        return 0
     if getattr(a, "ascii", False):
         os.environ["MEMWARE_ASCII"] = "1"  # honoured by memware.term for glyph fallback
     return int(a.fn(a))
