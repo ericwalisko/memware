@@ -1,6 +1,6 @@
 ---
 name: garden
-description: Measure and tune what memware injects at prompt time, then tend the belief ledger. Blind-label recent prompt-fact pairs from the relevance log, score the relevance filter (relevant facts kept, dropped, added, missed), replay past prompts to find the jointly best threshold, per-prompt cap and pool, move toward it once held-out prompts confirm it, and propose fixes to the beliefs that keep arriving as noise, plus stale, orphaned, duplicate and vaguely-named ones. Use when asked to garden, tune, calibrate or audit memware, Jev or the relevance filter, check whether injected memories are relevant, clean up beliefs, or on a regular (about weekly) upkeep run.
+description: Measure and tune what memware injects at prompt time, then tend the belief ledger. Blind-label recent prompt-fact pairs, read back from the transcripts in every relevance mode and from the relevance log when the filter is on, score memware's own picks and the filter (relevant facts kept, dropped, added, missed), replay past prompts to find the best per-prompt cap (and, with the filter's scores, the jointly best threshold and pool), move toward it once held-out prompts confirm it, and propose fixes to the beliefs that keep arriving as noise, plus stale, orphaned, duplicate and vaguely-named ones. Use when asked to garden, tune, calibrate or audit memware, Jev or the relevance filter, check whether injected memories are relevant, clean up beliefs, or on a regular (about weekly) upkeep run.
 ---
 
 # memware garden
@@ -11,28 +11,41 @@ One cycle has two parts:
   prompts, and moves toward them.
 - **Part B** tends the ledger the hook injects from.
 
-Part A needs the relevance filter in `shadow` or `filter` mode, because only those modes log the
-pairs. With `relevance.mode off`, do Part B alone, and say that turning on `shadow` is how to
-measure injection. Shadow sends prompts to TypeSafe
+Part A runs in every `relevance.mode`. It reads prompt-fact pairs from two sources:
+
+- **The transcripts**, through `memware injections`: Claude Code records what the prompt hook
+  added to each prompt, so every fact that reached a prompt a person typed can be labeled after
+  the fact. Nothing new is stored and nothing leaves the machine except to the labeling agents,
+  which run on the same Claude account as the session that wrote the prompts. Headless sessions
+  and anything memware keeps out of its store are left out. These pairs carry no score.
+- **The relevance log**, in `shadow` or `filter` mode: every candidate in the pool with the
+  filter's score. A prompt in both is read from the log.
+
+What each can tune differs. With the filter `off`, the cycle measures memware's own picks, finds
+the beliefs that keep arriving as noise, and can lower `inject.k`. It can't tune the threshold or
+the pool, and it can't measure a larger `k`, because the facts past `k` never reached a prompt.
+`garden.py` says so in its proposals and never proposes a threshold from these pairs. Shadow mode
+logs scores for the whole pool, which is what tunes the rest. Shadow sends prompts to TypeSafe
 ([README](../../../../README.md#optional-a-relevance-filter-for-prompt-time-injection)), so leave
 that choice to the user.
 
 `garden.py` in this skill's directory does every step that should give the same answer each
 time. Run it with `python3`. It needs only the standard library and finds the memware home the
-way memware does (`MEMWARE_HOME`, else `~/.memware`). It prints counts and never prompt or fact
-text.
+way memware does (`MEMWARE_HOME`, else `~/.memware`). It runs the `memware` CLI on the `PATH` (or
+`$MEMWARE_CLI`) to read the transcripts. It prints counts and never prompt or fact text.
 
 ## Ground rules
 
-- **Prompts are private.** The log and the batches hold the user's prompts. Show the user
+- **Prompts are private.** The transcripts, the log and the batches hold the user's prompts. Show the user
   aggregates and belief text (the belief ledger is theirs to see), never another prompt's text.
   Labeling agents report counts only.
 - **Nothing in the ledger changes without the user's yes.** Every retraction and re-assertion is
   proposed in one table and applied only after approval. Use dry runs first
   (`memware beliefs retract … ` without `--apply`).
-- **Settings move only on evidence that held.** `garden.py` may move the threshold, `k` and the
-  pool together, but only toward an optimum that also wins on held-out prompts, and only as far as
-  the smallest step that improves. Ask before `memware config`. Never change `relevance.model`
+- **Settings move only on evidence that held.** With the filter's scores, `garden.py` may move
+  the threshold, `k` and the pool together; with the filter off, only `k`, and only down. Either
+  way it moves only toward an optimum that also wins on held-out prompts, and only as far as the
+  smallest step that improves. Ask before `memware config`. Never change `relevance.model`
   without a cycle in `shadow` on the new model first, because the scores differ between versions.
 - **Cost:** two blind passes over at most 600 pairs, plus a third pass on the pairs where they
   disagree. That is about 300–400k tokens a cycle. Skip the cycle when there is not enough new
@@ -42,21 +55,28 @@ text.
 
 **A1. Health.** Run `python3 garden.py health --days 14`. Report the following:
 
-- **Reliability:** prompts, the fallback rate by cause, and p50/p95 latency.
-- **Cost:** the spend over the window.
-- **Block size:** facts per prompt from memware alone and with the filter.
-- **Emptied blocks:** prompts where the filter dropped everything.
-- **Cap-bound prompts:** prompts where more facts cleared the threshold than `inject.k` let in.
+- **Transcripts:** the `transcripts` block: prompts the filter never scored, facts per prompt,
+  `full_blocks` (prompts whose block reached `inject.k`), and `lines_unmatched` (injected lines
+  no belief renders to any more, such as a pruned belief). If `read` is false, say why (`why`):
+  usually the `memware` CLI is missing or older than this skill.
+- **Reliability** (filter on): prompts, the fallback rate by cause, and p50/p95 latency.
+- **Cost** (filter on): the spend over the window.
+- **Block size** (filter on): facts per prompt from memware alone and with the filter.
+- **Emptied blocks** (filter on): prompts where the filter dropped everything.
+- **Cap-bound prompts** (filter on): prompts where more facts cleared the threshold than
+  `inject.k` let in.
 
-If `prompts_with_unlabeled_pairs` is under 150 and the last cycle was under 7 days ago, stop
-here and do Part B only.
+If `prompts_with_unlabeled_pairs` (both sources) is under 150 and the last cycle was under 7 days
+ago, stop here and do Part B only.
 
 **A2. Sample.** Run `python3 garden.py sample --work <home>/labels/work-<YYYY-MM-DD> --days 14`.
 
-- **What it picks:** prompts that aren't yet complete for the replay. For each one it takes
-  every pair that any setting on the grid could inject (threshold 0.20–0.60, `k` 3–10, pool 10
-  up to the logged size), memware's own picks, and one candidate below the grid, so misses show.
-  A prompt counts in the replay only once all of these are labeled.
+- **What it picks:** prompts that aren't yet complete for the replay. For a logged prompt it
+  takes every pair that any setting on the grid could inject (threshold 0.20–0.60, `k` 3–10,
+  pool 10 up to the logged size), memware's own picks, and one candidate below the grid, so
+  misses show. For a prompt only the transcripts hold, it takes every fact that reached it. A
+  prompt counts in the replay only once all of these are labeled. `prompts_from_log` and
+  `prompts_from_transcripts` say how the batch splits.
 - **What it writes:** blind batches of at most 600 pairs, and a hidden `key.jsonl`. Labelers
   never see `key.jsonl`, and they never see a score.
 - **Where:** `<home>/labels/`, so `memware nuke` removes it.
@@ -87,8 +107,11 @@ Show the user:
 
 | | facts | relevant | noise | precision |
 |---|---|---|---|---|
-| memware alone (`kept` + `dropped`) | | | | |
+| memware alone (`kept` + `dropped` + `injected`) | | | | |
 | with the filter (`kept` + `added`) | | | | |
+
+`injected` is the transcripts' group: prompts the filter never scored. With the filter off it is
+the whole of the first row, and the second row is empty. `sources` gives the pairs from each.
 
 Add these, then the proposals:
 
@@ -107,7 +130,13 @@ Add these, then the proposals:
 its own `prefetch_k` in `~/.hermes/memware.json`, so offer to set that to the same number. The
 next cycle's history line records the new settings beside the numbers they produced.
 
-How the replay decides, all in `replay()` and `propose()` in `garden.py`:
+With the filter off, the replay is `replay_k()`: one axis, `inject.k`, downward only. The hook
+injected memware's first `k` facts in rank order, so a smaller `k` is the head of each block and
+can be recomputed; a prompt counts only when every line of its block matched a belief. It uses
+the same objective, held-out third, damping and minimums as below. Its proposals end with a note
+naming what it can't tune; pass that on rather than proposing a threshold.
+
+How the joint replay decides, all in `replay()` and `propose()` in `garden.py`:
 
 - **The objective:** the least noise among settings that keep at least 99% of the relevant facts
   the current settings inject, and then the most relevant facts. The user chose this: lose
@@ -196,7 +225,7 @@ Budget: flag at most 30 rows, most harmful first. The ones injected most often c
 ## Finish
 
 Summarise for the user in a few lines:
-- the precision of memware alone against the filter, and the trend;
+- the precision of memware alone (and against the filter, when it is on), and the trend;
 - what changed: the setting, and the beliefs retracted or re-asserted;
 - what waits on them: proposals they declined or haven't decided;
 - when the next cycle is due.
