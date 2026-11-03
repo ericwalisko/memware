@@ -494,7 +494,13 @@ class ClaudeCodeProvider:
         except json.JSONDecodeError:
             d = {}
         text = str(d.get("result") or "") if isinstance(d, dict) else ""
-        blob = f"{text}\n{p.stderr or ''}\n{raw if not d else ''}"
+        failed = p.returncode != 0 or not isinstance(d, dict) or not d or bool(d.get("is_error"))
+        # A successful reply is the model's own words, and a belief about rate limits or usage
+        # limits would match _LIMIT and abort every run. Only stderr, or the output of a call
+        # that failed, can be a limit notice.
+        blob = p.stderr or ""
+        if failed:
+            blob += f"\n{text}\n{raw if not d else ''}"
         if _LIMIT.search(blob):
             raise ProviderUnavailable(f"claude reported a usage limit: {blob.strip()[:160]!r}")
         if p.returncode != 0 or (isinstance(d, dict) and d.get("is_error")):
