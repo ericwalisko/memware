@@ -490,6 +490,27 @@ def test_claude_code_usage_limit_exits_4(db, tmp_path, monkeypatch, capsys):
     assert not state.exists()
 
 
+def test_a_successful_reply_that_mentions_a_limit_is_not_a_usage_limit(
+    db, tmp_path, monkeypatch, capsys
+):
+    """The model's own words about rate or usage limits are data, not a limit notice. Matching
+    them aborted every run before the watermark moved (derive stalled from 2026-10-28)."""
+    about_limits = {
+        **KEEP_ENGINE,
+        "subject": "the api",
+        "relation": "rate limit and usage limit policy",
+        "value": "too many requests returns 429",
+    }
+    envelope = json.dumps(
+        {"type": "result", "is_error": False, "result": json.dumps([about_limits])}
+    )
+    fake_claude(tmp_path, monkeypatch, envelope)
+    state = tmp_path / "s.json"
+    assert derive_once(db, tmp_path) == 0
+    assert "claude reported a usage limit" not in capsys.readouterr().err
+    assert state.exists(), "the watermark is saved"
+
+
 def test_missing_claude_binary_is_a_config_error(db, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PATH", str(tmp_path))  # nothing on it
     rc = main(["--db", db, "derive"])
