@@ -23,19 +23,24 @@ word of the relation or a whole word of the subject. An identifier in the subjec
 counts only when the identifier names a setting (``export-schedule``, ``min_coverage``,
 ``max_rows``): see :func:`veto`. Past that:
 
-* **measurement**: a bare quantity under a relation that is exactly progress, coverage or null
-  rate; or one that is: a count, total or "number of" over an accumulating noun (rows, records,
-  tests, files, lines, commits, duplicates, accounts, users, downloads); a magnitude word or a
-  comma-grouped number of 1,000 or more beside such a noun; an "N of M" figure over one, in the
-  relation or as the subject's noun ("appointment rows"), or over a completion word
-  ("backfilled", "passed"); or a count of cards, tickets, issues or PRs ("open card count | 305",
-  "blocked cards | 3"). A requirement word in the relation ("must pass", "at least") makes the
-  quantity a rule.
+* **measurement**: a bare quantity (a count may be written as a word, "six") under a relation
+  that is exactly progress, coverage or null rate; a percentage under a rate that observes
+  (error, failure, success, fill, hit, miss, match, pass, churn, bounce, conversion, crash, drop
+  or acceptance rate), never one someone sets ("tax rate", "dropout rate"); or one that is: a
+  count, total or "number of" over an accumulating noun (rows, records, tests, files, lines,
+  commits, duplicates, accounts, users, downloads); a magnitude word or a comma-grouped number
+  of 1,000 or more beside such a noun; an "N of M" figure over one, in the relation or as the
+  subject's noun ("appointment rows"), or over a completion word ("backfilled", "passed"); or a
+  count of cards, tickets, issues or PRs ("open card count | 305", "blocked cards | 3", "decision
+  cards in queue | blocked count | six", where the relation holds only a count word and status
+  words). A requirement word in the relation ("must pass", "at least") makes the quantity a rule.
 * **moving version**: a version string under a version noun that the subject or relation calls
   current, latest, built, installed, deployed, released, or on main.
 * **status**: a relation that is exactly status, state or progress, whose value is a status word
-  (open, merged, review, blocked, failing, connected, …) or whose subject names an instance (an
-  id such as ``#12`` or ``t_cd03d14d``, or ending in run, scan, build, job, PR, issue or card);
+  (open, merged, review, code review, blocked, paused, on hold, to do, failing, connected, …) or
+  whose subject names an instance (an id such as ``#12`` or ``t_cd03d14d``, a tracker key in
+  capitals such as ``ABC-12`` that is not a standard like ``UTF-8``, or ending in run, scan,
+  build, job, PR, issue or card);
   a relation ending in status ("ci status"), whose value is a status word or where an instance
   id is named (a noun is not enough; a compound "… state" is a design term); or a relation that
   names one finding (known issue, open issue, must-fix issue, should-fix issue, blocker), unless
@@ -53,7 +58,14 @@ exemptions and the manifest; ``classify``, derive's gate, ``memware beliefs --st
 Two rules need the project a session runs in, and apply to a belief whose subject names the
 package that declares the version (``pyproject.toml``, ``package.json``, ``Cargo.toml``):
 
-* **contradicted**: a belief about that package's own version whose value is not the declared one.
+* **contradicted**: a belief about that package's own version whose value (a version, with or
+  without a note in parentheses) is not the declared one. It is the package's own version when
+  the only words besides its name are version words (``built``, ``wheel``, ``on main``, …), or
+  when the words between the name and the version noun are those or an install location ("uv
+  tool", "hermes venv") and what follows the noun is a place or a time ("version in hermes
+  pypi", "version before update"). Another tool's version ("ruff version", "uv version"), the
+  Hermes plugin's own ("plugin version"), and a qualifier, policy or plan ("version floor",
+  "oldest supported version", "next version") are never compared.
 * **older version**: a belief that names an older version of the package beside its name
   ("memware 0.4.0 known issue") is history once the declared version is newer.
 
@@ -152,6 +164,41 @@ COMPLETION_WORDS = wordset(
     "passed failed done completed complete processed migrated backfilled removed deleted imported indexed remaining succeeded synced"
 )
 EXACT_MEASURES = frozenset({"progress", "coverage", "null rate", "test coverage", "code coverage"})
+READING_RATES = wordset(
+    "error failure success fill hit miss match pass churn bounce conversion crash drop acceptance"
+)
+"""What a rate observes: a percentage under "error rate" or "cache hit rate" is a reading. A rate
+someone sets ("tax rate", "dropout rate", "sample rate") is not on the list."""
+_PERCENT = re.compile(r"^\s*(?:~|≈|about|around|roughly)?\s*\d+(?:\.\d+)?\s*%\s*$", re.I)
+NUMBER_WORDS = {
+    word: str(n)
+    for n, word in enumerate(
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+        ]
+    )
+}
+"""A count written as a word ("blocked cards | Six") reads as its numeral."""
 
 _VERSION = re.compile(r"^v?\d+(?:\.\d+){1,3}(?:[-+.]?[0-9a-z]+(?:\.[0-9a-z]+)*)?$", re.I)
 VERSION_NOUNS = frozenset({"version", "versions", "release", "tag"})
@@ -164,14 +211,28 @@ STATUS_VALUE_WORDS = wordset(
     """
     open opened closed merged unmerged review reviewing blocked failing failed passing passed
     archived done pending green red draft queued running cancelled canceled approved rejected
-    stale stuck waiting started complete completed progress connected disconnected
+    stale stuck waiting started complete completed progress connected disconnected paused
+    suspended backlog todo triaged wip hold
     """
 )
-_STATUS_FILLER = wordset("and but still now in not yet")
+_STATUS_FILLER = wordset("and but still now in not yet on")
+STATUS_PHRASES = {"code review": "review", "to do": "todo"}
+"""Two-word status values whose first word is no status word alone: "Code Review", "To Do"."""
 INSTANCE_NOUNS = wordset(
     "run runs scan scans build builds job jobs pr prs issue issues card cards ticket tickets mr"
 )
 _INSTANCE_ID = re.compile(r"#\d+\b|\bt_[0-9a-f]{6,}\b", re.I)
+_STANDARD_PREFIXES = (
+    "UTF|UCS|SHA|MD|ISO|IEC|IEEE|RFC|PEP|CVE|CWE|ECMA|ES|ANSI|NIST|FIPS|HTTP|TLS|SSL|IPV|AES|RSA"
+    "|CRC|BASE|PY|GPL|LGPL|AGPL|MPL|CC|BSD|USB|PCI|DDR|LTE|COVID"
+)
+_TICKET_KEY = re.compile(
+    rf"(?<![\w-])(?!(?:{_STANDARD_PREFIXES})-)[A-Z][A-Z0-9]{{1,9}}-\d+(?![\w.-])"
+)
+"""A tracker key written in capitals (``DOCS-217``, ``ABC-12``), which names one ticket. Case is
+read as written: ``utf-8`` and ``x-86`` are not keys, and neither is a capitalised standard
+(``UTF-8``, ``SHA-256``, ``ISO-8601``, ``PEP-8``), a version (``PY-3.11``) or a one-letter
+prefix (``X-86``)."""
 _POINTER_LEADS = wordset("current currently active working")
 _POINTER_NOUNS = frozenset({"pr", "pull request", "mr", "merge request", "issue", "ticket", "card"})
 _POINTED_AT = re.compile(
@@ -318,7 +379,9 @@ class Test(NamedTuple):
 
 def measurement_test(subject: str, relation: str, value: str) -> Test:
     """A quantity that no qualifier or requirement word vetoes, under a relation that is exactly
-    progress, coverage or null rate, or a count, magnitude or N of M over what accumulates."""
+    progress, coverage or null rate, a percentage under a rate that observes, or a count,
+    magnitude or N of M over what accumulates."""
+    value = NUMBER_WORDS.get(value.strip().lower(), value)
     if not _QUANTITY.match(value.strip()):
         return Test(MEASUREMENT, False, "the value is not a bare quantity")
     v = veto(subject, relation)
@@ -332,6 +395,8 @@ def measurement_test(subject: str, relation: str, value: str) -> Test:
     joined = " ".join(rel)
     if joined in EXACT_MEASURES:
         return Test(MEASUREMENT, True, f"the relation is exactly '{joined}'")
+    if len(rel) >= 2 and rel[-1] == "rate" and rel[-2] in READING_RATES and _PERCENT.match(value):
+        return Test(MEASUREMENT, True, f"a percentage under '{joined}', a rate that observes")
     words = set(rel) | set(_tokens(value))
     counted_by = sorted(set(rel) & COUNT_WORDS) or (["number of"] if "number of" in joined else [])
     if counted_by and words & ACCUMULATING:
@@ -340,6 +405,11 @@ def measurement_test(subject: str, relation: str, value: str) -> Test:
     subject_tail = set(_tokens(subject)[-1:])
     if counted_by and (items := (set(rel) | subject_tail) & WORK_ITEMS):
         return Test(MEASUREMENT, True, f"'{counted_by[0]}' over '{sorted(items)[0]}'")
+    queued = set(_tokens(subject)) & WORK_ITEM_PLURAL
+    if counted_by and queued and set(rel) <= COUNT_WORDS | STATUS_VALUE_WORDS:
+        # "decision cards in queue | blocked count": a count of the subject's cards by status,
+        # not of something they hold ("support tickets | priority level count")
+        return Test(MEASUREMENT, True, f"'{joined}' of '{sorted(queued)[0]}' in the subject")
     if rel and rel[-1] in WORK_ITEM_PLURAL and re.fullmatch(r"\d+", value.strip()):
         return Test(MEASUREMENT, True, f"a bare integer under '{rel[-1]}', a queue's length")
     if (magnitude := _MAGNITUDE.search(value)) and words & ACCUMULATING_PLURAL:
@@ -399,7 +469,10 @@ def is_moving_version(subject: str, relation: str, value: str) -> bool:
 
 
 def _status_value(value: str) -> bool:
-    words = _tokens(value)
+    joined = " ".join(_tokens(value))
+    for phrase, word in STATUS_PHRASES.items():
+        joined = re.sub(rf"\b{phrase}\b", word, joined)
+    words = joined.split()
     return (
         bool(words)
         and set(words) <= STATUS_VALUE_WORDS | _STATUS_FILLER
@@ -407,8 +480,12 @@ def _status_value(value: str) -> bool:
     )
 
 
+def _instance_id(text: str) -> re.Match[str] | None:
+    return _INSTANCE_ID.search(text) or _TICKET_KEY.search(text)
+
+
 def _instance(subject: str) -> str | None:
-    m = _INSTANCE_ID.search(subject)
+    m = _instance_id(subject)
     if m:
         return m.group(0)
     words = _tokens(subject)
@@ -506,13 +583,14 @@ def status_test(subject: str, relation: str, value: str) -> Test:
             False,
             f"'{joined}', but the value is not a status word and no instance is named",
         )
-    m = _INSTANCE_ID.search(f"{subject} {relation}")
+    m = _instance_id(f"{subject} {relation}")
     if m:
         return Test(STATUS, True, f"'{joined}' of an instance, '{m.group(0)}'")
     return Test(
         STATUS,
         False,
-        f"'{joined}', but the value is not a status word and no instance id (#N, t_…) is named",
+        f"'{joined}', but the value is not a status word and no instance id (#N, t_…, ABC-12)"
+        " is named",
     )
 
 
@@ -674,8 +752,73 @@ OWN_VERSION_WORDS = (
 it names something else ("memware ruff version", "memware python version")."""
 
 
+INSTALLERS = wordset("uv pipx pip conda brew homebrew hermes editable")
+INSTALL_NOUNS = wordset("tool venv env environment install installation")
+"""Where a package is installed: "uv tool", "hermes venv". An installer alone names its own
+version ("memware | uv version" is uv's), so it counts only before one of these nouns."""
+VERSION_CONTEXT = wordset("in on at from before after via under when as during for")
+"""How the words after a version noun may begin and still describe the package's own version in
+a place or at a time: "version in hermes pypi", "version before update"."""
+VERSION_POLICY = wordset(
+    """
+    supported support compatible compatibility tested requirement requirements constraint
+    constraints range spec specifier next planned upcoming future
+    """
+)
+"""Words that make a version a policy or a plan rather than a reading: "oldest supported
+version", "next version"."""
+_LEAD_VERSION = re.compile(
+    r"^\s*(v?\d+(?:\.\d+){1,3}(?:[-+.]?[0-9a-z]+(?:\.[0-9a-z]+)*)?)\s*(?:\([^()]*\))?\s*$", re.I
+)
+
+
 def _norm_version(v: str) -> str:
     return v.strip().lower().removeprefix("v")
+
+
+def _lead_version(value: str) -> str | None:
+    """The version a value states, alone or with a note in parentheses after it ("0.8.0 (the uv
+    tool copy)"), or None."""
+    m = _LEAD_VERSION.match(value)
+    return m.group(1) if m else None
+
+
+def _own_between(words: list[str]) -> bool:
+    """Whether the words between a package's name and a version noun keep the version the
+    package's own: words from :data:`OWN_VERSION_WORDS`, an install noun, or an installer before
+    an install noun ("uv tool"). Any other word names something else ("ruff", "python", "uv",
+    "plugin": the Hermes plugin carries its own version)."""
+    i = 0
+    while i < len(words):
+        if words[i] in OWN_VERSION_WORDS or words[i] in INSTALL_NOUNS:
+            i += 1
+        elif words[i] in INSTALLERS and i + 1 < len(words) and words[i + 1] in INSTALL_NOUNS:
+            i += 2
+        else:
+            return False
+    return True
+
+
+def _names_own_version(subject: str, relation: str, name: str) -> bool:
+    """Whether a version noun in ``subject relation`` is the package's own, past the words of
+    :data:`OWN_VERSION_WORDS`: no qualifier, requirement or policy word; the words between the
+    package's name and the first version noun pass :func:`_own_between`; and what follows the
+    noun, if anything, starts with a word of place or time (:data:`VERSION_CONTEXT`), so
+    "release notes" and "tag format" are not versions."""
+    tokens = _tokens(f"{subject} {relation}")
+    if set(tokens) & VERSION_POLICY or veto(subject, relation) or _REQUIREMENT.search(relation):
+        return False
+    noun_at = next((i for i, t in enumerate(tokens) if t in VERSION_NOUNS), None)
+    named = _tokens(name)
+    if noun_at is None or not named:
+        return False
+    starts = [i for i in range(noun_at) if tokens[i : i + len(named)] == named]
+    if not starts:
+        return False
+    after = tokens[noun_at + 1 :]
+    if after and after[0] not in VERSION_CONTEXT:
+        return False
+    return _own_between(tokens[starts[-1] + len(named) : noun_at])
 
 
 def manifest_rule(
@@ -694,13 +837,14 @@ def manifest_rule(
             if older_version(m.group(1), version):
                 return OLDER_VERSION, m.group(1)
     rest = _words(text) - _words(name)
+    stated = _lead_version(value)
     if (
         rest & VERSION_NOUNS
-        and rest <= OWN_VERSION_WORDS
-        and is_version(value)
-        and _norm_version(value) != _norm_version(version)
+        and stated is not None
+        and _norm_version(stated) != _norm_version(version)
+        and (rest <= OWN_VERSION_WORDS or _names_own_version(subject, relation, name))
     ):
-        return CONTRADICTED, value.strip()
+        return CONTRADICTED, stated
     return None
 
 

@@ -15,6 +15,22 @@ All notable changes to this project are documented here. The format follows
   facts. Set another level with `memware derive --effort <level>`, `memware config
   derive.effort <level>` or `MEMWARE_DERIVE_EFFORT`. A `claude` that does not list `--effort`
   is spawned without it. `MAX_THINKING_TOKENS=0` stays for older models.
+- **The prompt hook and the digest leave out more stale beliefs.** Each class reads a few more
+  shapes that only ever describe a snapshot:
+  - **Status:** a tracker key written in capitals names one ticket (`ABC-12 | status | …`),
+    except standards such as `UTF-8`, `SHA-256` and `PEP-8`. Paused, on hold, to do and code
+    review count as status words.
+  - **Measurement:** a percentage under a rate that observes (`fill rate | 99.8%`, error, hit,
+    failure rate…) counts, and a rate someone sets (`tax rate`, `dropout rate`) does not. A
+    count written as a word counts too (`blocked cards | six`).
+  - **Contradicted:** inside a project, a belief about the package's own version counts with a
+    note in parentheses after the version, with an install location before the version noun
+    (`uv tool version`), or with a place or a time after it (`version in hermes pypi`,
+    `version before update`). Another tool's version (`uv version`, `ruff version`) is never
+    compared.
+
+  Nothing is retracted: a left-out belief stays in `memware beliefs`, recall and the MCP tools,
+  marked. `memware beliefs --stale` lists what your store now leaves out.
 
 ## [0.11.0] - 2026-10-01
 
